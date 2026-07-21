@@ -69,7 +69,7 @@ class UmaCalcApp(App):
         layout: vertical;
     }
 
-    #header {
+    #config-header {
         height: auto;
         padding: 1;
         border-bottom: solid $primary;
@@ -177,9 +177,6 @@ class UmaCalcApp(App):
             "device": "cpu",
             "output_dir": "./results",
             "job_name": None,
-            # SP options
-            "write_forces": True,
-            "write_stress": True,
             # OPT options
             "fmax": 0.05,
             "max_steps": 500,

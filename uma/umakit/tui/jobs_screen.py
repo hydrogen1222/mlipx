@@ -58,6 +58,10 @@ class JobsScreen(Screen):
         self._refresh_table()
         self._refresh_timer = asyncio.create_task(self._auto_refresh())
 
+    def on_unmount(self) -> None:
+        if self._refresh_timer is not None and not self._refresh_timer.done():
+            self._refresh_timer.cancel()
+
     async def _auto_refresh(self) -> None:
         while True:
             await asyncio.sleep(2)
@@ -157,10 +161,16 @@ class JobDetailScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Container(
             Static(f"Job: {self.job_id}", id="title"),
-            Log(self.log_text, id="job-detail-log"),
+            Log(id="job-detail-log"),
             Button("Back", id="back-btn"),
             id="job-detail-container",
         )
+
+    def on_mount(self) -> None:
+        log = self.query_one("#job-detail-log", Log)
+        text = self.log_text or "(no log output)"
+        for line in text.splitlines():
+            log.write_line(line)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "back-btn":

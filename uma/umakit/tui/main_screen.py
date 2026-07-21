@@ -50,10 +50,6 @@ class MainScreen(Screen):
                     id="md",
                 ),
                 ListItem(
-                    Static("📁 Batch Processing\n   Process multiple structures"),
-                    id="batch",
-                ),
-                ListItem(
                     Static("💼 Background Jobs\n   View/manage running calculations"),
                     id="jobs",
                 ),

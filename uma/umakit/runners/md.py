@@ -309,9 +309,6 @@ class MDRunner(BaseRunner):
         )
         start_time = time.time()
 
-        # Track for early termination if atoms explode
-        max_position_change = 5.0  # Angstroms - alert threshold
-
         def print_progress():
             """Print progress and save trajectory."""
             step = dyn.nsteps
@@ -346,7 +343,7 @@ class MDRunner(BaseRunner):
                 }
                 trajectory.append(frame_data)
 
-                if traj_writer:
+                if traj_writer is not None:
                     traj_writer.write(atoms)
 
             # Print progress every 100 steps
@@ -374,14 +371,14 @@ class MDRunner(BaseRunner):
         except Exception as e:
             self.log(f"\n❌ MD simulation failed: {e}", level="error")
             # Save what we have
-            if traj_writer:
+            if traj_writer is not None:
                 traj_writer.close()
             raise
 
         md_time = time.time() - start_time
 
         # Close trajectory writer
-        if traj_writer:
+        if traj_writer is not None:
             traj_writer.close()
 
         # Final temperature with proper calculation

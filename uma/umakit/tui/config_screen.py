@@ -66,7 +66,8 @@ class ConfigScreen(Screen):
         with Container(id="config-main"):
             # Header at top
             yield Container(
-                Static(f"Configuration: {calc_type.upper()}", id="title"), id="header"
+                Static(f"Configuration: {calc_type.upper()}", id="title"),
+                id="config-header",
             )
 
             # Scrollable content area
@@ -147,61 +148,72 @@ class ConfigScreen(Screen):
 
     def _calc_options(self, calc_type: str):
         """Generate calculation-specific options."""
-        if calc_type == "sp":
-            yield Horizontal(
-                Label("Write Forces:"),
-                Switch(value=True, id="write-forces"),
-            )
-            yield Horizontal(
-                Label("Write Stress:"),
-                Switch(value=True, id="write-stress"),
-            )
-
-        elif calc_type == "opt":
+        if calc_type == "opt":
             yield Label("Force Threshold (eV/Å):")
-            yield Input(value="0.05", id="fmax-input")
+            yield Input(value=str(self.app.get_config("fmax", 0.05)), id="fmax-input")
 
             yield Label("Max Steps:")
-            yield Input(value="500", id="max-steps-input")
+            yield Input(
+                value=str(self.app.get_config("max_steps", 500)), id="max-steps-input"
+            )
 
             yield Label("Optimizer:")
             yield Select(
                 options=[("FIRE", "FIRE"), ("BFGS", "BFGS"), ("LBFGS", "LBFGS")],
-                value="FIRE",
+                value=self.app.get_config("optimizer", "FIRE"),
                 id="optimizer-select",
             )
 
             yield Horizontal(
                 Label("Cell Optimization:"),
-                Switch(value=False, id="cell-opt"),
+                Switch(value=self.app.get_config("cell_opt", False), id="cell-opt"),
             )
 
         elif calc_type == "md":
+            current_ensemble = self.app.get_config("ensemble", "NVT").upper()
             yield Label("Ensemble:")
             yield RadioSet(
-                RadioButton("NVT", id="nvt", value=True),
-                RadioButton("NVE", id="nve"),
+                RadioButton("NVT", id="nvt", value=current_ensemble == "NVT"),
+                RadioButton("NVE", id="nve", value=current_ensemble == "NVE"),
                 id="ensemble-radio",
             )
 
             yield Label("Temperature (K):")
-            yield Input(value="300", id="temp-input")
+            yield Input(
+                value=str(self.app.get_config("temperature", 300.0)),
+                id="temp-input",
+            )
 
             yield Label("Time Step (fs):")
-            yield Input(value="1.0", id="timestep-input")
+            yield Input(
+                value=str(self.app.get_config("timestep", 1.0)),
+                id="timestep-input",
+            )
 
             yield Label("Steps:")
-            yield Input(value="1000", id="steps-input")
+            yield Input(
+                value=str(self.app.get_config("md_steps", 1000)),
+                id="steps-input",
+            )
+
+            yield Label("Save Interval:")
+            yield Input(
+                value=str(self.app.get_config("save_interval", 10)),
+                id="save-interval-input",
+            )
 
             yield Horizontal(
                 Label("Pre-relaxation (recommended):"),
-                Switch(value=True, id="pre-relax"),
+                Switch(
+                    value=self.app.get_config("pre_relax", True),
+                    id="pre-relax",
+                ),
             )
 
-        # Background / detach option for all calc types
+        # Background / detach option for all calc types (disabled until wired)
         yield Horizontal(
             Label("Run in background (detach):"),
-            Switch(value=False, id="detach-switch"),
+            Switch(value=False, id="detach-switch", disabled=True),
         )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -333,6 +345,13 @@ class ConfigScreen(Screen):
             self.app.update_config("cell_opt", cell_opt.value)
 
         elif calc_type == "md":
+            ensemble_radio = self.query_one("#ensemble-radio", RadioSet)
+            pressed_ensemble = ensemble_radio.pressed_button
+            self.app.update_config(
+                "ensemble",
+                pressed_ensemble.id.upper() if pressed_ensemble else "NVT",
+            )
+
             try:
                 temp = float(self.query_one("#temp-input", Input).value)
                 self.app.update_config("temperature", temp)
@@ -340,8 +359,20 @@ class ConfigScreen(Screen):
                 pass
 
             try:
+                timestep = float(self.query_one("#timestep-input", Input).value)
+                self.app.update_config("timestep", timestep)
+            except ValueError:
+                pass
+
+            try:
                 steps = int(self.query_one("#steps-input", Input).value)
                 self.app.update_config("md_steps", steps)
+            except ValueError:
+                pass
+
+            try:
+                save_interval = int(self.query_one("#save-interval-input", Input).value)
+                self.app.update_config("save_interval", save_interval)
             except ValueError:
                 pass
 

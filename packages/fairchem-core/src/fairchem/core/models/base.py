@@ -11,7 +11,7 @@ import copy
 import logging
 from abc import ABCMeta, abstractmethod
 from collections import defaultdict
-from typing import TYPE_CHECKING, Sequence
+from typing import TYPE_CHECKING
 
 import hydra
 import torch
@@ -23,6 +23,8 @@ from fairchem.core.common.utils import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from ase import Atoms
 
     from fairchem.core.datasets.atomic_data import AtomicData
@@ -137,10 +139,18 @@ class HydraModel(nn.Module):
         otf_graph: bool = True,
         pass_through_head_outputs: bool = False,
         freeze_backbone: bool = False,
+        # Newer UMA checkpoints (e.g. UMA-S-1.2) serialize these metadata
+        # fields into the model config. Accept and store them so Hydra
+        # instantiation does not raise "unexpected keyword argument", while
+        # older checkpoints that omit them are unaffected.
+        model_id: str | None = None,
+        supports_single_atoms: bool = False,
     ):
         super().__init__()
         self.device = None
         self.otf_graph = otf_graph
+        self.model_id = model_id
+        self.supports_single_atoms = supports_single_atoms
         # This is required for hydras with models that have multiple outputs per head, since we will deprecate
         # the old config system at some point, this will prevent the need to make major modifications to the trainer
         # because they all expect the name of the outputs directly instead of the head_name.property_name

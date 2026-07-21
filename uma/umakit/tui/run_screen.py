@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 class RunScreen(Screen):
     """Screen for running calculations with live output."""
 
+    _task: asyncio.Task | None = None
+
     def compose(self) -> ComposeResult:
         """Compose the run screen."""
         calc_type = self.app.get_config("calc_type", "sp")
@@ -60,6 +62,11 @@ class RunScreen(Screen):
         self._log_file = self._open_log_file()
         self._task = asyncio.create_task(self._run_calculation())
 
+    def on_unmount(self) -> None:
+        """Cancel any running calculation task when the screen is removed."""
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+
     def _open_log_file(self) -> Path | None:
         """Open a plain-text log file alongside the run for easy copying.
 
@@ -78,7 +85,8 @@ class RunScreen(Screen):
 
     def _log(self, message: str) -> None:
         """Add message to log (on-screen + mirrored to file)."""
-        self.log_widget.write_line(message)
+        if self.is_mounted and self.log_widget.is_mounted:
+            self.log_widget.write_line(message)
         if self._log_file is not None:
             try:
                 with open(self._log_file, "a", encoding="utf-8") as f:
@@ -92,8 +100,9 @@ class RunScreen(Screen):
         Restore a concrete total so percentage = value/100; total is set to
         None during indeterminate phases.
         """
-        self.progress.update(total=100, progress=value)
-        if status:
+        if self.is_mounted and self.progress.is_mounted:
+            self.progress.update(total=100, progress=value)
+        if status and self.is_mounted and self.status.is_mounted:
             self.status.update(status)
 
     def _update_indeterminate(self, status: str) -> None:
@@ -103,8 +112,10 @@ class RunScreen(Screen):
         ``progress=None`` — that crashes ``_compute_percentage`` with
         ``None / total``).
         """
-        self.progress.update(total=None, progress=0)
-        self.status.update(status)
+        if self.is_mounted and self.progress.is_mounted:
+            self.progress.update(total=None, progress=0)
+        if self.is_mounted and self.status.is_mounted:
+            self.status.update(status)
 
     def _get_engine_config(self) -> EngineConfig:
         """Build EngineConfig from app state."""
@@ -189,8 +200,9 @@ class RunScreen(Screen):
             self._log(traceback.format_exc())
             self._update_progress(0, "Failed")
         finally:
-            back_btn = self.query_one("#back-btn", Button)
-            back_btn.disabled = False
+            if self.is_mounted:
+                back_btn = self.query_one("#back-btn", Button)
+                back_btn.disabled = False
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
