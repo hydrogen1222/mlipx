@@ -1,5 +1,5 @@
 # Single Point Calculation Settings
-# UMA Calculator - VASP-style input
+# mlipx - VASP-style input
 
 # Calculation Type
 CALC_TYPE = SP

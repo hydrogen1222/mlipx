@@ -1,25 +1,21 @@
 #!/usr/bin/env python3
-from __future__ import annotations
-
 """
 Copyright (c) Meta Platforms, Inc. and affiliates.
 
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
-"""
 
-"""
 吸附能计算示例脚本
 
 计算吸附能的公式：
 E_adsorption = E(吸附结构) - E(气体分子) - E(清洁表面)
 
 Usage:
-    python adsorption_energy.py \
-        --adsorbed adsorbed.cif \
-        --gas gas.xyz \
-        --surface surface.cif \
-        --model uma-s-1.pt \
+    python adsorption_energy.py \\
+        --adsorbed adsorbed.cif \\
+        --gas gas.xyz \\
+        --surface surface.cif \\
+        --model uma-s-1.pt \\
         --task oc20
 
 Or use as a module:
@@ -35,11 +31,13 @@ Or use as a module:
     print(f"Adsorption energy: {results['adsorption_energy']:.4f} eV")
 """
 
+from __future__ import annotations
+
 import argparse
 import sys
 from pathlib import Path
 
-# Add parent directory to path for umakit imports
+# Add parent directory to path for mlipx imports
 script_dir = Path(__file__).parent.resolve()
 uma_dir = script_dir.parent
 if str(uma_dir) not in sys.path:
@@ -218,7 +216,7 @@ def calculate_adsorption_energy(
         Dictionary with energy components and adsorption energy
     """
     # Import here to avoid slow import if just checking help
-    from umakit.api import calculate_adsorption_energy as api_calc_adsorption
+    from mlipx.api import calculate_adsorption_energy as api_calc_adsorption
 
     return api_calc_adsorption(
         adsorbed_structure=adsorbed_structure,

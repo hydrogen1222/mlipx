@@ -3,9 +3,9 @@ requires = ["setuptools>=61.0.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "umakit"
-version = "1.0.0"
-description = "VASP-like CLI/TUI interface for FAIRChem UMA models"
+name = "mlipx"
+version = "2.0.0"
+description = "VASP-like CLI/TUI interface for MLIP models (UMA, MACE, DPA, GRACE)"
 requires-python = ">=3.10, <3.13"
 dependencies = [
     "ase>=3.26.0",
@@ -15,6 +15,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# NOTE: MACE/DPA/GRACE engine backends (mace-torch, deepmd-kit,
+# tensorpotential) are intentionally NOT declared as installable extras here.
+# mace-torch pins e3nn==0.4.4 which conflicts with fairchem-core (e3nn>=0.5),
+# so they cannot coexist in a single environment. Install the backend you
+# need manually (see `mlipx doctor`), e.g.: pip install mace-torch.
+uma = ["fairchem-core"]
 dev = [
     "pytest",
     "ruff",
@@ -22,7 +28,7 @@ dev = [
 ]
 
 [project.scripts]
-uma_calc = "umakit.cli:main"
+mlipx = "mlipx.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
@@ -31,7 +37,7 @@ where = ["."]
 line-length = 88
 target-version = "py39"
 
-# GPU compatibility — run `uv run uma_calc setup` (uses nvidia-smi, works
+# GPU compatibility - run `uv run mlipx setup` (uses nvidia-smi, works
 # before torch is installed) to detect your GPU and get the exact torch command.
 # Support floor: Maxwell (GTX 900 series, sm_50/52). Kepler (GTX 700/600) not
 # supported (no prebuilt PyTorch wheel).

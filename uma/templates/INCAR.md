@@ -1,5 +1,5 @@
 # Molecular Dynamics Settings
-# UMA Calculator - VASP-style input
+# mlipx - VASP-style input
 
 # Calculation Type
 CALC_TYPE = MD

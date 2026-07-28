@@ -1,7 +1,7 @@
-# UMAKit — User Manual
+# mlipx — User Manual
 
-> **Universal Material Application Calculator**
-> A VASP-compatible interface for FAIRChem UMA machine-learning interatomic potentials
+> **MLIP eXtended**
+> A VASP-compatible CLI/TUI/API for machine-learning interatomic potentials. Supports UMA (FAIRChem, default), MACE, DPA (DeepMD-kit), and GRACE behind one interface.
 
 ---
 
@@ -11,6 +11,7 @@
 - [2. Installation](#2-installation)
 - [3. Quick Start](#3-quick-start)
 - [4. Architecture Overview](#4-architecture-overview)
+- [Multi-Engine Guide](#multi-engine-guide)
 - [5. Calculation Types](#5-calculation-types)
   - [5.1 Single Point (SP)](#51-single-point-sp)
   - [5.2 Geometry Optimization (OPT)](#52-geometry-optimization-opt)
@@ -34,9 +35,18 @@
 
 ## 1. Introduction
 
-UMAKit is a materials-science computational tool built on Meta's FAIRChem UMA (Universal Material Application) models. It provides a VASP-like user experience for running machine-learning interatomic potential (MLIP) calculations.
+mlipx (MLIP eXtended) is a multi-engine machine-learning interatomic potential (MLIP) computation tool that provides a VASP-like user experience. It supports multiple MLIP backends behind one unified interface:
 
-**What UMAKit does:**
+| Engine | `MODEL_TYPE` | Backend package |
+|-------|--------------|-----------------|
+| **UMA (FAIRChem)** (default) | `uma` | `fairchem-core` |
+| MACE | `mace` | `mace-torch` |
+| DPA (DeepMD-kit) | `dpa` | `deepmd-kit` |
+| GRACE | `grace` | `tensorpotential` |
+
+All engines plug in through a unified ASE Calculator interface, so the higher-level logic (single point, optimization, MD, batch, output) is completely engine-agnostic. The default is UMA; existing workflows keep working unchanged.
+
+**What mlipx does:**
 
 - Compute energy, forces, and stress for crystal structures and molecules
 - Optimize atomic positions and cell parameters (geometry relaxation)
@@ -44,21 +54,22 @@ UMAKit is a materials-science computational tool built on Meta's FAIRChem UMA (U
 - Process hundreds of structures in batch mode
 - Output results in VASP-compatible formats (OUTCAR, CONTCAR, XDATCAR, OSZICAR)
 
-**How UMAKit works:**
+**How mlipx works:**
 
-Unlike VASP, which solves the Kohn-Sham equations self-consistently, UMAKit uses a pre-trained equivariant neural network (SO(3)-equivariant eSCN architecture) to predict energies and forces in a single forward pass. There are no electronic steps, no SCF cycles, and no k-points. The cost scales roughly linearly with the number of atoms.
+Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses a pre-trained neural network to predict energies and forces in a single forward pass. There are no electronic steps, no SCF cycles, and no k-points. The cost scales roughly linearly with the number of atoms.
 
 ```
-                          ┌──────────────────┐
-  structure.cif  ────────▶│  UMA Neural Net  │───────▶  energy, forces, stress
-  (atomic positions)      │  (pre-trained)   │         (single forward pass)
-                          └──────────────────┘
+                          ┌──────────────────────┐
+  structure.cif  ────────▶│  MLIP Neural Network  │───────▶  energy, forces, stress
+  (atomic positions)      │  (UMA/MACE/DPA/GRACE) │         (single forward pass)
+                          └──────────────────────┘
 ```
 
 **Key features at a glance:**
 
 | Feature | Description |
 |---------|-------------|
+| Multi-engine | UMA / MACE / DPA / GRACE via one interface; switch with `--model-type` |
 | CLI mode | Full command-line interface with 10 subcommands |
 | TUI mode | Interactive terminal UI with live progress |
 | Python API | Programmatic access for scripting and workflows |
@@ -92,7 +103,7 @@ cd fairchem
 
 # Step 1: Detect your GPU and get the matching PyTorch command (CPU-only users
 #         can skip). Uses nvidia-smi, works before PyTorch is installed.
-uv run uma_calc setup
+uv run mlipx setup
 
 # Step 2: Create a pinned venv (Python 3.12 via .python-version) and install
 #         everything from the lockfile. uv auto-creates .venv.
@@ -103,9 +114,9 @@ uv sync
 
 ### 2.3 CUDA GPU vs CPU Installation
 
-UMAKit does not ship its own PyTorch — it inherits the PyTorch installation provided by `fairchem-core`.
+mlipx does not ship its own PyTorch — it inherits the PyTorch installation provided by `fairchem-core`.
 
-| Scenario | PyTorch | UMAKit device flag |
+| Scenario | PyTorch | mlipx device flag |
 |----------|---------|--------------------|
 | **CUDA GPU machine** | `fairchem-core` installed in CUDA Python env | `--device cuda` |
 | **CPU-only machine** | `fairchem-core` installed in standard Python env | `--device cpu` (default) |
@@ -126,20 +137,20 @@ Two equivalent methods:
 
 ```bash
 # Method A: uv run (recommended — auto-detects .venv, works everywhere)
-uv run uma_calc --help
-uv run uma_calc tui
-uv run uma_calc sp structure.cif --model uma-s-1.pt
+uv run mlipx --help
+uv run mlipx tui
+uv run mlipx sp structure.cif --model uma-s-1.pt
 
 # Method B: Activate venv first
 source .venv/bin/activate      # Linux/Mac
 # .venv\Scripts\activate       # Windows
-uma_calc --help
-uma_calc tui
+mlipx --help
+mlipx tui
 ```
 
 ### 2.5 Model Checkpoint
 
-Download the UMA model checkpoint from FAIRChem:
+**UMA (default engine):** Download the checkpoint from FAIRChem:
 
 ```bash
 # UMA Small (recommended starting point, ~1.2 GB)
@@ -147,19 +158,29 @@ Download the UMA model checkpoint from FAIRChem:
 # Place the .pt file in your working directory or a known path
 ```
 
+**Other engines (optional):** MACE / DPA / GRACE models are released by each project. Install the backend package, then use it:
+
+| Engine | Backend install | Model format |
+|--------|-----------------|--------------|
+| MACE | `pip install mace-torch` | `.model` / `.pt` |
+| DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` / `.pt` (PyTorch backend) |
+| GRACE | `pip install tensorpotential` | SavedModel dir / YAML |
+
+> Note: `mace-torch` depends on `e3nn==0.4.4`, which conflicts with `fairchem-core` (`e3nn>=0.5`) - they cannot coexist in one environment. Run `mlipx doctor` to check which engine backends are ready.
+
 The model path is specified with `--model` (CLI), in the TUI config screen, or via the `MODEL_PATH` key in INCAR files.
 
 ### 2.6 Verify Installation
 
 ```bash
-uv run uma_calc doctor
+uv run mlipx doctor
 ```
 
-This runs a comprehensive diagnostic: Python, PyTorch, CUDA, GPU compatibility, fairchem-core, UMAKit, and model file. If any check fails, it prints exact fix commands.
+This runs a comprehensive diagnostic: Python, PyTorch, CUDA, GPU compatibility, fairchem-core, mlipx, and model file. If any check fails, it prints exact fix commands.
 
 For a full command list:
 ```bash
-uv run uma_calc --help
+uv run mlipx --help
 
 ---
 
@@ -169,7 +190,7 @@ uv run uma_calc --help
 
 ```bash
 # Single-point energy of a crystal structure
-uv run uma_calc sp structure.cif --model uma-s-1.pt --task omat
+uv run mlipx sp structure.cif --model uma-s-1.pt --task omat
 
 # Output:
 # ================================================================================
@@ -200,7 +221,7 @@ uv run uma_calc sp structure.cif --model uma-s-1.pt --task omat
 
 ```bash
 # Launch the interactive terminal UI
-uv run uma_calc tui
+uv run mlipx tui
 ```
 
 Navigate with arrow keys, Tab to switch fields, Enter to select.
@@ -236,16 +257,17 @@ Navigate with arrow keys, Tab to switch fields, Enter to select.
 
 ```bash
 # Generate a template
-uma_calc template sp -o INCAR.uma
+mlipx template sp -o INCAR.mlipx
 
 # Edit it:
-#   CALC_TYPE = SP
-#   TASK = omat
-#   MODEL_PATH = uma-s-1.pt
-#   DEVICE = cpu
+#   CALC_TYPE   = SP
+#   MODEL_TYPE  = UMA            # default; or MACE/DPA/GRACE
+#   MODEL_PATH  = uma-s-1.pt
+#   TASK        = omat           # UMA: omat/omol/...; others: bulk/molecule
+#   DEVICE      = cpu
 
 # Run from INCAR
-uma_calc run
+mlipx run
 ```
 
 ---
@@ -257,7 +279,7 @@ uma_calc run
 │                        USER INTERFACE LAYER                          │
 │  ┌──────────┐    ┌──────────────┐    ┌──────────────────┐          │
 │  │ CLI      │    │ TUI          │    │ Python API       │          │
-│  │ (argparse)│   │ (Textual)    │    │ (umakit.api)     │          │
+│  │ (argparse)│   │ (Textual)    │    │ (mlipx.api)     │          │
 │  └────┬─────┘    └──────┬───────┘    └────────┬─────────┘          │
 │       │                 │                     │                     │
 │       └─────────────────┼─────────────────────┘                     │
@@ -305,6 +327,118 @@ The `CalculationEngine` is the central orchestrator: all three interfaces (CLI, 
 
 ---
 
+## Multi-Engine Guide
+
+mlipx is designed to be **engine-agnostic**: every MLIP backend implements the unified `BaseMLIPCalculator` abstract interface, so the higher-level single-point, optimization, MD, batch, and output logic is fully shared. Switching engines only requires setting `MODEL_TYPE` - no changes to your calculation scripts or INCAR structure are needed.
+
+### Engine Capability Comparison
+
+| Engine | `MODEL_TYPE` | Backend package | Energy/Forces | Stress | Task values | Inference modes |
+|--------|--------------|-----------------|---------------|--------|-------------|-----------------|
+| UMA (FAIRChem) | `uma` (default, alias `fairchem`) | `fairchem-core` | ✓ | ✓ | `omat`/`omol`/`oc20`/`oc25`/`odac`/`omc` | `default`/`turbo` |
+| MACE | `mace` | `mace-torch` | ✓ | ✓ | `bulk`/`molecule` | - |
+| DPA (DeepMD-kit) | `dpa` | `deepmd-kit` | ✓ | ✓ | `bulk`/`molecule` | - |
+| GRACE | `grace` | `tensorpotential` | ✓ | ✓ | `bulk`/`molecule` | - |
+
+> `INFERENCE_MODE = turbo` is UMA-only (requires the `VALID_INFERENCE_MODES` attribute). Other engines ignore it.
+
+### Four Ways to Switch Engines
+
+**Option 1: CLI flag `--model-type`** (applies to sp/opt/md/batch)
+
+```bash
+mlipx sp structure.cif --model mace.model --model-type mace --task bulk
+```
+
+**Option 2: INCAR file `MODEL_TYPE` key**
+
+```ini
+CALC_TYPE   = OPT
+MODEL_TYPE  = MACE
+MODEL_PATH  = mace.model
+TASK        = bulk
+FMAX        = 0.05
+```
+
+**Option 3: TUI dropdown**
+
+In the `mlipx tui` config screen, the Model Engine selector switches between UMA/MACE/DPA/GRACE, and the task options update dynamically (UMA shows omat/omol/...; others show bulk/molecule).
+
+**Option 4: Python API `model_type` parameter**
+
+```python
+from mlipx.api import run_single_point
+
+result = run_single_point(
+    structure="structure.cif",
+    model_path="mace.model",
+    model_type="mace",     # default 'uma'
+    task="bulk",
+    device="cpu",
+)
+```
+
+### Backend Installation & Environment Isolation
+
+`fairchem-core` ships with mlipx, so UMA works out of the box. Other engines need their backend package installed separately:
+
+| Engine | Install command | Model format |
+|--------|-----------------|--------------|
+| MACE | `pip install mace-torch` | `.model` / `.pt` |
+| DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` (PyTorch backend) |
+| GRACE | `pip install tensorpotential` | SavedModel dir / YAML |
+
+> ⚠️ **Environment isolation warning:** `mace-torch` pins `e3nn==0.4.4`, which **fundamentally conflicts** with `fairchem-core` (`e3nn>=0.5`) - they cannot coexist in one Python environment.
+>
+> **Recommended approach:** create a separate environment for MACE/DPA/GRACE:
+> ```bash
+> # MACE-dedicated environment
+> uv venv .venv-mace && source .venv-mace/bin/activate
+> pip install mace-torch
+> pip install -e uma/        # install mlipx (can still call MACE without fairchem-core)
+> ```
+>
+> Run `mlipx doctor` to check whether each engine backend is ready (uninstalled engines show a warn status).
+
+### Task Mapping & Periodic Boundaries (PBC)
+
+UMA has a well-defined task system (each maps to a training dataset); other engines are task-unaware, and `task` only controls the PBC strategy:
+
+| `task` | PBC | Equivalent UMA task | Suitable systems |
+|--------|------|---------------------|-------------------|
+| `bulk` | True | `omat` | Periodic crystals, surface slabs, MOFs |
+| `molecule` | False | `omol` | Isolated molecules (auto charge=0/spin=1) |
+
+For UMA, the `omol` task **requires** charge and spin to be set; for non-UMA engines, the `molecule` task auto-fills defaults.
+
+### Complete Examples per Engine
+
+```bash
+# -- UMA (default) -- bulk material optimization
+mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --fmax 0.02
+
+# -- MACE -- periodic single point
+mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
+
+# -- DPA (DeepMD) -- molecule optimization
+mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
+
+# -- GRACE -- high-throughput screening (batch)
+mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --calc-type sp --output results/
+```
+
+### Engine Troubleshooting
+
+| Problem | Cause | Solution |
+|---------|-------|----------|
+| `Backend mace_torch not installed` | Backend package missing | `pip install mace-torch` (in isolated env) |
+| `ImportError: e3nn` version conflict | mace + fairchem in same env | Create a separate venv for MACE |
+| `Model file not found` | Wrong path | Use an absolute path for `--model` |
+| UMA works but MACE errors | e3nn conflict in same env | See environment isolation above |
+| task `bulk` invalid under UMA | UMA does not recognize bulk | Use omat for UMA; bulk is for non-UMA engines |
+
+---
+
 ## 5. Calculation Types
 
 ### 5.1 Single Point (SP)
@@ -321,13 +455,13 @@ A single-point calculation computes the potential energy, atomic forces, and (if
 **CLI usage:**
 
 ```bash
-uma_calc sp <structure> --model <model.pt> [options]
+mlipx sp <structure> --model <model.pt> [options]
 
 # Basic
-uma_calc sp POSCAR --model uma-s-1.pt --task omat
+mlipx sp POSCAR --model uma-s-1.pt --task omat
 
 # With output directory and job name
-uma_calc sp structure.cif \
+mlipx sp structure.cif \
     --model uma-s-1.pt \
     --task omat \
     --device cuda \
@@ -335,7 +469,7 @@ uma_calc sp structure.cif \
     --name my_calculation
 ```
 
-**Output files:** `OUTCAR`, `CONTCAR`, `uma_results.json`
+**Output files:** `OUTCAR`, `CONTCAR`, `mlipx_results.json`
 
 ### 5.2 Geometry Optimization (OPT)
 
@@ -352,13 +486,13 @@ Optimizes atomic positions (and optionally cell parameters) to find a local ener
 **CLI usage:**
 
 ```bash
-uma_calc opt <structure> --model <model.pt> [options]
+mlipx opt <structure> --model <model.pt> [options]
 
 # Basic optimization
-uma_calc opt POSCAR --model uma-s-1.pt
+mlipx opt POSCAR --model uma-s-1.pt
 
 # Tight convergence with cell relaxation
-uma_calc opt POSCAR \
+mlipx opt POSCAR \
     --model uma-s-1.pt \
     --fmax 0.02 \
     --max-steps 1000 \
@@ -366,7 +500,7 @@ uma_calc opt POSCAR \
     --optimizer BFGS
 
 # Preserve crystal symmetry
-uma_calc opt structure.cif \
+mlipx opt structure.cif \
     --model uma-s-1.pt \
     --fix-symmetry
 ```
@@ -381,7 +515,7 @@ uma_calc opt structure.cif \
 | `--cell-opt` | off | Enable cell parameter optimization |
 | `--fix-symmetry` | off | Preserve crystal symmetry |
 
-**Output files:** `OUTCAR`, `CONTCAR` (optimized structure), `OSZICAR` (step-by-step progress), `uma_results.json`
+**Output files:** `OUTCAR`, `CONTCAR` (optimized structure), `OSZICAR` (step-by-step progress), `mlipx_results.json`
 
 ### 5.3 Molecular Dynamics (MD)
 
@@ -392,15 +526,15 @@ Simulates the time evolution of atoms at a given temperature. Supports two ensem
 | NVT | Langevin | Constant particle number, volume, temperature (canonical) |
 | NVE | Velocity Verlet | Constant particle number, volume, energy (microcanonical) |
 
-**Pre-relaxation:** Before starting MD, UMAKit automatically performs a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress. This prevents "atom explosion" — a common failure mode where high initial forces cause atoms to fly apart. You can disable this with `--no-pre-relax` (not yet exposed in CLI; use INCAR or TUI).
+**Pre-relaxation:** Before starting MD, mlipx automatically performs a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress. This prevents "atom explosion" — a common failure mode where high initial forces cause atoms to fly apart. You can disable this with `--no-pre-relax` (not yet exposed in CLI; use INCAR or TUI).
 
 **CLI usage:**
 
 ```bash
-uma_calc md <structure> --model <model.pt> [options]
+mlipx md <structure> --model <model.pt> [options]
 
 # NVT at 300K for 10 ps
-uma_calc md POSCAR \
+mlipx md POSCAR \
     --model uma-s-1.pt \
     --ensemble NVT \
     --temp 300 \
@@ -409,7 +543,7 @@ uma_calc md POSCAR \
     --save-interval 10
 
 # NVE ensemble
-uma_calc md CONTCAR \
+mlipx md CONTCAR \
     --model uma-s-1.pt \
     --ensemble NVE \
     --temp 300 \
@@ -427,7 +561,7 @@ uma_calc md CONTCAR \
 | `--friction` | 0.001 | Friction coefficient (NVT only, fs⁻¹) |
 | `--save-interval` | 10 | Save trajectory every N steps |
 
-**Output files:** `OUTCAR`, `CONTCAR` (final structure), `XDATCAR` (trajectory), `trajectory.traj` (ASE format), `uma_results.json`
+**Output files:** `OUTCAR`, `CONTCAR` (final structure), `XDATCAR` (trajectory), `trajectory.traj` (ASE format), `mlipx_results.json`
 
 ### 5.4 Batch Processing
 
@@ -436,17 +570,17 @@ Run the same calculation type on many structures in a directory. Supports `sp` a
 **CLI usage:**
 
 ```bash
-uma_calc batch <input_dir> --model <model.pt> [options]
+mlipx batch <input_dir> --model <model.pt> [options]
 
 # SP calculation on all CIF files
-uma_calc batch structures/ \
+mlipx batch structures/ \
     --model uma-s-1.pt \
     --calc-type sp \
     --pattern "*.cif" \
     --output batch_results
 
 # OPT on all POSCAR files in parallel
-uma_calc batch poscars/ \
+mlipx batch poscars/ \
     --model uma-s-1.pt \
     --calc-type opt \
     --pattern "POSCAR*" \
@@ -462,28 +596,31 @@ uma_calc batch poscars/ \
 
 ### 6.1 CLI — Command Line Interface
 
-The CLI is invoked via `uma_calc <command> [options]`. Running `uma_calc` without arguments launches the TUI by default.
+The CLI is invoked via `mlipx <command> [options]`. Running `mlipx` without arguments launches the TUI by default.
 
 #### Complete Command Reference
 
-##### `uma_calc sp` — Single Point
+##### `mlipx sp` — Single Point
 
 ```
-uma_calc sp STRUCTURE --model MODEL [--task TASK] [--device DEVICE]
+mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
                        [--output DIR] [--name NAME]
 
   STRUCTURE             Input structure file (CIF, XYZ, POSCAR, VASP, etc.)
-  --model MODEL         Path to UMA model checkpoint (.pt file) [required]
-  --task TASK           Task type: omat|omol|oc20|oc25|odac|omc [default: omat]
+  --model MODEL         Path to model checkpoint [required]
+  --model-type TYPE     MLIP engine: uma|mace|dpa|grace [default: uma]
+  --task TASK           UMA: omat|omol|oc20|oc25|odac|omc; others: bulk|molecule [default: omat]
   --device DEVICE       cpu|cuda [default: cpu]
   --output DIR, -o DIR  Output directory [default: .]
   --name NAME, -n NAME  Job name (output goes to DIR/NAME)
 ```
 
-##### `uma_calc opt` — Geometry Optimization
+> `--model-type` applies to all calculation commands (sp/opt/md/batch). Default `uma`, fully backward compatible.
+
+##### `mlipx opt` — Geometry Optimization
 
 ```
-uma_calc opt STRUCTURE --model MODEL [options]
+mlipx opt STRUCTURE --model MODEL [options]
 
   --fmax FMAX           Force convergence threshold eV/Å [default: 0.05]
   --max-steps N         Maximum optimization steps [default: 500]
@@ -492,10 +629,10 @@ uma_calc opt STRUCTURE --model MODEL [options]
   --fix-symmetry        Preserve crystal symmetry
 ```
 
-##### `uma_calc md` — Molecular Dynamics
+##### `mlipx md` — Molecular Dynamics
 
 ```
-uma_calc md STRUCTURE --model MODEL [options]
+mlipx md STRUCTURE --model MODEL [options]
 
   --ensemble ENSEMBLE   NVT|NVE [default: NVT]
   --temp TEMP           Temperature in Kelvin [default: 300]
@@ -505,63 +642,63 @@ uma_calc md STRUCTURE --model MODEL [options]
   --save-interval N     Save trajectory every N steps [default: 10]
 ```
 
-##### `uma_calc batch` — Batch Processing
+##### `mlipx batch` — Batch Processing
 
 ```
-uma_calc batch INPUT_DIR --model MODEL [options]
+mlipx batch INPUT_DIR --model MODEL [options]
 
   --calc-type TYPE      sp|opt [default: sp]
   --pattern PATTERN     File glob pattern [default: *.cif]
   --output DIR          Output directory [default: batch_results]
 ```
 
-##### `uma_calc run` — Run from INCAR File
+##### `mlipx run` — Run from INCAR File
 
 ```
-uma_calc run [-i INCAR] [-s STRUCTURE] [-o OUTPUT]
+mlipx run [-i INCAR] [-s STRUCTURE] [-o OUTPUT]
 
-  -i, --incar INCAR     Path to INCAR file [default: INCAR.uma]
+  -i, --incar INCAR     Path to INCAR file [default: INCAR.mlipx]
   -s, --structure FILE  Structure file (auto-detected: POSCAR, CONTCAR, *.cif, *.xyz)
   -o, --output DIR      Output directory [default: .]
 ```
 
-##### `uma_calc template` — Generate INCAR Template
+##### `mlipx template` — Generate INCAR Template
 
 ```
-uma_calc template TYPE [-o OUTPUT]
+mlipx template TYPE [-o OUTPUT]
 
   TYPE                  sp|opt|md
   -o, --output FILE     Output file name [default: INCAR.<type>]
 ```
 
-##### `uma_calc jobs` — List Background Jobs
+##### `mlipx jobs` — List Background Jobs
 
 ```
-uma_calc jobs
+mlipx jobs
 ```
 
 Shows all background jobs with their ID, status, type, formula, and device.
 
-##### `uma_calc kill` — Kill a Background Job
+##### `mlipx kill` — Kill a Background Job
 
 ```
-uma_calc kill JOB_ID
+mlipx kill JOB_ID
 ```
 
 Terminates the specified job (cross-platform: `taskkill` on Windows, `SIGTERM` on Unix).
 
-##### `uma_calc clean` — Clean Completed/Failed Jobs
+##### `mlipx clean` — Clean Completed/Failed Jobs
 
 ```
-uma_calc clean
+mlipx clean
 ```
 
 Removes state files for jobs that are done, failed, or cancelled. Running jobs are preserved.
 
-##### `uma_calc tui` — Launch TUI
+##### `mlipx tui` — Launch TUI
 
 ```
-uma_calc tui
+mlipx tui
 ```
 
 Starts the interactive Terminal User Interface.
@@ -609,11 +746,11 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
 
 ### 6.3 Python API
 
-For scripting and workflow integration, import `umakit.api`:
+For scripting and workflow integration, import `mlipx.api`:
 
 ```python
-from umakit.api import run_single_point, run_optimization, run_md
-from umakit.api import calculate_energy, calculate_adsorption_energy
+from mlipx.api import run_single_point, run_optimization, run_md
+from mlipx.api import calculate_energy, calculate_adsorption_energy
 
 # Single point energy
 results = run_single_point(
@@ -690,7 +827,8 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `MODEL_PATH` | string | `uma-s-1.pt` | Path to model checkpoint (.pt file) |
-| `TASK` | string | `omat` | Task type: `omat`, `omol`, `oc20`, `oc25`, `odac`, `omc` |
+| `MODEL_TYPE` | string | `uma` | MLIP engine: `uma`, `mace`, `dpa`, `grace` (`fairchem` = `uma`) |
+| `TASK` | string | `omat` | Task type. UMA: `omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`; others: `bulk`/`molecule` |
 | `DEVICE` | string | `cpu` | Compute device: `cpu`, `cuda` |
 | `INFERENCE_MODE` | string | `default` | Inference mode: `default`, `turbo` |
 
@@ -784,7 +922,7 @@ The following are all recognized as `TRUE` and `FALSE` (case-insensitive):
 | `CONTCAR` | SP, OPT, MD | Text | Current/final atomic structure in VASP POSCAR format |
 | `OSZICAR` | OPT | Text | Step-by-step optimization progress with energy and force |
 | `XDATCAR` | MD | Text | Trajectory in VASP format (concatenated POSCARs) |
-| `uma_results.json` | SP, OPT, MD | JSON | Machine-readable results with all computed quantities |
+| `mlipx_results.json` | SP, OPT, MD | JSON | Machine-readable results with all computed quantities |
 | `trajectory.traj` | MD | Binary | ASE trajectory file for analysis |
 | `optimization.log` | OPT | Text | ASE optimizer log |
 | `calculation.log` | All | Text | Structured calculation log |
@@ -884,7 +1022,7 @@ Calculation time:     2.34 s
 ================================================================================
 ```
 
-### 8.3 JSON Output (uma_results.json)
+### 8.3 JSON Output (mlipx_results.json)
 
 ```json
 {
@@ -926,6 +1064,8 @@ Calculation time:     2.34 s
 
 ## 9. Task Types Reference
 
+### 9.1 UMA Tasks (`MODEL_TYPE = UMA`)
+
 UMA models are trained on different datasets; each task corresponds to a specific domain:
 
 | Task | Domain | Systems | Charge/Spin | Stress | Typical Use |
@@ -941,7 +1081,24 @@ UMA models are trained on different datasets; each task corresponds to a specifi
 
 ```python
 from ase.io import read, write
+For periodic systems (omat, oc20, oc25, odac, omc), PBC is automatically set to `True` and the cell is validated. For molecules (omol), PBC is set to `False`.
 
+### 9.2 Generic Tasks (MACE / DPA / GRACE)
+
+Non-UMA engines are not task-aware; `task` only controls the periodic-boundary (PBC) strategy:
+
+| Task | PBC | Equivalent UMA task | Suitable for |
+|------|------|---------------------|--------------|
+| `bulk` | True | `omat` | Periodic crystals, surfaces, MOFs |
+| `molecule` | False | `omol` | Isolated molecules |
+
+```bash
+# MACE periodic material
+mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
+
+# DPA isolated molecule
+mlipx sp molecule.xyz --model dpa2.pth --model-type dpa --task molecule
+```
 atoms = read("molecule.xyz")
 atoms.info["charge"] = 0    # Net charge
 atoms.info["spin"] = 1      # Spin multiplicity = 2S+1
@@ -966,7 +1123,7 @@ Long-running calculations (large-system MD, batch processing) can be submitted a
 
 ```bash
 # List all jobs
-uma_calc jobs
+mlipx jobs
 
 # Output:
 # ID                                       Status       Type   Formula      Device
@@ -978,10 +1135,10 @@ uma_calc jobs
 # View a job's log (TUI: press Enter on the job row)
 
 # Kill a running job
-uma_calc kill 2026-06-19_14-30-15_Li3PS4_sp
+mlipx kill 2026-06-19_14-30-15_Li3PS4_sp
 
 # Clean up completed/failed job records
-uma_calc clean
+mlipx clean
 ```
 
 ### 10.3 Job Lifecycle
@@ -993,10 +1150,10 @@ pending ──→ running ──→ done
                 └── failed   (runtime error)
 ```
 
-Job state files are stored at `~/.umakit/jobs/`. Each job has a JSON state file and a log file:
+Job state files are stored at `~/.mlipx/jobs/`. Each job has a JSON state file and a log file:
 
 ```
-~/.umakit/jobs/
+~/.mlipx/jobs/
 ├── 2026-06-19_14-30-15_Li3PS4_sp.json       # State (status, PID, progress)
 ├── 2026-06-19_15-00-22_Cu_slab_opt.json
 ├── 2026-06-19_13-10-00_H2O_md.json
@@ -1017,7 +1174,7 @@ Control the number of CPU threads used by PyTorch:
 ```bash
 # CLI: set via environment variable
 export OMP_NUM_THREADS=4
-uma_calc sp structure.cif --model uma-s-1.pt
+mlipx sp structure.cif --model uma-s-1.pt
 ```
 
 **Python API / EngineConfig:**
@@ -1047,10 +1204,10 @@ Use the standard `CUDA_VISIBLE_DEVICES` environment variable:
 
 ```bash
 # Use GPU 0 only
-CUDA_VISIBLE_DEVICES=0 uma_calc sp structure.cif --model uma-s-1.pt --device cuda
+CUDA_VISIBLE_DEVICES=0 mlipx sp structure.cif --model uma-s-1.pt --device cuda
 
 # Use GPUs 0 and 1
-CUDA_VISIBLE_DEVICES=0,1 uma_calc sp structure.cif --model uma-s-1.pt --device cuda
+CUDA_VISIBLE_DEVICES=0,1 mlipx sp structure.cif --model uma-s-1.pt --device cuda
 ```
 
 ### 11.4 Inference Modes
@@ -1094,9 +1251,9 @@ CUDA_VISIBLE_DEVICES=0,1 uma_calc sp structure.cif --model uma-s-1.pt --device c
 
 **Diagnose (works even before torch is installed):**
 ```bash
-uv run uma_calc setup      # detect GPU + print the exact torch command
+uv run mlipx setup      # detect GPU + print the exact torch command
 uv run python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list())"
-uv run uma_calc doctor     # shows your GPU's CC and whether PyTorch supports it
+uv run mlipx doctor     # shows your GPU's CC and whether PyTorch supports it
 ```
 
 **Solutions (preferred first):**
@@ -1121,12 +1278,12 @@ uv run uma_calc doctor     # shows your GPU's CC and whether PyTorch supports it
 
 #### "No structure file found"
 
-**Cause:** UMAKit couldn't find a structure file.
+**Cause:** mlipx couldn't find a structure file.
 
 **Solutions:**
-1. Specify the structure explicitly: `uma_calc sp POSCAR --model ...`
+1. Specify the structure explicitly: `mlipx sp POSCAR --model ...`
 2. Place `POSCAR`, `CONTCAR`, or `*.cif` in the current directory
-3. Use absolute paths: `uma_calc sp /path/to/structure.cif --model ...`
+3. Use absolute paths: `mlipx sp /path/to/structure.cif --model ...`
 
 #### TUI Import Error
 
@@ -1145,8 +1302,8 @@ uv pip install textual
 - Pre-relaxation is enabled by default (50 FIRE steps before MD)
 - If it still fails, run a full geometry optimization first:
   ```bash
-  uma_calc opt POSCAR --model uma-s-1.pt --fmax 0.02
-  uma_calc md CONTCAR --model uma-s-1.pt --temp 100
+  mlipx opt POSCAR --model uma-s-1.pt --fmax 0.02
+  mlipx md CONTCAR --model uma-s-1.pt --temp 100
   ```
 - Lower the initial temperature: `--temp 100`
 - Check that your initial structure is physically reasonable
@@ -1171,7 +1328,7 @@ A: Yes, if your terminal supports Unicode and 256 colors. Most modern terminals 
 
 **Q: Can I run multiple calculations simultaneously?**
 
-A: Yes. Use background jobs (`--detach` in TUI or `uma_calc jobs`) for multiple independent calculations. For batch processing of many structures, use `uma_calc batch --parallel --workers N`.
+A: Yes. Use background jobs (`--detach` in TUI or `mlipx jobs`) for multiple independent calculations. For batch processing of many structures, use `mlipx batch --parallel --workers N`.
 
 **Q: What file formats are supported for input structures?**
 
@@ -1223,15 +1380,15 @@ Atoms  ~RAM (CPU)  ~VRAM (GPU)
 
 ```bash
 # Calculate the energy of an LLZO electrolyte structure
-uma_calc sp LLZO.cif --model uma-s-1.pt --task omat --device cuda
-# Output: OUTCAR, CONTCAR, uma_results.json
+mlipx sp LLZO.cif --model uma-s-1.pt --task omat --device cuda
+# Output: OUTCAR, CONTCAR, mlipx_results.json
 ```
 
 ### 14.2 Surface Relaxation
 
 ```bash
 # Optimize a Pt(111) slab with cell fixed
-uma_calc opt Pt111_slab.cif \
+mlipx opt Pt111_slab.cif \
     --model uma-s-1.pt \
     --task oc20 \
     --fmax 0.02 \
@@ -1244,7 +1401,7 @@ uma_calc opt Pt111_slab.cif \
 
 ```bash
 # Run 100 ps NVT at 400 K on an optimized structure
-uma_calc md CONTCAR \
+mlipx md CONTCAR \
     --model uma-s-1.pt \
     --ensemble NVT \
     --temp 400 \
@@ -1258,7 +1415,7 @@ uma_calc md CONTCAR \
 
 ```bash
 # Single-point energy on 100 CIF files
-uma_calc batch candidates/ \
+mlipx batch candidates/ \
     --model uma-s-1.pt \
     --calc-type sp \
     --pattern "*.cif" \
@@ -1276,7 +1433,7 @@ for r in data["results"]:
 ### 14.5 Adsorption Energy via Python API
 
 ```python
-from umakit.api import calculate_adsorption_energy
+from mlipx.api import calculate_adsorption_energy
 
 result = calculate_adsorption_energy(
     adsorbed_structure="CO_on_Pt.cif",
@@ -1295,7 +1452,7 @@ print(f"Adsorption energy: {result['adsorption_energy']:.4f} eV")
 
 ```bash
 # 1. Generate template
-uma_calc template opt -o INCAR.opt
+mlipx template opt -o INCAR.opt
 
 # 2. Edit INCAR.opt:
 #    CALC_TYPE = OPT
@@ -1307,11 +1464,107 @@ uma_calc template opt -o INCAR.opt
 #    CELL_OPT = .TRUE.
 
 # 3. Run
-uma_calc run -i INCAR.opt -s POSCAR -o relax_results/
-
-# 4. Check results
 cat relax_results/OUTCAR
 ```
+
+### 14.7 Equation of State (EOS)
+
+Compute an energy-vs-volume curve:
+
+```python
+# eos_workflow.py
+from ase.io import read, write
+import numpy as np
+import subprocess
+
+atoms = read("Li2O.cif")
+for i, scale in enumerate(np.linspace(0.9, 1.1, 11)):
+    a = atoms.copy()
+    a.set_cell(atoms.cell * scale, scale_atoms=True)
+    write(f"eos_{i:02d}.cif", a)
+    subprocess.run([
+        "mlipx", "sp", f"eos_{i:02d}.cif",
+        "--model", "uma-s-1.pt", "--task", "omat",
+        "--output", f"eos_{i:02d}_results",
+    ])
+# Then collect energies from mlipx_results.json to fit the EOS
+```
+
+### 14.8 NEB Transition-State Preparation
+
+Generate NEB intermediate images and optimize each:
+
+```python
+from ase.io import read, write
+from ase.neb import NEB
+import subprocess
+
+initial, final = read("initial.cif"), read("final.cif")
+images = [initial] + [initial.copy() for _ in range(3)] + [final]
+NEB(images).interpolate()
+for i, img in enumerate(images):
+    write(f"neb_{i:02d}.cif", img)
+    subprocess.run([
+        "mlipx", "opt", f"neb_{i:02d}.cif",
+        "--model", "uma-s-1.pt", "--output", f"neb_{i:02d}_opt",
+    ])
+```
+
+### 14.9 Phonon Calculation (with phonopy)
+
+```python
+from ase.io import read, write
+import subprocess, json
+from phonopy import Phonopy
+from phonopy.structure.atoms import PhonopyAtoms
+
+atoms = read("structure.cif")
+ph_atoms = PhonopyAtoms(symbols=atoms.get_chemical_symbols(),
+                      positions=atoms.positions, cell=atoms.cell)
+phonopy = Phonopy(ph_atoms, [[2,0,0],[0,2,0],[0,0,2]])
+phonopy.generate_displacements(distance=0.03)
+
+forces = []
+for i, sc in enumerate(phonopy.supercells_with_displacements):
+    write(f"disp_{i:03d}.cif", sc)
+    subprocess.run(["mlipx","sp",f"disp_{i:03d}.cif","--model","uma-s-1.pt",
+                    "--output",f"disp_{i:03d}_results"])
+    with open(f"disp_{i:03d}_results/mlipx_results.json") as f:
+        forces.append(json.load(f)["calculation"]["results"]["forces"])
+phonopy.forces = forces
+phonopy.produce_force_constants()
+phonopy.run_mesh([20,20,20]); phonopy.run_total_dos()
+```
+
+### 14.10 Formation Energy Calculation
+
+```python
+from ase.io import read
+from collections import Counter
+import subprocess, json
+
+compound = read("Li2O.cif")
+subprocess.run(["mlipx","sp","Li2O.cif","--model","uma-s-1.pt",
+                "--task","omat","--output","Li2O_results"])
+with open("Li2O_results/mlipx_results.json") as f:
+    e_total = json.load(f)["calculation"]["results"]["energy"]
+
+e_ref = {"Li": -1.9, "O": -4.9}  # elemental reference energies (calculate separately)
+e_form = e_total - sum(c * e_ref[el] for el, c in
+                       Counter(compound.get_chemical_symbols()).items())
+print(f"Formation energy: {e_form/len(compound):.4f} eV/atom")
+```
+
+### 14.11 Recommended Settings Cheat Sheet
+
+| System type | Recommended settings |
+|-------------|----------------------|
+| Small molecules (1-50 atoms) | `--optimizer LBFGS --fmax 0.01` |
+| Bulk materials | `--optimizer FIRE --fmax 0.05` |
+| Surfaces | `--optimizer FIRE --fmax 0.03` |
+| MD equilibration | `--ensemble NVT --timestep 1.0` |
+| MD production | `--ensemble NVE --timestep 1.0` |
+| High-temperature MD | `--timestep 0.5 --friction 0.002` |
 
 ---
 

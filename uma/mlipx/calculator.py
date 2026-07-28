@@ -1,0 +1,270 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the MIT license found in the
+# LICENSE file in the root directory of this source tree.
+
+# Modified for the mlipx project: multi-engine MLIP support (UMA/MACE/DPA/GRACE).
+"""
+Calculator wrapper for UMA models.
+
+Provides a simplified interface for loading and using FAIRChem calculators
+with local model files.
+"""
+
+from __future__ import annotations
+
+import copy
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+from fairchem.core import FAIRChemCalculator
+from fairchem.core.units.mlip_unit import load_predict_unit
+from fairchem.core.units.mlip_unit.api.inference import guess_inference_settings
+
+from mlipx.base_calculator import BaseMLIPCalculator
+from mlipx.gpu_compat import arch_supports_device
+
+if TYPE_CHECKING:
+    from typing import ClassVar, Literal
+
+    from fairchem.core.units.mlip_unit import MLIPPredictUnit
+
+
+class UMACalculator(BaseMLIPCalculator):
+    """Wrapper for FAIRChem UMA calculators.
+
+    Simplifies model loading and calculator creation from local checkpoint files.
+
+    Example:
+        >>> calc_wrapper = UMACalculator("uma-s-1.pt", task="omat", device="cuda")
+        >>> calculator = calc_wrapper.get_calculator()
+        >>> atoms.calc = calculator
+        >>> energy = atoms.get_potential_energy()
+    """
+
+    VALID_TASKS: ClassVar[set[str]] = {"omat", "omol", "oc20", "oc25", "odac", "omc"}
+    VALID_DEVICES: ClassVar[set[str]] = {"cpu", "cuda", "gpu"}
+    VALID_INFERENCE_MODES: ClassVar[set[str]] = {"default", "turbo"}
+
+    def __init__(
+        self,
+        model_path: str | Path,
+        task: str = "omat",
+        device: Literal["cpu", "cuda"] | None = None,
+        inference_mode: str = "default",
+        torch_num_threads: int | None = None,
+        activation_checkpointing: bool | None = None,
+    ):
+        """Initialize UMA calculator wrapper.
+
+        Args:
+            model_path: Path to model checkpoint (.pt file)
+            task: Task type (omat, omol, oc20, odac, omc)
+            device: Device for calculation (cpu or cuda)
+            inference_mode: Inference mode (default or turbo)
+            torch_num_threads: Number of threads for PyTorch inference
+            activation_checkpointing: Enable activation checkpointing
+
+        Raises:
+            FileNotFoundError: If model file doesn't exist
+            ValueError: If invalid task or inference mode
+        """
+        self.model_path = Path(model_path)
+        self._task = task.lower()
+        self.device = device or "cpu"
+        self._inference_mode = inference_mode.lower()
+        self.torch_num_threads = torch_num_threads
+        self.activation_checkpointing = activation_checkpointing
+
+        # Validate inputs
+        self._validate()
+
+        # Load predictor
+        self._predictor = None
+        self._calculator = None
+
+    @property
+    def task(self) -> str:
+        """Current UMA task name (omat/omol/oc20/oc25/odac/omc)."""
+        return self._task
+
+    @property
+    def inference_mode(self) -> str:
+        """Inference mode: 'default' or 'turbo' (UMA only)."""
+        return self._inference_mode
+
+    def _validate(self) -> None:
+        """Validate initialization parameters."""
+        if not self.model_path.exists():
+            raise FileNotFoundError(f"Model file not found: {self.model_path}")
+
+        if self.task not in self.VALID_TASKS:
+            raise ValueError(
+                f"Invalid task '{self.task}'. "
+                f"Must be one of: {', '.join(self.VALID_TASKS)}"
+            )
+
+        if self.inference_mode not in self.VALID_INFERENCE_MODES:
+            raise ValueError(
+                f"Invalid inference mode '{self.inference_mode}'. "
+                f"Must be one of: {', '.join(self.VALID_INFERENCE_MODES)}"
+            )
+
+    def _check_gpu_compatibility(self) -> None:
+        """Check if this PyTorch build includes CUDA kernels for this GPU.
+
+        PyTorch 2.7+ dropped ``sm_50``/``sm_60`` from its pre-built CUDA wheels,
+        so Pascal GPUs (compute capability 6.x: GTX 10xx, P104-100, P100) no
+        longer have matching kernels and fail with ``no kernel image is
+        available for execution on the device``. These GPUs still work with
+        PyTorch 2.6.x (CUDA 12.4) wheels, which include ``sm_60`` — and
+        ``sm_60`` kernels are binary-compatible with ``sm_61`` devices.
+        """
+        if self.device not in ("cuda", "gpu"):
+            return
+
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return
+
+            major, minor = torch.cuda.get_device_capability(0)
+            gpu_cc = f"sm_{major}{minor}"
+
+            # Check if this PyTorch build actually includes kernels for this GPU.
+            # sm_60 kernels run on sm_61 (minor-revision binary compatibility),
+            # so arch_supports_device accepts sm_60 for an sm_61 device.
+            arch_list = torch.cuda.get_arch_list()
+            if not arch_supports_device(gpu_cc, arch_list):
+                gpu_name = torch.cuda.get_device_name(0)
+
+                raise RuntimeError(
+                    f"\n{'=' * 68}\n"
+                    f" GPU NOT SUPPORTED BY THIS PYTORCH BUILD: {gpu_name}\n"
+                    f"{'=' * 68}\n\n"
+                    f"  Architecture: {gpu_cc} (CC {major}.{minor})\n"
+                    f"  PyTorch kernels: {arch_list}\n\n"
+                    f"  This PyTorch build has no kernel compatible with {gpu_cc}.\n"
+                    f"  PyTorch 2.7+ removed sm_50/sm_60 from its pre-built CUDA\n"
+                    f"  wheels, so Pascal GPUs (sm_61: GTX 10xx, P104-100) fail.\n\n"
+                    f"  Options:\n"
+                    f"    1. Install a PyTorch build that still ships sm_60.\n"
+                    f"       sm_60 kernels are binary-compatible with sm_61:\n"
+                    f"       uv pip install torch==2.6.0 "
+                    f"--index-url https://download.pytorch.org/whl/cu124\n"
+                    f"    2. Build PyTorch from source with Pascal kernels:\n"
+                    f'       TORCH_CUDA_ARCH_LIST="6.0;6.1" '
+                    f"python setup.py develop\n"
+                    f"    3. Use a GPU with sm_70+ (Volta or newer)\n"
+                    f"    4. Fall back to CPU: --device cpu\n"
+                    f"{'=' * 68}\n"
+                )
+        except RuntimeError:
+            raise
+        except Exception:
+            # If we can't check GPU compat, let the calculation fail naturally
+            pass
+
+    def load_predictor(self) -> MLIPPredictUnit:
+        """Load the prediction unit from checkpoint.
+
+        Returns:
+            Loaded MLIPPredictUnit
+        """
+        if self._predictor is None:
+            self._check_gpu_compatibility()
+            # Start from the named preset ("default" / "turbo"), which sets
+            # external_graph_gen / internal_graph_gen_version to values that
+            # actually build a neighbor graph. Building a partial
+            # InferenceSettings by hand leaves those as None (checkpoint
+            # default) and breaks graph generation for some models.
+            settings = copy.deepcopy(guess_inference_settings(self.inference_mode))
+            if self.activation_checkpointing is not None:
+                settings.activation_checkpointing = self.activation_checkpointing
+            if self.torch_num_threads is not None:
+                settings.torch_num_threads = self.torch_num_threads
+            # The "turbo" preset enables torch.compile (inductor/triton backend).
+            # Triton only supports CUDA Capability >= 7.0, so on older GPUs
+            # (e.g. Pascal sm_61: GTX 10xx, P104-100) compilation raises
+            # "too old to be supported by the triton GPU compiler". Disable
+            # compile there and fall back to eager — the other turbo speedups
+            # (tf32, merge_mole) still apply.
+            if settings.compile and not self._compile_supported():
+                settings.compile = False
+            self._predictor = load_predict_unit(
+                path=self.model_path,
+                device=self.device,
+                inference_settings=settings,
+            )
+
+        return self._predictor
+
+    @staticmethod
+    def _compile_supported() -> bool:
+        """Whether torch.compile (triton/inductor) can run on the current GPU.
+
+        Triton requires CUDA Capability >= 7.0. Returns True when there is no
+        CUDA device or the capability can't be determined (let torch.compile
+        fail naturally in that case), and False only for known-unsupported
+        older architectures.
+        """
+        try:
+            import torch
+
+            if not torch.cuda.is_available():
+                return True
+            major, _ = torch.cuda.get_device_capability(0)
+            return major >= 7
+        except Exception:
+            return True
+
+    def get_calculator(self) -> FAIRChemCalculator:
+        """Get ASE calculator instance.
+
+        Returns:
+            FAIRChemCalculator instance
+        """
+        if self._calculator is None:
+            predictor = self.load_predictor()
+            self._calculator = FAIRChemCalculator(
+                predict_unit=predictor,
+                task_name=self.task,
+            )
+
+        return self._calculator
+
+    @property
+    def implemented_properties(self) -> list[str]:
+        """Get list of implemented properties.
+
+        Returns:
+            List of property names
+        """
+        calc = self.get_calculator()
+        return list(calc.implemented_properties)
+
+    @property
+    def has_stress(self) -> bool:
+        """Check if stress calculation is supported.
+
+        Returns:
+            True if stress is supported
+        """
+        return "stress" in self.implemented_properties
+
+    def info(self) -> dict:
+        """Get calculator information.
+
+        Returns:
+            Dictionary with calculator details
+        """
+        return {
+            "model_type": "uma",
+            "model_path": str(self.model_path),
+            "task": self.task,
+            "device": self.device,
+            "inference_mode": self.inference_mode,
+            "implemented_properties": self.implemented_properties,
+            "has_stress": self.has_stress,
+        }
