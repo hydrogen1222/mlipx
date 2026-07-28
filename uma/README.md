@@ -12,7 +12,7 @@ uv run mlipx setup
 
 # 2. Create a pinned venv (Python 3.12) + install everything from the lockfile.
 #    uv auto-creates .venv. Do NOT use `pip install -r requirements.txt`
-#    (that's the upstream CI snapshot, torch 2.8 - conflicts with this fork).
+#    (that is a CI snapshot pinned to different torch versions).
 uv sync
 
 # 3. Verify & run

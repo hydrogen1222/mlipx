@@ -94,12 +94,12 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 
 ### 2.2 Installing with uv (recommended)
 
-> **Important:** `fairchem-core` is NOT published on PyPI. It must be installed from the local `packages/fairchem-core/` directory in this repository.
+> **Note:** `fairchem-core` is not published on PyPI. It is a workspace member in this repository under `packages/fairchem-core/` and will be installed automatically by `uv sync`.
 
 ```bash
 # Clone the repository
-git clone https://github.com/FAIR-Chem/fairchem.git
-cd fairchem
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
 
 # Step 1: Detect your GPU and get the matching PyTorch command (CPU-only users
 #         can skip). Uses nvidia-smi, works before PyTorch is installed.
@@ -107,8 +107,6 @@ uv run mlipx setup
 
 # Step 2: Create a pinned venv (Python 3.12 via .python-version) and install
 #         everything from the lockfile. uv auto-creates .venv.
-#         Do NOT use `pip install -r requirements.txt` — that is the upstream CI
-#         test snapshot (torch 2.8) and conflicts with this fork's GPU setup.
 uv sync
 ```
 
@@ -730,7 +728,7 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
 
 ```
 📁 Structure File: [structure.cif                ]
-   ✅ Found: /home/user/fairchem/uma/structure.cif
+   ✅ Found: /home/user/mlipx/structure.cif
    💡 Tip: Relative paths are supported (e.g., ./data/structure.cif)
 ```
 
@@ -1081,12 +1079,18 @@ UMA models are trained on different datasets; each task corresponds to a specifi
 
 ```python
 from ase.io import read, write
+
+atoms = read("molecule.xyz")
+atoms.info["charge"] = 0    # Net charge
+atoms.info["spin"] = 1      # Spin multiplicity = 2S+1
+write("molecule.xyz", atoms)
+```
+
 For periodic systems (omat, oc20, oc25, odac, omc), PBC is automatically set to `True` and the cell is validated. For molecules (omol), PBC is set to `False`.
 
 ### 9.2 Generic Tasks (MACE / DPA / GRACE)
 
 Non-UMA engines are not task-aware; `task` only controls the periodic-boundary (PBC) strategy:
-
 | Task | PBC | Equivalent UMA task | Suitable for |
 |------|------|---------------------|--------------|
 | `bulk` | True | `omat` | Periodic crystals, surfaces, MOFs |
@@ -1098,11 +1102,6 @@ mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
 
 # DPA isolated molecule
 mlipx sp molecule.xyz --model dpa2.pth --model-type dpa --task molecule
-```
-atoms = read("molecule.xyz")
-atoms.info["charge"] = 0    # Net charge
-atoms.info["spin"] = 1      # Spin multiplicity = 2S+1
-write("molecule.xyz", atoms)
 ```
 
 For periodic systems (omat, oc20, oc25, odac, omc), PBC is automatically set to `True` and the cell is validated. For molecules (omol), PBC is set to `False`.

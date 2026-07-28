@@ -6,7 +6,7 @@ mlipx wraps multiple MLIP engines behind one unified interface — **UMA (FAIRCh
 
 Switch engines with a single flag: `--model-type` (CLI) or the `MODEL_TYPE` key (INCAR). Default is `uma`; existing UMA workflows keep working unchanged.
 
-> ℹ️ This repository is a fork of [FAIRChem](https://github.com/FAIR-Chem/fairchem) and contains its full source. The mlipx package lives in [`uma/`](uma/) and is built on top of `fairchem-core`. FAIRChem's own documentation is preserved under [`docs/`](docs/) and [`packages/`](packages/).
+> ℹ️ This repository contains the full source of [mlipx](uma/) — a multi-engine MLIP CLI/TUI/API tool — built on top of [fairchem-core](packages/fairchem-core/). The underlying fairchem library (UMA model, training, datasets) is preserved under [`src/`](src/), [`packages/`](packages/), and [`docs/`](docs/). Originally forked from [FAIRChem](https://github.com/FAIR-Chem/fairchem).
 
 ---
 
@@ -26,9 +26,12 @@ Both manuals are wiki-level references covering: installation, quick start, arch
 ### Install
 
 ```bash
-# From the repository root (Python 3.12, managed by uv)
-uv sync                       # creates .venv and installs all locked deps
-uv pip install -e uma/        # install the mlipx package (editable)
+# Clone the repository
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
+
+# Create .venv and install all dependencies
+uv sync
 ```
 
 GPU users: see the [installation section](uma/docs/README_EN.md#2-installation) of the manual for CUDA/PyTorch matching by GPU architecture.

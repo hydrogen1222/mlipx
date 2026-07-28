@@ -94,12 +94,12 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 
 ### 2.2 使用 uv 安装（推荐）
 
-> **重要：** `fairchem-core` 未发布到 PyPI，必须从本仓库的 `packages/fairchem-core/` 目录安装。
+> **注意：** `fairchem-core` 未发布到 PyPI，它作为本仓库的 workspace 成员位于 `packages/fairchem-core/`，`uv sync` 会自动安装。
 
 ```bash
 # 克隆仓库
-git clone https://github.com/FAIR-Chem/fairchem.git
-cd fairchem
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
 
 # 第 1 步：检测 GPU 并获取匹配的 PyTorch 安装命令（仅 CPU 用户可跳过）。
 #         用 nvidia-smi，装 torch 前即可用。
@@ -107,8 +107,6 @@ uv run mlipx setup
 
 # 第 2 步：创建锁定的 venv（Python 3.12，由 .python-version 指定）并按
 #         lockfile 安装全部依赖。uv 自动创建 .venv。
-#         不要用 `pip install -r requirements.txt`——那是上游 CI 测试快照
-#         （torch 2.8），与本 fork 的 GPU 配置冲突。
 uv sync
 ```
 
@@ -730,7 +728,7 @@ TUI 基于 [Textual](https://textual.textualize.io/) 构建，提供交互式、
 
 ```
 📁 Structure File: [structure.cif                ]
-   ✅ Found: /home/user/fairchem/uma/structure.cif
+   ✅ Found: /home/user/mlipx/structure.cif
    💡 提示：支持相对路径（例如：./data/structure.cif）
 ```
 
@@ -986,6 +984,19 @@ UMA 模型在不同数据集上训练；每个任务对应特定领域：
 | `oc25` | 催化 (OC25) | 表面 slab | 可选 | ✓ | 扩展催化基准 |
 | `odac` | MOFs | 金属有机框架 | 可选 | ✓ | 气体存储、分离 |
 | `omc` | 分子晶体 | 有机晶体 | 可选 | ✓ | 药物、有机电子学 |
+
+**分子体系（omol）重要提示：** 分子必须在 Atoms info 中设置 `charge` 和 `spin`：
+
+```python
+from ase.io import read, write
+
+atoms = read("molecule.xyz")
+atoms.info["charge"] = 0    # 净电荷
+atoms.info["spin"] = 1      # 自旋多重度 = 2S+1
+write("molecule.xyz", atoms)
+```
+
+对于周期性体系（omat、oc20、oc25、odac、omc），PBC 自动设为 `True` 并验证晶胞。对于分子（omol），PBC 设为 `False`。
 
 ### 9.2 通用任务（MACE / DPA / GRACE）
 
