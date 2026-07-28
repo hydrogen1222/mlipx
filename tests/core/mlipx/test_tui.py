@@ -99,6 +99,33 @@ async def test_md_values_loaded_from_config() -> None:
 
 
 @pytest.mark.asyncio
+async def test_md_switch_row_does_not_clip_or_overlap() -> None:
+    """The pre-relax label and switch have a full row and no ghost control."""
+    app = MlipxApp()
+    app.update_config("calc_type", "md")
+
+    async with app.run_test(size=(80, 40)) as pilot:
+        config_screen = ConfigScreen()
+        await app.push_screen(config_screen)
+        await pilot.pause()
+
+        pre_relax = config_screen.query_one("#pre-relax")
+        row = pre_relax.parent
+        label = row.query_one("Label")
+
+        assert row.has_class("switch-row")
+        assert row.region.height >= pre_relax.region.height
+        assert row.region.y <= label.region.y < row.region.bottom
+        assert len(config_screen.query("#detach-switch")) == 0
+
+        before = pre_relax.value
+        pre_relax.focus()
+        await pilot.press("space")
+        await pilot.pause()
+        assert pre_relax.value is not before
+
+
+@pytest.mark.asyncio
 async def test_job_detail_screen_displays_log() -> None:
     """JobDetailScreen writes supplied log text into the Log widget."""
     app = MlipxApp()

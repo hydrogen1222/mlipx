@@ -57,6 +57,9 @@ class ConfigScreen(Screen):
         color: $error;
         text-style: italic;
     }
+    .switch-row {
+        height: 3;
+    }
     """
 
     def compose(self) -> ComposeResult:
@@ -215,6 +218,7 @@ class ConfigScreen(Screen):
             yield Horizontal(
                 Label("Cell Optimization:"),
                 Switch(value=self.app.get_config("cell_opt", False), id="cell-opt"),
+                classes="switch-row",
             )
 
         elif calc_type == "md":
@@ -256,13 +260,8 @@ class ConfigScreen(Screen):
                     value=self.app.get_config("pre_relax", True),
                     id="pre-relax",
                 ),
+                classes="switch-row",
             )
-
-        # Background / detach option for all calc types (disabled until wired)
-        yield Horizontal(
-            Label("Run in background (detach):"),
-            Switch(value=False, id="detach-switch", disabled=True),
-        )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
@@ -439,9 +438,8 @@ class ConfigScreen(Screen):
             pre_relax = self.query_one("#pre-relax", Switch)
             self.app.update_config("pre_relax", pre_relax.value)
 
-        # Detach switch
-        detach_switch = self.query_one("#detach-switch", Switch)
-        self.app.update_config("detach", detach_switch.value)
+        # Background execution is not exposed in the TUI yet.
+        self.app.update_config("detach", False)
 
         # Go to run screen. Push a fresh instance so on_mount/on_compose re-run
         # for this run's config (the named "run" screen is cached by Textual).
