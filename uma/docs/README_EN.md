@@ -101,14 +101,13 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 git clone https://github.com/hydrogen1222/mlipx.git
 cd mlipx
 
-# Step 1: Detect your GPU and get the matching PyTorch command (CPU-only users
-#         can skip). Uses nvidia-smi, works before PyTorch is installed.
-uv run mlipx setup
-
-# Step 2: Create a pinned venv (Python 3.12 via .python-version) and install
+# Step 1: Create a pinned venv (Python 3.12 via .python-version) and install
 #         everything from the lockfile. uv auto-creates .venv.
 uv sync
-```
+
+# Step 2 (optional): Detect your GPU and verify the PyTorch CUDA match.
+#         Uses nvidia-smi and the installed PyTorch.
+uv run mlipx setup
 
 ### 2.3 CUDA GPU vs CPU Installation
 

@@ -24,8 +24,8 @@ members = [
     "fairchem-data-omol",
     "fairchem-demo-ocpapi",
     "fairchem-lammps",
-    "fairchem-workspace",
     "mlipx",
+    "mlipx-workspace",
 ]
 overrides = [
     { name = "torch", specifier = "==2.6.0+cu124", index = "https://download.pytorch.org/whl/cu124" },
@@ -1562,27 +1562,6 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [{ name = "fairchem-core", editable = "packages/fairchem-core" }]
-
-[[package]]
-name = "fairchem-workspace"
-version = "0.1.0"
-source = { virtual = "." }
-dependencies = [
-    { name = "fairchem-applications-adsorbml" },
-    { name = "fairchem-applications-cattsunami" },
-    { name = "fairchem-applications-ocx" },
-    { name = "fairchem-core" },
-    { name = "mlipx" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "fairchem-applications-adsorbml", editable = "packages/fairchem-applications-AdsorbML" },
-    { name = "fairchem-applications-cattsunami", editable = "packages/fairchem-applications-cattsunami" },
-    { name = "fairchem-applications-ocx", editable = "packages/fairchem-applications-ocx" },
-    { name = "fairchem-core", editable = "packages/fairchem-core" },
-    { name = "mlipx", editable = "uma" },
-]
 
 [[package]]
 name = "fastapi"
@@ -3177,6 +3156,27 @@ requires-dist = [
     { name = "tqdm" },
 ]
 provides-extras = ["uma", "dev"]
+
+[[package]]
+name = "mlipx-workspace"
+version = "0.1.0"
+source = { virtual = "." }
+dependencies = [
+    { name = "fairchem-applications-adsorbml" },
+    { name = "fairchem-applications-cattsunami" },
+    { name = "fairchem-applications-ocx" },
+    { name = "fairchem-core" },
+    { name = "mlipx" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "fairchem-applications-adsorbml", editable = "packages/fairchem-applications-AdsorbML" },
+    { name = "fairchem-applications-cattsunami", editable = "packages/fairchem-applications-cattsunami" },
+    { name = "fairchem-applications-ocx", editable = "packages/fairchem-applications-ocx" },
+    { name = "fairchem-core", editable = "packages/fairchem-core" },
+    { name = "mlipx", editable = "uma" },
+]
 
 [[package]]
 name = "mongomock"

@@ -35,6 +35,7 @@ from mlipx.protocols import CancellationRequested  # noqa: PLC0415
 from mlipx.writers.outcar import OutcarWriter
 from mlipx.writers.trajectory import TrajectoryWriter
 from mlipx.writers.xdatcar import XdatcarWriter
+from mlipx.writers.json_writer import JsonWriter
 
 if TYPE_CHECKING:
     from typing import Any
@@ -228,6 +229,7 @@ class MDRunner(BaseRunner):
         optimizer.attach(_check_cancel, interval=1)
 
         # Track initial energy
+        e_init = atoms.get_potential_energy()
         self.log(f"Initial energy: {e_init:.6f} eV")
 
         # Run optimization

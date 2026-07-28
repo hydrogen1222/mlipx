@@ -101,14 +101,12 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 git clone https://github.com/hydrogen1222/mlipx.git
 cd mlipx
 
-# 第 1 步：检测 GPU 并获取匹配的 PyTorch 安装命令（仅 CPU 用户可跳过）。
-#         用 nvidia-smi，装 torch 前即可用。
-uv run mlipx setup
-
-# 第 2 步：创建锁定的 venv（Python 3.12，由 .python-version 指定）并按
-#         lockfile 安装全部依赖。uv 自动创建 .venv。
+# 第 1 步：创建锁定的 venv（Python 3.12，由 .python-version 指定）并按
+#         lockfile 安装全部依赖（含 PyTorch）。uv 自动创建 .venv。
 uv sync
-```
+
+# 第 2 步（可选）：检测 GPU 并验证 PyTorch CUDA 匹配。使用 nvidia-smi。
+uv run mlipx setup
 
 ### 2.3 CUDA GPU 与 CPU 安装
 
