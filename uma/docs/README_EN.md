@@ -128,6 +128,24 @@ uv run python -c "import torch; print('CUDA available' if torch.cuda.is_availabl
 - Ensure your PyTorch build includes CUDA (`pip install torch` with CUDA index)
 - Or install `fairchem-core` in a conda/venv environment that already has CUDA PyTorch
 
+### 2.3.1 Verified Setups
+
+The following configuration has been tested and confirmed working:
+
+| Component | Detail |
+|-----------|--------|
+| **GPU** | NVIDIA Tesla V100-SXM2-16GB |
+| **Architecture** | Volta, Compute Capability 7.0 (sm_70) |
+| **VRAM** | 16 GB |
+| **Driver** | 580.173.02 |
+| **CUDA** | 12.4 |
+| **PyTorch** | 2.6.0+cu124 |
+| **Python** | 3.12.13 |
+| **OS** | Linux |
+| **Install time** | ~5 min (including model download) |
+
+*This is not a minimum requirement — it is one known-good reference point. Lower-spec GPUs (e.g., GTX 10-series Pascal, sm_61) and CPU-only setups are also supported.*
+
 ### 2.4 How to Run Commands
 
 Two equivalent methods:

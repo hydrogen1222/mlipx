@@ -127,6 +127,24 @@ uv run python -c "import torch; print('CUDA 可用' if torch.cuda.is_available()
 - 确保 PyTorch 构建包含 CUDA（使用 CUDA 索引安装 `pip install torch`）
 - 或在已有 CUDA PyTorch 的 conda/venv 环境中安装 `fairchem-core`
 
+### 2.3.1 已验证配置
+
+以下配置已经过测试确认可用：
+
+| 组件 | 详情 |
+|------|------|
+| **GPU** | NVIDIA Tesla V100-SXM2-16GB |
+| **架构** | Volta，计算能力 7.0（sm_70）|
+| **显存** | 16 GB |
+| **驱动** | 580.173.02 |
+| **CUDA** | 12.4 |
+| **PyTorch** | 2.6.0+cu124 |
+| **Python** | 3.12.13 |
+| **操作系统** | Linux |
+| **安装耗时** | 约 5 分钟（含模型下载）|
+
+*这不是最低配置要求——它只是一个已知可用的参考点。更低规格的 GPU（如 GTX 10 系列 Pascal，sm_61）和纯 CPU 环境同样支持。*
+
 ### 2.4 如何运行命令
 
 两种等价方式：
