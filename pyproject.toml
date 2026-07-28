@@ -1,7 +1,7 @@
 [project]
-name = "mlipx"
+name = "mlipx-workspace"
 version = "0.1.0"
-description = "MLIP eXtended — VASP-compatible CLI/TUI/API for machine-learning interatomic potentials"
+description = "Monorepo workspace for MLIP eXtended — VASP-compatible CLI/TUI/API for MLIPs"
 requires-python = ">=3.10, <3.13"
 dependencies = [
     "fairchem-core",
