@@ -10,6 +10,7 @@ from __future__ import annotations
 import inspect
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from mlipx.jobs import JobManager, JobStatus
 
@@ -106,3 +107,31 @@ class TestJobManager:
 
             sig = inspect.signature(mgr._kill_process)
             assert "pid" in sig.parameters
+
+    def test_submit_uses_persistent_worker_process(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = JobManager(jobs_dir=Path(tmpdir))
+            with patch("mlipx.jobs.subprocess.Popen") as popen:
+                popen.return_value.pid = 4321
+                mgr.submit(
+                    "md-job",
+                    "md",
+                    "/tmp/POSCAR",
+                    "Li2",
+                    2,
+                    "cuda",
+                    ["python", "-m", "mlipx.cli", "md", "/tmp/POSCAR"],
+                )
+
+            command = popen.call_args.args[0]
+            assert command[1:3] == ["-m", "mlipx.job_worker"]
+            assert command[-5:] == [
+                "python",
+                "-m",
+                "mlipx.cli",
+                "md",
+                "/tmp/POSCAR",
+            ]
+            assert popen.call_args.kwargs["start_new_session"] is True
+            assert mgr.get_job("md-job")["pid"] == 4321
+            assert mgr.get_job("md-job")["status"] == "running"

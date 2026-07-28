@@ -297,6 +297,24 @@ Examples:
         help="Interval for saving trajectory frames (default: 10)",
     )
     md_parser.add_argument(
+        "--pre-relax",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Pre-relax the structure before MD (default: enabled)",
+    )
+    md_parser.add_argument(
+        "--pre-relax-steps",
+        type=int,
+        default=50,
+        help="Maximum pre-relaxation steps (default: 50)",
+    )
+    md_parser.add_argument(
+        "--pre-relax-fmax",
+        type=float,
+        default=0.1,
+        help="Pre-relaxation force threshold in eV/Å (default: 0.1)",
+    )
+    md_parser.add_argument(
         "--output",
         "-o",
         type=str,
@@ -662,6 +680,9 @@ def cmd_md(args: argparse.Namespace) -> int:
             "steps": args.steps,
             "friction": args.friction,
             "save_interval": args.save_interval,
+            "pre_relax": args.pre_relax,
+            "pre_relax_steps": args.pre_relax_steps,
+            "pre_relax_fmax": args.pre_relax_fmax,
         },
     )
 

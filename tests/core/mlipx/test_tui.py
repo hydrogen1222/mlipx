@@ -193,16 +193,19 @@ async def test_jobs_screen_uses_job_id_as_row_key(tmp_path: Path) -> None:
         assert [row_key.value for row_key in table.rows] == ["job-123"]
 
 
-def test_run_screen_unmount_cancels_worker() -> None:
-    """RunScreen cancels its Textual worker when the screen is unmounted."""
+def test_run_screen_unmount_keeps_background_job_running() -> None:
+    """Leaving RunScreen stops UI refresh without cancelling the job."""
     screen = RunScreen()
-    worker = Mock()
-    worker.is_finished = False
-    screen._calculation_worker = worker
+    timer = Mock()
+    manager = Mock()
+    screen._refresh_timer = timer
+    screen._job_manager = manager
 
     screen.on_unmount()
 
-    worker.cancel.assert_called_once()
+    timer.stop.assert_called_once()
+    assert screen._refresh_timer is None
+    manager.kill_job.assert_not_called()
 
 
 def test_jobs_screen_unmount_cancels_timer() -> None:

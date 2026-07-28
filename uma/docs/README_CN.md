@@ -748,10 +748,10 @@ TUI 基于 [Textual](https://textual.textualize.io/) 构建，提供交互式、
    💡 提示：支持相对路径（例如：./data/structure.cif）
 ```
 
-**运行界面**（Run）— 显示实时进度：
-- SP 计算使用不确定进度条（indeterminate spinner）
-- OPT 显示步数计数器（Step 5/500）
-- MD 显示步数 + 温度 + 能量
+**运行界面**（Run）— 计算会自动作为独立后台进程启动：
+- 可立即按 Back 返回，计算不会被取消
+- 退出 TUI 或 SSH 断开后，计算仍会继续
+- Cancel 会终止后台计算，而 Back 只关闭当前监视页面
 - 启动时显示实时日志的绝对路径和可直接复制的 `tail -f` 命令
 
 **任务管理**（Jobs）— 使用 DataTable 列出所有后台任务及状态图标：
@@ -1046,6 +1046,10 @@ mlipx sp molecule.xyz --model dpa2.pth --model-type dpa --task molecule
 ---
 
 ## 10. 后台任务管理
+
+从 TUI 启动的 SP、OPT 和 MD 任务默认作为独立后台进程运行。运行页面中的
+**Back (Keep Running)** 可安全返回主界面；也可以直接退出 TUI，随后从
+Background Jobs 页面或以下 CLI 命令查看和管理任务。
 
 ```bash
 # 列出所有任务

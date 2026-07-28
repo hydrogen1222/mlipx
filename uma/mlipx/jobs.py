@@ -133,6 +133,37 @@ class JobManager:
     def get_job(self, job_id: str) -> dict[str, Any] | None:
         return self._read_job_state(job_id)
 
+    def update_status(
+        self,
+        job_id: str,
+        status: JobStatus,
+        *,
+        error: str | None = None,
+    ) -> bool:
+        """Update a persisted job while preserving its identifying metadata."""
+        data = self._read_job_state(job_id)
+        if data is None:
+            return False
+        self._write_job_state(
+            job_id=job_id,
+            status=status,
+            calc_type=data["calc_type"],
+            structure=data["structure"],
+            formula=data["formula"],
+            natoms=data["natoms"],
+            pid=data["pid"],
+            device=data.get("device", "cpu"),
+            progress=data.get("progress"),
+            results=data.get("results"),
+            error=error,
+            finished_at=(
+                datetime.now().isoformat()
+                if status in {JobStatus.DONE, JobStatus.FAILED, JobStatus.CANCELLED}
+                else None
+            ),
+        )
+        return True
+
     def clean(self) -> list[str]:
         """Remove state files for done/failed/cancelled jobs. Returns list of removed IDs."""
         removed = []
@@ -169,15 +200,31 @@ class JobManager:
         Returns:
             Popen instance for the spawned process.
         """
-        log_path = self._log_file(job_id)
-        with open(log_path, "w") as log_f:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=log_f,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-
+        self._log_file(job_id).write_text("", encoding="utf-8")
+        self._write_job_state(
+            job_id=job_id,
+            status=JobStatus.PENDING,
+            calc_type=calc_type,
+            structure=structure,
+            formula=formula,
+            natoms=natoms,
+            pid=0,
+            device=device,
+        )
+        worker_cmd = [
+            sys.executable,
+            "-m",
+            "mlipx.job_worker",
+            str(self.jobs_dir.resolve()),
+            job_id,
+            *cmd,
+        ]
+        proc = subprocess.Popen(
+            worker_cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+        )
         self._write_job_state(
             job_id=job_id,
             status=JobStatus.RUNNING,
@@ -202,17 +249,7 @@ class JobManager:
 
         try:
             self._kill_process(pid)
-            self._write_job_state(
-                job_id=job_id,
-                status=JobStatus.CANCELLED,
-                calc_type=data["calc_type"],
-                structure=data["structure"],
-                formula=data["formula"],
-                natoms=data["natoms"],
-                pid=pid,
-                device=data.get("device", "cpu"),
-                finished_at=datetime.now().isoformat(),
-            )
+            self.update_status(job_id, JobStatus.CANCELLED)
             return True
         except Exception:
             return False
@@ -223,7 +260,7 @@ class JobManager:
             subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=False)
         else:
             with contextlib.suppress(ProcessLookupError):
-                os.kill(pid, signal.SIGTERM)
+                os.killpg(pid, signal.SIGTERM)
 
     def tail_log(self, job_id: str, lines: int = 50) -> str:
         """Return the last N lines of the job log."""

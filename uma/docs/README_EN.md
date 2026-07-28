@@ -541,7 +541,7 @@ Simulates the time evolution of atoms at a given temperature. Supports two ensem
 | NVT | Langevin | Constant particle number, volume, temperature (canonical) |
 | NVE | Velocity Verlet | Constant particle number, volume, energy (microcanonical) |
 
-**Pre-relaxation:** Before starting MD, mlipx automatically performs a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress. This prevents "atom explosion" — a common failure mode where high initial forces cause atoms to fly apart. You can disable this with `--no-pre-relax` (not yet exposed in CLI; use INCAR or TUI).
+**Pre-relaxation:** Before starting MD, mlipx automatically performs a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress. This prevents "atom explosion" — a common failure mode where high initial forces cause atoms to fly apart. You can disable this with `--no-pre-relax` in the CLI or with the Pre-relax switch in the TUI.
 
 **CLI usage:**
 
@@ -749,10 +749,10 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
    💡 Tip: Relative paths are supported (e.g., ./data/structure.cif)
 ```
 
-**Run** — Shows live progress during calculation:
-- Indeterminate spinner for SP calculations
-- Step counter for OPT (Step 5/500) and MD (Step 100/10000)
-- Real-time energy, forces, and temperature during MD
+**Run** — Starts the calculation as an independent background process:
+- Back returns immediately without cancelling the calculation
+- The calculation continues after exiting the TUI or disconnecting SSH
+- Cancel terminates the background calculation; Back only closes the monitor
 - The absolute live-log path and a copy-paste `tail -f` command at startup
 
 **Jobs** — DataTable listing all background jobs with status icons:
@@ -1146,9 +1146,11 @@ Long-running calculations (large-system MD, batch processing) can be submitted a
 
 ### 10.1 Submitting
 
-**CLI:** Not yet exposed via `--detach` flag (use TUI).
+**CLI:** Not yet exposed via a `--detach` flag (use TUI).
 
-**TUI:** Enable the "Run in background (detach)" switch on the Configuration screen.
+**TUI:** SP, OPT, and MD calculations are launched in the background
+automatically. Use **Back (Keep Running)** to leave the run screen without
+stopping the job. The job also survives exiting the TUI or disconnecting SSH.
 
 ### 10.2 Managing Jobs
 

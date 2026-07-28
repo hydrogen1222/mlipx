@@ -4,223 +4,206 @@ Copyright (c) Meta Platforms, Inc. and affiliates.
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-Modified for the mlipx project: multi-engine MLIP support (UMA/MACE/DPA/GRACE).
-Run screen for executing calculations with live output.
+Run screen for persistent background calculations with live output.
 """
 
 from __future__ import annotations
 
-import asyncio
-import traceback
-from pathlib import Path
+import shlex
+import sys
+from datetime import datetime
 from typing import TYPE_CHECKING
 
 from ase.io import read
 from textual.containers import Container, Horizontal
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Button, Log, ProgressBar, Static
-from textual.worker import Worker
 
-from mlipx.engine import CalculationEngine, EngineConfig
+from mlipx.jobs import JobManager
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
 
 class RunScreen(Screen):
-    """Screen for running calculations with live output."""
+    """Launch and monitor a calculation that survives screen/TUI exit."""
 
-    _calculation_worker: Worker | None = None
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self._job_manager = JobManager()
+        self._job_id: str | None = None
+        self._refresh_timer: Timer | None = None
+        self._displayed_log = ""
 
     def compose(self) -> ComposeResult:
-        """Compose the run screen."""
         calc_type = self.app.get_config("calc_type", "sp")
         structure = self.app.get_config("structure_file", "Not set")
-
         yield Container(
             Static(f"Running: {calc_type.upper()}", id="title"),
             Static(f"Structure: {structure}", id="subtitle"),
-            # Progress bar
             Static("Progress:"),
-            ProgressBar(total=100, id="progress-bar"),
-            Static("Initializing...", id="status-text"),
-            # Log output
+            ProgressBar(total=None, id="progress-bar"),
+            Static("Starting background job...", id="status-text"),
             Static("Log Output:", classes="section-header"),
             Log(id="run-log"),
-            # Action buttons
             Horizontal(
-                Button("◀ Cancel", variant="error", id="cancel-btn"),
-                Button("🔄 Back", id="back-btn", disabled=True),
+                Button("Cancel", variant="error", id="cancel-btn"),
+                Button("◀ Back (Keep Running)", id="back-btn"),
                 id="action-buttons",
             ),
             id="run-container",
         )
 
     def on_mount(self) -> None:
-        """Start calculation when screen mounts."""
         self.log_widget = self.query_one("#run-log", Log)
         self.progress = self.query_one("#progress-bar", ProgressBar)
         self.status = self.query_one("#status-text", Static)
-        self._calculation_worker = self.run_worker(
-            self._run_calculation(),
-            name="calculation",
-            group="calculation",
-            exit_on_error=False,
-            exclusive=True,
-        )
+        try:
+            atoms = read(self.app.get_config("structure_file"))
+            self._job_id = self._make_job_id()
+            command = self._build_command()
+            self._job_manager.submit(
+                job_id=self._job_id,
+                calc_type=self.app.get_config("calc_type", "sp"),
+                structure=self.app.get_config("structure_file"),
+                formula=atoms.get_chemical_formula(),
+                natoms=len(atoms),
+                device=self.app.get_config("device", "cpu"),
+                cmd=command,
+            )
+            log_path = self._job_manager._log_file(self._job_id).resolve()
+            self.log_widget.write_line(f"Background job: {self._job_id}")
+            self.log_widget.write_line(f"Live log: {log_path}")
+            self.log_widget.write_line(
+                f"Follow live output: tail -f {shlex.quote(str(log_path))}"
+            )
+            self.status.update("Running in background — safe to go Back or exit TUI")
+            self._refresh_timer = self.set_interval(0.5, self._refresh_job)
+        except Exception as exc:
+            self.log_widget.write_line(f"ERROR: Could not start background job: {exc}")
+            self.status.update("Failed to start")
+            self.progress.update(total=100, progress=0)
+            self.query_one("#cancel-btn", Button).disabled = True
 
     def on_unmount(self) -> None:
-        """Cancel any running calculation task when the screen is removed."""
-        if (
-            self._calculation_worker is not None
-            and not self._calculation_worker.is_finished
-        ):
-            self._calculation_worker.cancel()
+        """Stop only the UI refresh; the background process keeps running."""
+        if self._refresh_timer is not None:
+            self._refresh_timer.stop()
+            self._refresh_timer = None
 
-    def _log(self, message: str) -> None:
-        """Add a message to the on-screen log."""
-        if self.is_mounted and self.log_widget.is_mounted:
-            self.log_widget.write_line(message)
-
-    def _threadsafe_log(self, message: str, level: str = "info") -> None:
-        """Bridge worker-thread engine logs safely into Textual."""
-        try:
-            self.app.call_from_thread(self._log, message)
-        except Exception:
-            pass
-
-    def _update_progress(self, value: float, status: str = "") -> None:
-        """Update progress bar (determinate mode, 0-100).
-
-        Restore a concrete total so percentage = value/100; total is set to
-        None during indeterminate phases.
-        """
-        if self.is_mounted and self.progress.is_mounted:
-            self.progress.update(total=100, progress=value)
-        if status and self.is_mounted and self.status.is_mounted:
-            self.status.update(status)
-
-    def _update_indeterminate(self, status: str) -> None:
-        """Update progress bar to indeterminate mode.
-
-        In textual, indeterminate is signaled by ``total=None`` (NOT
-        ``progress=None`` — that crashes ``_compute_percentage`` with
-        ``None / total``).
-        """
-        if self.is_mounted and self.progress.is_mounted:
-            self.progress.update(total=None, progress=0)
-        if self.is_mounted and self.status.is_mounted:
-            self.status.update(status)
-
-    def _get_engine_config(self) -> EngineConfig:
-        """Build EngineConfig from app state."""
-        calc_type = self.app.get_config("calc_type")
-        options = {}
-        if calc_type == "opt":
-            options.update(
-                {
-                    "fmax": self.app.get_config("fmax", 0.05),
-                    "max_steps": self.app.get_config("max_steps", 500),
-                    "optimizer": self.app.get_config("optimizer", "FIRE"),
-                    "cell_opt": self.app.get_config("cell_opt", False),
-                    "fix_symmetry": self.app.get_config("fix_symmetry", False),
-                }
-            )
-        elif calc_type == "md":
-            options.update(
-                {
-                    "ensemble": self.app.get_config("ensemble", "NVT"),
-                    "temperature": self.app.get_config("temperature", 300.0),
-                    "timestep": self.app.get_config("timestep", 1.0),
-                    "steps": self.app.get_config("md_steps", 1000),
-                    "save_interval": self.app.get_config("save_interval", 10),
-                    "pre_relax": self.app.get_config("pre_relax", True),
-                    "pre_relax_steps": self.app.get_config("pre_relax_steps", 50),
-                    "pre_relax_fmax": self.app.get_config("pre_relax_fmax", 0.1),
-                }
-            )
-
-        return EngineConfig(
-            calc_type=calc_type,
-            model_path=Path(self.app.get_config("model_file", "")),
-            model_type=self.app.get_config("model_type", "uma"),
-            task=self.app.get_config("task", "omat"),
-            device=self.app.get_config("device", "cpu"),
-            output_dir=Path(self.app.get_config("output_dir", "./results")),
-            job_name=self.app.get_config("job_name"),
-            options=options,
-            detach=self.app.get_config("detach", False),
+    def _make_job_id(self) -> str:
+        configured = self.app.get_config("job_name")
+        base = configured or (
+            f"{self.app.get_config('calc_type', 'job')}-"
+            f"{datetime.now().strftime('%Y%m%d-%H%M%S')}"
         )
+        job_id = str(base).replace("/", "_").replace("\\", "_")
+        candidate = job_id
+        suffix = 2
+        while self._job_manager.get_job(candidate) is not None:
+            candidate = f"{job_id}-{suffix}"
+            suffix += 1
+        if configured is None:
+            self.app.update_config("job_name", candidate)
+        return candidate
 
-    async def _run_calculation(self) -> None:
-        """Run the calculation asynchronously with progress events."""
-        try:
-            config = self._get_engine_config()
+    def _build_command(self) -> list[str]:
+        calc_type = self.app.get_config("calc_type", "sp")
+        command = [
+            sys.executable,
+            "-m",
+            "mlipx.cli",
+            calc_type,
+            self.app.get_config("structure_file"),
+            "--model",
+            self.app.get_config("model_file"),
+            "--model-type",
+            self.app.get_config("model_type", "uma"),
+            "--task",
+            self.app.get_config("task", "omat"),
+            "--device",
+            self.app.get_config("device", "cpu"),
+            "--output",
+            self.app.get_config("output_dir", "./results"),
+            "--name",
+            self._job_id,
+        ]
+        if calc_type == "opt":
+            command.extend(
+                [
+                    "--fmax",
+                    str(self.app.get_config("fmax", 0.05)),
+                    "--max-steps",
+                    str(self.app.get_config("max_steps", 500)),
+                    "--optimizer",
+                    self.app.get_config("optimizer", "FIRE"),
+                ]
+            )
+            if self.app.get_config("cell_opt", False):
+                command.append("--cell-opt")
+            if self.app.get_config("fix_symmetry", False):
+                command.append("--fix-symmetry")
+        elif calc_type == "md":
+            command.extend(
+                [
+                    "--ensemble",
+                    self.app.get_config("ensemble", "NVT"),
+                    "--temp",
+                    str(self.app.get_config("temperature", 300.0)),
+                    "--timestep",
+                    str(self.app.get_config("timestep", 1.0)),
+                    "--steps",
+                    str(self.app.get_config("md_steps", 1000)),
+                    "--friction",
+                    str(self.app.get_config("friction", 0.001)),
+                    "--save-interval",
+                    str(self.app.get_config("save_interval", 10)),
+                    "--pre-relax-steps",
+                    str(self.app.get_config("pre_relax_steps", 50)),
+                    "--pre-relax-fmax",
+                    str(self.app.get_config("pre_relax_fmax", 0.1)),
+                    (
+                        "--pre-relax"
+                        if self.app.get_config("pre_relax", True)
+                        else "--no-pre-relax"
+                    ),
+                ]
+            )
+        return command
 
-            self._log("Loading structure...")
-            structure_file = self.app.get_config("structure_file")
-            atoms = read(structure_file)
-            self._log(f"Loaded: {atoms.get_chemical_formula()} ({len(atoms)} atoms)")
+    def _refresh_job(self) -> None:
+        if self._job_id is None:
+            return
+        log_text = self._job_manager.tail_log(self._job_id, lines=500)
+        if log_text != self._displayed_log:
+            if log_text.startswith(self._displayed_log):
+                new_text = log_text[len(self._displayed_log) :]
+            else:
+                self.log_widget.clear()
+                new_text = log_text
+            for line in new_text.splitlines():
+                self.log_widget.write_line(line)
+            self._displayed_log = log_text
 
-            engine = CalculationEngine.from_config(config)
-
-            async for event in engine.run_async(
-                atoms,
-                log_fn=self._threadsafe_log,
-                started_at=self.app.get_config("run_started_at"),
-            ):
-                if event.phase == "loading_model":
-                    self._update_indeterminate(event.message)
-                elif event.phase == "running":
-                    if event.total_steps is not None:
-                        pct = (
-                            (event.step / event.total_steps) * 100 if event.step else 0
-                        )
-                        self._update_progress(pct, event.message)
-                    else:
-                        self._update_indeterminate(event.message)
-                elif event.phase == "writing_output":
-                    self._update_indeterminate(event.message)
-                elif event.phase == "done":
-                    self._update_progress(100, "Complete")
-                    self._log("\nCalculation complete!")
-                    if event.extra and "energy" in event.extra:
-                        self._log(f"Energy: {event.extra['energy']:.6f} eV")
-                    self._log(f"Output: {engine.output_dir.resolve()}")
-                elif event.phase == "cancelled":
-                    self._log(f"\n{event.message}")
-                    self._update_progress(0, "Cancelled")
-                elif event.phase == "error":
-                    self._log(f"\nERROR: {event.message}")
-                    self._update_progress(0, "Failed")
-
-        except asyncio.CancelledError:
-            self._log("\nCalculation cancelled by user")
-            self._update_progress(0, "Cancelled")
-        except Exception as e:
-            self._log(f"\nERROR: {e}")
-            self._log(traceback.format_exc())
-            self._update_progress(0, "Failed")
-        finally:
-            if self.is_mounted:
-                back_btn = self.query_one("#back-btn", Button)
-                back_btn.disabled = False
+        data = self._job_manager.get_job(self._job_id)
+        if data is None:
+            return
+        status = data.get("status", "unknown")
+        if status in {"done", "failed", "cancelled"}:
+            self.progress.update(total=100, progress=100 if status == "done" else 0)
+            self.status.update(status.capitalize())
+            self.query_one("#cancel-btn", Button).disabled = True
+            if self._refresh_timer is not None:
+                self._refresh_timer.stop()
+                self._refresh_timer = None
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button presses."""
-        button_id = event.button.id
-
-        if button_id == "cancel-btn":
-            if (
-                self._calculation_worker is not None
-                and self._calculation_worker.is_running
-            ):
-                self._log("\nCancelling... (waiting for current step to finish)")
-                self._calculation_worker.cancel()
-                # Disable the cancel button to prevent double-cancellation
+        if event.button.id == "back-btn":
+            self.app.pop_screen()
+        elif event.button.id == "cancel-btn" and self._job_id is not None:
+            if self._job_manager.kill_job(self._job_id):
+                self.status.update("Cancelled")
                 event.button.disabled = True
             else:
-                self._log("\nNo active calculation to cancel")
-
-        elif button_id == "back-btn":
-            self.app.pop_screen()
+                self.notify("Job is no longer running", severity="warning")

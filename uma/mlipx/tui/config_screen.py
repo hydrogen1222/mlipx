@@ -441,8 +441,8 @@ class ConfigScreen(Screen):
             pre_relax = self.query_one("#pre-relax", Switch)
             self.app.update_config("pre_relax", pre_relax.value)
 
-        # Background execution is not exposed in the TUI yet.
-        self.app.update_config("detach", False)
+        # TUI calculations are launched as persistent background processes.
+        self.app.update_config("detach", True)
         self.app.update_config("run_started_at", run_started_at)
 
         # Go to run screen. Push a fresh instance so on_mount/on_compose re-run
