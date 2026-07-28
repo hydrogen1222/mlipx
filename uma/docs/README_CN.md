@@ -752,6 +752,7 @@ TUI 基于 [Textual](https://textual.textualize.io/) 构建，提供交互式、
 - SP 计算使用不确定进度条（indeterminate spinner）
 - OPT 显示步数计数器（Step 5/500）
 - MD 显示步数 + 温度 + 能量
+- 启动时显示实时日志的绝对路径和可直接复制的 `tail -f` 命令
 
 **任务管理**（Jobs）— 使用 DataTable 列出所有后台任务及状态图标：
 - ● 运行中 | ✓ 已完成 | ✗ 失败 | ⊘ 已取消
@@ -939,8 +940,20 @@ SAVE_INTERVAL = 10
 | `mlipx_results.json` | SP, OPT, MD | JSON | 机器可读结果，含所有计算量 |
 | `trajectory.traj` | MD | 二进制 | ASE 轨迹文件，用于分析 |
 | `optimization.log` | OPT | 文本 | ASE 优化器日志 |
-| `calculation.log` | 所有 | 文本 | 结构化计算日志 |
+| `run.log` | 所有 | 文本 | 实时刷新日志；CLI 与 TUI 启动时显示其路径 |
 | `batch_summary.json` | BATCH | JSON | 批量处理所有结果的汇总 |
+
+每次计算启动后，终端或 TUI 日志区都会显示类似提示：
+
+```text
+Live log: /absolute/path/to/results/run.log
+Follow live output: tail -f /absolute/path/to/results/run.log
+```
+
+`run.log` 逐条刷新，可以在另一个终端执行所显示的命令实时查看。计算完成后，终端日志、`run.log`、`OUTCAR` 末尾及 JSON 输出均记录：
+
+- **总耗时**：用户发起运行到所有标准输出文件生成完成。
+- **实际计算耗时**：模型加载就绪后的首个计算阶段到开始写输出文件；不包含模型加载和最终输出写入。
 
 ### 8.2 OUTCAR 格式
 

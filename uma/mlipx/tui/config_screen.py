@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -327,6 +328,8 @@ class ConfigScreen(Screen):
 
     def _save_and_run(self) -> None:
         """Save configuration and run calculation."""
+        run_started_at = time.perf_counter()
+
         # Get file paths
         structure = self.query_one("#structure-input", Input).value
         model = self.query_one("#model-input", Input).value
@@ -440,6 +443,7 @@ class ConfigScreen(Screen):
 
         # Background execution is not exposed in the TUI yet.
         self.app.update_config("detach", False)
+        self.app.update_config("run_started_at", run_started_at)
 
         # Go to run screen. Push a fresh instance so on_mount/on_compose re-run
         # for this run's config (the named "run" screen is cached by Textual).

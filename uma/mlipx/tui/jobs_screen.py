@@ -9,11 +9,11 @@ Jobs screen for managing background calculations.
 
 from __future__ import annotations
 
-import asyncio
 from typing import TYPE_CHECKING, ClassVar
 
 from textual.containers import Container, Horizontal
 from textual.screen import Screen
+from textual.timer import Timer
 from textual.widgets import Button, DataTable, Log, Static
 
 from mlipx.jobs import JobManager
@@ -35,7 +35,7 @@ class JobsScreen(Screen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
         self._job_manager = JobManager()
-        self._refresh_timer: asyncio.Task | None = None
+        self._jobs_refresh_timer: Timer | None = None
 
     def compose(self) -> ComposeResult:
         yield Container(
@@ -54,18 +54,19 @@ class JobsScreen(Screen):
 
     def on_mount(self) -> None:
         table = self.query_one("#jobs-table", DataTable)
-        table.add_columns("ID", "Status", "Type", "Formula", "Atoms", "Device")
+        if not table.columns:
+            table.add_columns("ID", "Status", "Type", "Formula", "Atoms", "Device")
         self._refresh_table()
-        self._refresh_timer = asyncio.create_task(self._auto_refresh())
+        self._jobs_refresh_timer = self.set_interval(
+            2.0,
+            self._refresh_table,
+            name="jobs-auto-refresh",
+        )
 
     def on_unmount(self) -> None:
-        if self._refresh_timer is not None and not self._refresh_timer.done():
-            self._refresh_timer.cancel()
-
-    async def _auto_refresh(self) -> None:
-        while True:
-            await asyncio.sleep(2)
-            self._refresh_table()
+        if self._jobs_refresh_timer is not None:
+            self._jobs_refresh_timer.stop()
+            self._jobs_refresh_timer = None
 
     def _refresh_table(self) -> None:
         table = self.query_one("#jobs-table", DataTable)
@@ -79,14 +80,17 @@ class JobsScreen(Screen):
             "pending": "○",
         }
         for job in jobs:
-            icon = status_icons.get(job["status"], "?")
+            job_id = str(job.get("job_id", "unknown"))
+            status = str(job.get("status", "unknown"))
+            icon = status_icons.get(status, "?")
             table.add_row(
-                job["job_id"],
-                f"{icon} {job['status']}",
+                job_id,
+                f"{icon} {status}",
                 job.get("calc_type", ""),
                 job.get("formula", ""),
                 str(job.get("natoms", "")),
                 job.get("device", ""),
+                key=job_id,
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -134,8 +138,6 @@ class JobsScreen(Screen):
                 self._refresh_table()
 
     def action_back(self) -> None:
-        if self._refresh_timer:
-            self._refresh_timer.cancel()
         self.app.pop_screen()
 
     def action_cancel_job(self) -> None:

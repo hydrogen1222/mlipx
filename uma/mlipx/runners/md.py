@@ -16,22 +16,22 @@ Outputs trajectories in multiple formats.
 
 from __future__ import annotations
 
+import threading
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
-import threading
+
 import numpy as np
 from ase import units
 from ase.constraints import FixAtoms, FixSymmetry
 from ase.io.trajectory import TrajectoryWriter as AseTrajectoryWriter
 from ase.md.langevin import Langevin
-from ase.md.velocitydistribution import MaxwellBoltzmannDistribution
+from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
 from ase.md.verlet import VelocityVerlet
 from ase.optimize import FIRE
 
-from mlipx.protocols import ProgressEvent
+from mlipx.protocols import CancellationRequested
 from mlipx.runners.base import BaseRunner
-from mlipx.protocols import CancellationRequested  # noqa: PLC0415
 from mlipx.writers.outcar import OutcarWriter
 from mlipx.writers.trajectory import TrajectoryWriter
 from mlipx.writers.xdatcar import XdatcarWriter
@@ -190,6 +190,24 @@ class MDRunner(BaseRunner):
         # T = 2E_k / (N_dof * k_B)
         return 2 * ke / (ndof * units.kB)
 
+    def _initialize_velocities(self, atoms: Atoms) -> None:
+        """Initialize velocities at the requested MD temperature.
+
+        Freshly loaded structures have no momenta and therefore start at 0 K.
+        Both NVT and NVE runs need a thermal velocity distribution; the NVT
+        thermostat should maintain the requested temperature, not spend the
+        beginning of the trajectory heating an initially stationary system.
+        """
+        self.log(
+            f"\nInitializing Maxwell-Boltzmann distribution at {self.temperature} K"
+        )
+        MaxwellBoltzmannDistribution(
+            atoms,
+            temperature_K=self.temperature,
+            force_temp=True,
+        )
+        Stationary(atoms, preserve_temperature=True)
+
     def _pre_relax_structure(self, atoms: Atoms) -> Atoms:
         """Perform quick relaxation to eliminate internal stress.
 
@@ -226,6 +244,7 @@ class MDRunner(BaseRunner):
             if self._is_cancelled():
                 self.log("\nCancellation requested during pre-relaxation")
                 raise CancellationRequested("Pre-relaxation cancelled by user")
+
         optimizer.attach(_check_cancel, interval=1)
 
         # Track initial energy
@@ -291,12 +310,8 @@ class MDRunner(BaseRunner):
         if self.pre_relax:
             atoms = self._pre_relax_structure(atoms)
 
-        # Initialize velocities for NVE
-        if self.ensemble == "nve":
-            self.log(
-                f"\nInitializing Maxwell-Boltzmann distribution at {self.temperature} K"
-            )
-            MaxwellBoltzmannDistribution(atoms, temperature_K=self.temperature)
+        # Initialize a thermal velocity distribution for both NVT and NVE.
+        self._initialize_velocities(atoms)
 
         # Setup integrator
         if self.ensemble == "nvt":

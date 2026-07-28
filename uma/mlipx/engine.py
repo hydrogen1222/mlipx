@@ -15,13 +15,16 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import threading
+import time
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from mlipx.base_calculator import BaseMLIPCalculator
+from mlipx.logger import LiveRunLogger, follow_log_command
 from mlipx.protocols import CancellationRequested, ProgressCallback, ProgressEvent
+from mlipx.timing import RunTiming, append_timing_to_outputs, timing_log_lines
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -121,7 +124,21 @@ class CalculationEngine:
             activation_checkpointing=self.config.activation_checkpointing,
         )
 
-    def _create_runner(self, calculator, progress_callback=None, log_fn=None, cancel_event=None):
+    @property
+    def output_dir(self) -> Path:
+        """Final output directory, including an optional job-name subdirectory."""
+        if self.config.job_name:
+            return self.config.output_dir / self.config.job_name
+        return self.config.output_dir
+
+    @property
+    def run_log_path(self) -> Path:
+        """Path of the continuously flushed log for this run."""
+        return (self.output_dir / "run.log").resolve()
+
+    def _create_runner(
+        self, calculator, progress_callback=None, log_fn=None, cancel_event=None
+    ):
         from mlipx.runners.md import MDRunner  # noqa: PLC0415
         from mlipx.runners.optimization import OptimizationRunner  # noqa: PLC0415
         from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
@@ -169,6 +186,8 @@ class CalculationEngine:
         atoms: Atoms,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        log_fn: Any | None = None,
+        started_at: float | None = None,
     ) -> dict[str, Any]:
         """Run calculation synchronously.
 
@@ -176,20 +195,49 @@ class CalculationEngine:
             atoms: ASE Atoms object.
             progress_callback: Optional callback for progress events.
             cancel_event: Optional threading.Event for cooperative cancellation.
+            log_fn: Optional callback receiving live log messages.
+            started_at: Monotonic timestamp when the user requested the run.
 
         Returns:
             Results dictionary.
         """
-        calculator = self._create_calculator()
-        runner = self._create_runner(
-            calculator,
-            progress_callback=progress_callback,
-            cancel_event=cancel_event,
-        )
-        return runner.run(atoms)
+        with LiveRunLogger(self.run_log_path, callback=log_fn) as run_logger:
+            run_logger(f"Output directory: {self.output_dir.resolve()}")
+            run_logger(f"Live log: {self.run_log_path}")
+            run_logger(f"Follow live output: {follow_log_command(self.run_log_path)}")
+            run_logger(
+                f"Loading {self.config.model_type.upper()} model on "
+                f"{self.config.device}: {self.config.model_path}"
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    ProgressEvent(
+                        phase="loading_model",
+                        message="Loading model and preparing calculation...",
+                    )
+                )
+
+            calculator = self._create_calculator()
+            runner = self._create_runner(
+                calculator,
+                progress_callback=progress_callback,
+                log_fn=run_logger,
+                cancel_event=cancel_event,
+            )
+            try:
+                return runner.execute(atoms, started_at=started_at)
+            except CancellationRequested as exc:
+                run_logger(f"Calculation cancelled: {exc}", "warning")
+                raise
+            except Exception as exc:
+                run_logger(f"Calculation failed: {exc}", "error")
+                raise
+
     async def run_async(
         self,
         atoms: Atoms,
+        log_fn: Any | None = None,
+        started_at: float | None = None,
     ) -> AsyncIterator[ProgressEvent]:
         """Run calculation asynchronously, yielding progress events.
 
@@ -203,6 +251,8 @@ class CalculationEngine:
 
         Args:
             atoms: ASE Atoms object.
+            log_fn: Optional callback receiving live log messages.
+            started_at: Monotonic timestamp when the user requested the run.
 
         Yields:
             ProgressEvent at each phase transition.
@@ -220,6 +270,8 @@ class CalculationEngine:
                     atoms,
                     progress_callback=progress_callback,
                     cancel_event=cancel_event,
+                    log_fn=log_fn,
+                    started_at=started_at,
                 )
             except CancellationRequested as exc:
                 # Normal cancellation — emit a "cancelled" event, not "error"
@@ -258,37 +310,87 @@ class CalculationEngine:
                 # Wait for the worker thread with a generous timeout.
                 # The cancel_event will cause runners to bail out at their next
                 # check-point (every MD step or optimization step).
-                with contextlib.suppress(asyncio.TimeoutError, asyncio.CancelledError, Exception):
+                with contextlib.suppress(
+                    asyncio.TimeoutError, asyncio.CancelledError, Exception
+                ):
                     await asyncio.wait_for(task, timeout=30.0)
             else:
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await task
+
     def run_batch(
         self,
         files: list[Path],
         progress_callback: ProgressCallback | None = None,
+        log_fn: Any | None = None,
+        started_at: float | None = None,
     ) -> dict[str, Any]:
         """Run batch calculation on multiple structure files.
 
         Args:
             files: List of structure file paths.
             progress_callback: Optional callback for progress events.
+            log_fn: Optional callback receiving live log messages.
+            started_at: Monotonic timestamp when the user requested the run.
 
         Returns:
             Batch summary dictionary.
         """
         from mlipx.runners.batch import BatchRunner  # noqa: PLC0415
 
-        calculator = self._create_calculator()
-        opts = self.config.options
-        runner = BatchRunner(
-            calculator,
-            calc_type=opts.get("sub_calc_type", "sp"),
-            output_dir=self.config.output_dir,
-            parallel=opts.get("parallel", False),
-            max_workers=opts.get("max_workers", 1),
-            verbose=False,
-            job_name=self.config.job_name,
-            progress_callback=progress_callback,
+        timing = RunTiming(
+            started_at=time.perf_counter() if started_at is None else started_at
         )
-        return runner.run_from_files(files)
+        with LiveRunLogger(self.run_log_path, callback=log_fn) as run_logger:
+            run_logger(f"Output directory: {self.output_dir.resolve()}")
+            run_logger(f"Live log: {self.run_log_path}")
+            run_logger(f"Follow live output: {follow_log_command(self.run_log_path)}")
+            run_logger(
+                f"Loading {self.config.model_type.upper()} model on "
+                f"{self.config.device}: {self.config.model_path}"
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    ProgressEvent(
+                        phase="loading_model",
+                        message="Loading model for batch calculation...",
+                    )
+                )
+
+            calculator = self._create_calculator()
+            calculator.get_calculator()
+            timing.mark_compute_started()
+
+            opts = self.config.options
+            runner = BatchRunner(
+                calculator,
+                calc_type=opts.get("sub_calc_type", "sp"),
+                output_dir=self.config.output_dir,
+                parallel=opts.get("parallel", False),
+                max_workers=opts.get("max_workers", 1),
+                verbose=False,
+                job_name=self.config.job_name,
+                progress_callback=progress_callback,
+                log_fn=run_logger,
+            )
+            try:
+                summary = runner.run_from_files(files)
+            except Exception as exc:
+                run_logger(f"Batch calculation failed: {exc}", "error")
+                raise
+
+            timing.mark_compute_finished()
+            timing_values = timing.finish()
+            summary["timing"] = timing_values
+            append_timing_to_outputs(self.output_dir, timing_values)
+            for line in timing_log_lines(timing_values):
+                run_logger(line)
+            if progress_callback is not None:
+                progress_callback(
+                    ProgressEvent(
+                        phase="done",
+                        message="Batch calculation complete",
+                        extra={"timing": timing_values},
+                    )
+                )
+            return summary

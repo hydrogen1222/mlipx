@@ -29,6 +29,7 @@ Example:
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -64,6 +65,11 @@ def _load_structure(structure: Atoms | str | Path) -> Atoms:
         return read(structure_path)
     except Exception as e:
         raise ValueError(f"Error reading structure: {e}") from e
+
+
+def _console_log(message: str, level: str = "info") -> None:
+    """Print a live engine message for verbose API calls."""
+    print(message, flush=True)
 
 
 def run_single_point(
@@ -103,6 +109,7 @@ def run_single_point(
         ... )
         >>> print(f"Energy: {results['energy']:.4f} eV")
     """
+    started_at = time.perf_counter()
     atoms = _load_structure(structure)
     if verbose:
         print(f"System: {atoms.get_chemical_formula()}")
@@ -119,7 +126,11 @@ def run_single_point(
         job_name=job_name,
     )
     engine = CalculationEngine.from_config(config)
-    return engine.run(atoms)
+    return engine.run(
+        atoms,
+        log_fn=_console_log if verbose else None,
+        started_at=started_at,
+    )
 
 
 def run_optimization(
@@ -172,6 +183,7 @@ def run_optimization(
         >>> print(f"Converged: {results['converged']}")
         >>> print(f"Final energy: {results['energy']:.4f} eV")
     """
+    started_at = time.perf_counter()
     atoms = _load_structure(structure)
     if verbose:
         print(f"System: {atoms.get_chemical_formula()}")
@@ -195,7 +207,11 @@ def run_optimization(
         },
     )
     engine = CalculationEngine.from_config(config)
-    return engine.run(atoms)
+    return engine.run(
+        atoms,
+        log_fn=_console_log if verbose else None,
+        started_at=started_at,
+    )
 
 
 def run_md(
@@ -252,6 +268,7 @@ def run_md(
         ... )
         >>> print(f"Final temperature: {results['temperature']:.1f} K")
     """
+    started_at = time.perf_counter()
     atoms = _load_structure(structure)
     if verbose:
         print(f"System: {atoms.get_chemical_formula()}")
@@ -278,7 +295,11 @@ def run_md(
         },
     )
     engine = CalculationEngine.from_config(config)
-    return engine.run(atoms)
+    return engine.run(
+        atoms,
+        log_fn=_console_log if verbose else None,
+        started_at=started_at,
+    )
 
 
 def calculate_energy(

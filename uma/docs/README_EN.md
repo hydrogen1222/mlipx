@@ -753,6 +753,7 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
 - Indeterminate spinner for SP calculations
 - Step counter for OPT (Step 5/500) and MD (Step 100/10000)
 - Real-time energy, forces, and temperature during MD
+- The absolute live-log path and a copy-paste `tail -f` command at startup
 
 **Jobs** — DataTable listing all background jobs with status icons:
 - ● Running | ✓ Done | ✗ Failed | ⊘ Cancelled
@@ -940,8 +941,20 @@ The following are all recognized as `TRUE` and `FALSE` (case-insensitive):
 | `mlipx_results.json` | SP, OPT, MD | JSON | Machine-readable results with all computed quantities |
 | `trajectory.traj` | MD | Binary | ASE trajectory file for analysis |
 | `optimization.log` | OPT | Text | ASE optimizer log |
-| `calculation.log` | All | Text | Structured calculation log |
+| `run.log` | All | Text | Continuously flushed live log; its path is shown by CLI and TUI |
 | `batch_summary.json` | BATCH | JSON | Summary of all structures processed in batch |
+
+Every run prints a hint like:
+
+```text
+Live log: /absolute/path/to/results/run.log
+Follow live output: tail -f /absolute/path/to/results/run.log
+```
+
+`run.log` is flushed after every message, so the displayed command can be used from another terminal. On completion, the terminal log, `run.log`, the end of `OUTCAR`, and JSON output record:
+
+- **Total elapsed time:** from the user's run request until all standard output files are generated.
+- **Compute elapsed time:** from the first compute phase after the model is ready until output writing starts; model loading and final output writing are excluded.
 
 ### 8.2 OUTCAR Format
 
@@ -1069,7 +1082,9 @@ Calculation time:     2.34 s
       "pressure_gpa": -0.083174
     },
     "timing": {
-      "calculation_time_s": 2.34
+      "calculation_time_s": 2.34,
+      "total_elapsed_time_s": 8.91,
+      "compute_time_s": 2.34
     }
   }
 }

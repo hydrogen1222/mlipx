@@ -13,12 +13,17 @@ file output and console output.
 from __future__ import annotations
 
 import logging
+import os
+import shlex
 import sys
+import threading
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from logging import Logger
+    from typing import Any
 
 
 def setup_logger(
@@ -115,3 +120,53 @@ class CalculationLogger:
     def debug(self, message: str) -> None:
         """Log debug message."""
         self.logger.debug(message)
+
+
+def follow_log_command(log_path: Path | str) -> str:
+    """Return a copy-paste command for following a live log."""
+    resolved = Path(log_path).resolve()
+    if os.name == "nt":
+        escaped = str(resolved).replace("'", "''")
+        return f"Get-Content -Wait -Tail 20 '{escaped}'"
+    return f"tail -f {shlex.quote(str(resolved))}"
+
+
+class LiveRunLogger:
+    """Thread-safe, line-buffered run log with an optional UI/console callback."""
+
+    def __init__(
+        self,
+        log_path: Path | str,
+        callback: Any | None = None,
+    ) -> None:
+        self.path = Path(log_path).resolve()
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.callback = callback
+        self._lock = threading.Lock()
+        self._handle = open(self.path, "w", encoding="utf-8", buffering=1)
+
+    def __call__(self, message: str, level: str = "info") -> None:
+        """Write and flush a message, then forward it to the active interface."""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        text = str(message)
+        lines = text.splitlines() or [""]
+        with self._lock:
+            for line in lines:
+                self._handle.write(f"{timestamp} [{level.upper()}] {line}\n")
+            self._handle.flush()
+
+        if self.callback is not None:
+            self.callback(text, level)
+
+    def close(self) -> None:
+        """Flush and close the log file."""
+        with self._lock:
+            if not self._handle.closed:
+                self._handle.flush()
+                self._handle.close()
+
+    def __enter__(self) -> LiveRunLogger:
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()

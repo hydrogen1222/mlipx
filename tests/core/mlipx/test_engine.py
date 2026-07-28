@@ -8,7 +8,7 @@ LICENSE file in the root directory of this source tree.
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -110,3 +110,36 @@ class TestCalculationEngineSetup:
         with patch.object(Path, "exists", return_value=True):
             engine = CalculationEngine.from_config(config)
             assert engine is not None
+
+
+def test_engine_creates_live_log_and_tail_hint(tmp_path):
+    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+
+    config = EngineConfig(
+        calc_type="sp",
+        model_path=Path("model.pt"),
+        output_dir=tmp_path,
+        job_name="job-01",
+    )
+    engine = CalculationEngine.from_config(config)
+    runner = Mock()
+    runner.execute.return_value = {"energy": -1.0}
+    messages = []
+
+    with (
+        patch.object(engine, "_create_calculator", return_value=object()),
+        patch.object(engine, "_create_runner", return_value=runner),
+    ):
+        engine.run(
+            atoms=object(),
+            log_fn=lambda message, level: messages.append(message),
+            started_at=123.0,
+        )
+
+    expected_log = (tmp_path / "job-01" / "run.log").resolve()
+    assert engine.run_log_path == expected_log
+    assert expected_log.exists()
+    assert "tail -f" in expected_log.read_text(encoding="utf-8")
+    assert any("Follow live output:" in message for message in messages)
+    runner.execute.assert_called_once()
+    assert runner.execute.call_args.kwargs["started_at"] == 123.0

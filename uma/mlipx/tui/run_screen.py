@@ -19,6 +19,7 @@ from ase.io import read
 from textual.containers import Container, Horizontal
 from textual.screen import Screen
 from textual.widgets import Button, Log, ProgressBar, Static
+from textual.worker import Worker
 
 from mlipx.engine import CalculationEngine, EngineConfig
 
@@ -29,7 +30,7 @@ if TYPE_CHECKING:
 class RunScreen(Screen):
     """Screen for running calculations with live output."""
 
-    _task: asyncio.Task | None = None
+    _calculation_worker: Worker | None = None
 
     def compose(self) -> ComposeResult:
         """Compose the run screen."""
@@ -60,40 +61,33 @@ class RunScreen(Screen):
         self.log_widget = self.query_one("#run-log", Log)
         self.progress = self.query_one("#progress-bar", ProgressBar)
         self.status = self.query_one("#status-text", Static)
-        self._log_file = self._open_log_file()
-        self._task = asyncio.create_task(self._run_calculation())
+        self._calculation_worker = self.run_worker(
+            self._run_calculation(),
+            name="calculation",
+            group="calculation",
+            exit_on_error=False,
+            exclusive=True,
+        )
 
     def on_unmount(self) -> None:
         """Cancel any running calculation task when the screen is removed."""
-        if self._task is not None and not self._task.done():
-            self._task.cancel()
-
-    def _open_log_file(self) -> Path | None:
-        """Open a plain-text log file alongside the run for easy copying.
-
-        The on-screen ``Log`` widget is hard to select/copy from; mirror every
-        line to a ``run.log`` under the output dir so it can be grep/cat'd.
-        """
-        try:
-            out_dir = Path(self.app.get_config("output_dir", "./results"))
-            out_dir.mkdir(parents=True, exist_ok=True)
-            log_path = out_dir / "run.log"
-            # Truncate at the start of each run.
-            log_path.write_text("", encoding="utf-8")
-            return log_path
-        except Exception:
-            return None
+        if (
+            self._calculation_worker is not None
+            and not self._calculation_worker.is_finished
+        ):
+            self._calculation_worker.cancel()
 
     def _log(self, message: str) -> None:
-        """Add message to log (on-screen + mirrored to file)."""
+        """Add a message to the on-screen log."""
         if self.is_mounted and self.log_widget.is_mounted:
             self.log_widget.write_line(message)
-        if self._log_file is not None:
-            try:
-                with open(self._log_file, "a", encoding="utf-8") as f:
-                    f.write(message + "\n")
-            except Exception:
-                pass
+
+    def _threadsafe_log(self, message: str, level: str = "info") -> None:
+        """Bridge worker-thread engine logs safely into Textual."""
+        try:
+            self.app.call_from_thread(self._log, message)
+        except Exception:
+            pass
 
     def _update_progress(self, value: float, status: str = "") -> None:
         """Update progress bar (determinate mode, 0-100).
@@ -169,9 +163,12 @@ class RunScreen(Screen):
             self._log(f"Loaded: {atoms.get_chemical_formula()} ({len(atoms)} atoms)")
 
             engine = CalculationEngine.from_config(config)
-            self._task = asyncio.current_task()
 
-            async for event in engine.run_async(atoms):
+            async for event in engine.run_async(
+                atoms,
+                log_fn=self._threadsafe_log,
+                started_at=self.app.get_config("run_started_at"),
+            ):
                 if event.phase == "loading_model":
                     self._update_indeterminate(event.message)
                 elif event.phase == "running":
@@ -189,7 +186,7 @@ class RunScreen(Screen):
                     self._log("\nCalculation complete!")
                     if event.extra and "energy" in event.extra:
                         self._log(f"Energy: {event.extra['energy']:.6f} eV")
-                    self._log(f"Output: {self.app.get_config('output_dir')}")
+                    self._log(f"Output: {engine.output_dir.resolve()}")
                 elif event.phase == "cancelled":
                     self._log(f"\n{event.message}")
                     self._update_progress(0, "Cancelled")
@@ -213,14 +210,13 @@ class RunScreen(Screen):
         """Handle button presses."""
         button_id = event.button.id
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button presses."""
-        button_id = event.button.id
-
         if button_id == "cancel-btn":
-            if self._task and not self._task.done():
+            if (
+                self._calculation_worker is not None
+                and self._calculation_worker.is_running
+            ):
                 self._log("\nCancelling... (waiting for current step to finish)")
-                self._task.cancel()
+                self._calculation_worker.cancel()
                 # Disable the cancel button to prevent double-cancellation
                 event.button.disabled = True
             else:

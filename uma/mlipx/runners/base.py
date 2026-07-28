@@ -14,10 +14,13 @@ including output directory management and logging.
 from __future__ import annotations
 
 import threading
+import time
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
-from mlipx.protocols import ProgressEvent
+
+from mlipx.protocols import CancellationRequested, ProgressEvent
+from mlipx.timing import RunTiming, append_timing_to_outputs, timing_log_lines
 
 if TYPE_CHECKING:
     from typing import Any
@@ -73,7 +76,11 @@ class BaseRunner(ABC):
         self.verbose = verbose
         self.log_fn = log_fn
         self.progress_callback = progress_callback
-        self._cancel_event = cancel_event  # threading.Event for cooperative cancellation
+        self._cancel_event = (
+            cancel_event  # threading.Event for cooperative cancellation
+        )
+        self._timing: RunTiming | None = None
+        self._pending_done_event: ProgressEvent | None = None
 
         # Build output directory path
         base_dir = Path(output_dir)
@@ -84,6 +91,68 @@ class BaseRunner(ABC):
 
         # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def execute(
+        self,
+        atoms: Atoms,
+        started_at: float | None = None,
+    ) -> dict[str, Any]:
+        """Run with uniform timing, final logging, and output-file metadata."""
+        self._timing = RunTiming(
+            started_at=time.perf_counter() if started_at is None else started_at
+        )
+        self._pending_done_event = None
+
+        try:
+            results = self.run(atoms)
+        except CancellationRequested:
+            timing = self._timing.finish()
+            self.log(
+                f"Run cancelled after {timing['total_elapsed_time_s']:.2f} s",
+                level="warning",
+            )
+            raise
+        except Exception:
+            timing = self._timing.finish()
+            self.log(
+                "Run ended before completion after "
+                f"{timing['total_elapsed_time_s']:.2f} s",
+                level="error",
+            )
+            raise
+
+        timing = self._timing.finish()
+        results["timing"] = timing
+
+        try:
+            append_timing_to_outputs(self.output_dir, timing)
+        except Exception as exc:
+            self.log(
+                f"Could not add timing to output files: {exc}",
+                level="warning",
+            )
+
+        for line in timing_log_lines(timing):
+            self.log(line)
+
+        done_event = self._pending_done_event or ProgressEvent(
+            phase="done",
+            message="Calculation complete",
+        )
+        done_extra = dict(done_event.extra or {})
+        done_extra["timing"] = timing
+        if self.progress_callback is not None:
+            self.progress_callback(
+                ProgressEvent(
+                    phase=done_event.phase,
+                    message=done_event.message,
+                    step=done_event.step,
+                    total_steps=done_event.total_steps,
+                    extra=done_extra,
+                )
+            )
+
+        return results
 
     def log(self, message: str, level: str = "info") -> None:
         """Print log message if verbose mode or log callback is enabled.
@@ -138,8 +207,9 @@ class BaseRunner(ABC):
             total_steps: Total expected steps
             extra: Optional phase-specific data
         """
-        if self.progress_callback is None:
-            return
+        if self._timing is not None:
+            self._timing.observe_phase(phase)
+
         event = ProgressEvent(
             phase=phase,
             message=message,
@@ -147,7 +217,11 @@ class BaseRunner(ABC):
             total_steps=total_steps,
             extra=extra,
         )
-        self.progress_callback(event)
+        if phase == "done" and self._timing is not None:
+            self._pending_done_event = event
+            return
+        if self.progress_callback is not None:
+            self.progress_callback(event)
 
     def _is_cancelled(self) -> bool:
         """Check whether cooperative cancellation has been requested.

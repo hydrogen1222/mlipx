@@ -56,6 +56,30 @@ class TestJobManager:
             jobs = mgr.list_jobs()
             assert len(jobs) == 2
 
+    def test_list_jobs_skips_partial_or_invalid_state_files(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = JobManager(jobs_dir=Path(tmpdir))
+            mgr._write_job_state(
+                "valid", JobStatus.RUNNING, "sp", "/a", "H2", 2, 100, "cpu"
+            )
+            (mgr.jobs_dir / "partial.json").write_text('{"job_id":', encoding="utf-8")
+            (mgr.jobs_dir / "not-a-dict.json").write_text("[]", encoding="utf-8")
+
+            jobs = mgr.list_jobs()
+
+            assert [job["job_id"] for job in jobs] == ["valid"]
+            assert mgr._read_job_state("partial") is None
+
+    def test_job_state_write_is_atomic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mgr = JobManager(jobs_dir=Path(tmpdir))
+            mgr._write_job_state(
+                "atomic", JobStatus.RUNNING, "sp", "/a", "H2", 2, 100, "cpu"
+            )
+
+            assert mgr._job_file("atomic").exists()
+            assert list(mgr.jobs_dir.glob("*.tmp")) == []
+
     def test_clean_removes_done_and_failed(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             mgr = JobManager(jobs_dir=Path(tmpdir))

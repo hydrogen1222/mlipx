@@ -18,6 +18,7 @@ import os
 import signal
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
@@ -91,21 +92,42 @@ class JobManager:
             "results": results,
             "error": error,
         }
-        with open(self._job_file(job_id), "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        job_path = self._job_file(job_id)
+        temp_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=self.jobs_dir,
+                prefix=f".{job_id}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                json.dump(data, handle, indent=2)
+                handle.flush()
+                temp_path = Path(handle.name)
+            temp_path.replace(job_path)
+        finally:
+            if temp_path is not None:
+                temp_path.unlink(missing_ok=True)
 
     def _read_job_state(self, job_id: str) -> dict[str, Any] | None:
         path = self._job_file(job_id)
         if not path.exists():
             return None
-        with open(path, encoding="utf-8") as f:
-            return json.load(f)
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else None
+        except (OSError, json.JSONDecodeError):
+            return None
 
     def list_jobs(self) -> list[dict[str, Any]]:
         jobs = []
         for path in sorted(self.jobs_dir.glob("*.json")):
-            with open(path, encoding="utf-8") as f:
-                jobs.append(json.load(f))
+            data = self._read_job_state(path.stem)
+            if data is not None:
+                jobs.append(data)
         return jobs
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
@@ -115,8 +137,9 @@ class JobManager:
         """Remove state files for done/failed/cancelled jobs. Returns list of removed IDs."""
         removed = []
         for path in self.jobs_dir.glob("*.json"):
-            with open(path, encoding="utf-8") as f:
-                data = json.load(f)
+            data = self._read_job_state(path.stem)
+            if data is None:
+                continue
             if data.get("status") in ("done", "failed", "cancelled"):
                 path.unlink()
                 removed.append(data["job_id"])

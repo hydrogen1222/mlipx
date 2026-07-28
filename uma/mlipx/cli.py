@@ -458,8 +458,19 @@ def print_header():
     print()
 
 
+def _run_started_at(args: argparse.Namespace) -> float:
+    """Return the command-entry timestamp, including parsing and input loading."""
+    return getattr(args, "_run_started_at", time.perf_counter())
+
+
+def _console_log(message: str, level: str = "info") -> None:
+    """Print a live engine log message immediately."""
+    print(message, flush=True)
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     """Execute 'run' command."""
+    started_at = _run_started_at(args)
     # Load configuration
     incar_path = Path(args.incar)
     # Backward-compat: fall back to legacy INCAR.uma if the default is missing.
@@ -542,7 +553,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     try:
         engine = CalculationEngine.from_config(engine_config)
-        engine.run(atoms)
+        engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
     except Exception as e:
         print(f"Error: {e}")
@@ -551,6 +562,7 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 def cmd_sp(args: argparse.Namespace) -> int:
     """Execute 'sp' command."""
+    started_at = _run_started_at(args)
 
     structure_path = Path(args.structure)
     if not structure_path.exists():
@@ -576,7 +588,7 @@ def cmd_sp(args: argparse.Namespace) -> int:
         print(f"Atoms: {len(atoms)}")
 
         engine = CalculationEngine.from_config(config)
-        engine.run(atoms)
+        engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
     except Exception as e:
         print(f"Error: {e}")
@@ -585,6 +597,7 @@ def cmd_sp(args: argparse.Namespace) -> int:
 
 def cmd_opt(args: argparse.Namespace) -> int:
     """Execute 'opt' command."""
+    started_at = _run_started_at(args)
 
     structure_path = Path(args.structure)
     if not structure_path.exists():
@@ -617,7 +630,7 @@ def cmd_opt(args: argparse.Namespace) -> int:
         print(f"Atoms: {len(atoms)}")
 
         engine = CalculationEngine.from_config(config)
-        engine.run(atoms)
+        engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
     except Exception as e:
         print(f"Error: {e}")
@@ -626,6 +639,7 @@ def cmd_opt(args: argparse.Namespace) -> int:
 
 def cmd_md(args: argparse.Namespace) -> int:
     """Execute 'md' command."""
+    started_at = _run_started_at(args)
 
     structure_path = Path(args.structure)
     if not structure_path.exists():
@@ -660,7 +674,7 @@ def cmd_md(args: argparse.Namespace) -> int:
         print(f"Atoms: {len(atoms)}")
 
         engine = CalculationEngine.from_config(config)
-        engine.run(atoms)
+        engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
     except Exception as e:
         print(f"Error: {e}")
@@ -669,6 +683,7 @@ def cmd_md(args: argparse.Namespace) -> int:
 
 def cmd_batch(args: argparse.Namespace) -> int:
     """Execute 'batch' command."""
+    started_at = _run_started_at(args)
 
     input_dir = Path(args.input_dir)
     if not input_dir.exists():
@@ -698,7 +713,11 @@ def cmd_batch(args: argparse.Namespace) -> int:
             print(f"No files matching '{args.pattern}' found in {input_dir}")
             return 1
         print(f"Found {len(files)} structure files")
-        summary = engine.run_batch(files)
+        summary = engine.run_batch(
+            files,
+            log_fn=_console_log,
+            started_at=started_at,
+        )
         if summary["failed"] > 0:
             return 1
         return 0
@@ -809,6 +828,7 @@ def cmd_clean(args: argparse.Namespace) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
+    run_started_at = time.perf_counter()
     # Check if running in TUI mode (no command, or explicit 'tui' command)
     if argv is None:
         argv = sys.argv[1:]
@@ -829,6 +849,7 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = create_parser()
     args = parser.parse_args(argv)
+    args._run_started_at = run_started_at
 
     # Handle TUI command
     if args.command == "tui":

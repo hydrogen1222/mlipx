@@ -146,6 +146,7 @@ class OptimizationRunner(BaseRunner):
             Dictionary with results including converged status and steps
         """
         self.print_header("GEOMETRY OPTIMIZATION")
+        self._emit_progress("loading_model", "Loading model and preparing structure...")
 
         # Print settings
         self.log(f"Optimizer:        {self.optimizer_name.upper()}")

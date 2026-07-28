@@ -274,7 +274,7 @@ class BatchRunner:
             )
 
         # Run calculation
-        results = runner.run(atoms)
+        results = runner.execute(atoms)
 
         # Extract key results
         return {
@@ -285,6 +285,7 @@ class BatchRunner:
                 else None
             ),
             "time": results.get("time"),
+            "timing": results.get("timing"),
             "output_dir": str(sub_dir),
         }
 

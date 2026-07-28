@@ -14,6 +14,7 @@ import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
+from mlipx.jobs import JobManager, JobStatus
 from mlipx.tui.app import MlipxApp
 from mlipx.tui.config_screen import ConfigScreen
 from mlipx.tui.jobs_screen import JobDetailScreen, JobsScreen
@@ -50,6 +51,7 @@ async def test_md_ensemble_and_options_persisted(tmp_path: Path) -> None:
     assert app.get_config("ensemble") == "NVE"
     assert app.get_config("timestep") == 2.5
     assert app.get_config("save_interval") == 25
+    assert isinstance(app.get_config("run_started_at"), float)
 
 
 @pytest.mark.asyncio
@@ -139,25 +141,77 @@ async def test_job_detail_screen_displays_log() -> None:
         assert len(log.lines) == 2
 
 
-def test_run_screen_unmount_cancels_task() -> None:
-    """RunScreen cancels its async task when the screen is unmounted."""
+@pytest.mark.asyncio
+async def test_jobs_screen_handles_empty_store_and_remounts(tmp_path: Path) -> None:
+    """An empty jobs screen mounts, refreshes, and remounts without crashing."""
+    app = MlipxApp()
+    jobs_screen = JobsScreen()
+    jobs_screen._job_manager = JobManager(jobs_dir=tmp_path)
+
+    async with app.run_test(size=(80, 40)) as pilot:
+        await app.push_screen(jobs_screen)
+        await pilot.pause()
+
+        table = jobs_screen.query_one("#jobs-table")
+        assert len(table.columns) == 6
+        assert table.row_count == 0
+        assert jobs_screen._jobs_refresh_timer is not None
+
+        app.pop_screen()
+        await pilot.pause()
+        assert jobs_screen._jobs_refresh_timer is None
+
+        await app.push_screen(jobs_screen)
+        await pilot.pause()
+        assert len(table.columns) == 6
+        assert table.row_count == 0
+
+
+@pytest.mark.asyncio
+async def test_jobs_screen_uses_job_id_as_row_key(tmp_path: Path) -> None:
+    """Selecting a table row resolves to the persisted job ID."""
+    manager = JobManager(jobs_dir=tmp_path)
+    manager._write_job_state(
+        "job-123",
+        status=JobStatus.RUNNING,
+        calc_type="sp",
+        structure="/tmp/POSCAR",
+        formula="H2",
+        natoms=2,
+        pid=123,
+        device="cpu",
+    )
+
+    app = MlipxApp()
+    jobs_screen = JobsScreen()
+    jobs_screen._job_manager = manager
+    async with app.run_test(size=(80, 40)) as pilot:
+        await app.push_screen(jobs_screen)
+        await pilot.pause()
+
+        table = jobs_screen.query_one("#jobs-table")
+        assert [row_key.value for row_key in table.rows] == ["job-123"]
+
+
+def test_run_screen_unmount_cancels_worker() -> None:
+    """RunScreen cancels its Textual worker when the screen is unmounted."""
     screen = RunScreen()
-    task = Mock()
-    task.done.return_value = False
-    screen._task = task
+    worker = Mock()
+    worker.is_finished = False
+    screen._calculation_worker = worker
 
     screen.on_unmount()
 
-    task.cancel.assert_called_once()
+    worker.cancel.assert_called_once()
 
 
 def test_jobs_screen_unmount_cancels_timer() -> None:
     """JobsScreen cancels its refresh timer when the screen is unmounted."""
     screen = JobsScreen()
     timer = Mock()
-    timer.done.return_value = False
-    screen._refresh_timer = timer
+    screen._jobs_refresh_timer = timer
 
     screen.on_unmount()
 
-    timer.cancel.assert_called_once()
+    timer.stop.assert_called_once()
+    assert screen._jobs_refresh_timer is None
