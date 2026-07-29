@@ -87,9 +87,9 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 
 | 需求 | 最低配置 | 推荐配置 |
 |------|----------|----------|
-| Python | 3.9+ | 3.11+ |
+| Python | 3.10–3.12 | 3.12 |
 | 内存 | 8 GB | 32 GB |
-| 磁盘 | 2 GB（模型：1.2 GB） | 15 GB（更大模型） |
+| 磁盘 | 15 GB（环境与小模型） | 30+ GB（多个模型） |
 | GPU（可选） | CUDA 11.8+ | CUDA 12.x，8+ GB 显存 |
 
 ### 2.2 使用 uv 安装（推荐）
@@ -107,10 +107,16 @@ uv sync
 
 # 第 2 步（可选）：检测 GPU 并验证 PyTorch CUDA 匹配。使用 nvidia-smi。
 uv run mlipx setup
+```
+
+> 如果克隆后直接运行 `uv run mlipx doctor`，uv 也会隐式执行同步并创建
+> `.venv`；该环境仍然是 UMA 专用环境。推荐先显式执行 `uv sync`，以免误以为
+> doctor 创建的是可同时安装所有引擎的通用环境。
 
 ### 2.3 CUDA GPU 与 CPU 安装
 
-mlipx 不自带 PyTorch——它使用 `fairchem-core` 提供的 PyTorch。
+根 workspace 通过 `uv.lock` 安装并固定 PyTorch；不要再用裸
+`uv pip install torch` 覆盖它。
 
 | 场景 | PyTorch | mlipx 设备参数 |
 |------|---------|-----------------|
@@ -124,8 +130,8 @@ uv run python -c "import torch; print('CUDA 可用' if torch.cuda.is_available()
 ```
 
 **如果有 GPU 但 CUDA 不可用：**
-- 确保 PyTorch 构建包含 CUDA（使用 CUDA 索引安装 `pip install torch`）
-- 或在已有 CUDA PyTorch 的 conda/venv 环境中安装 `fairchem-core`
+- 运行 `uv run mlipx setup` 查看 GPU 架构建议
+- 确认安装的是文档推荐的 CUDA wheel，而不是 CPU wheel
 
 ### 2.3.1 已验证配置
 
@@ -141,7 +147,7 @@ uv run python -c "import torch; print('CUDA 可用' if torch.cuda.is_available()
 | **PyTorch** | 2.6.0+cu124 |
 | **Python** | 3.12.13 |
 | **操作系统** | Linux |
-| **安装耗时** | 约 5 分钟（含模型下载）|
+| **安装说明** | 模型不会由 `uv sync` 自动下载 |
 
 *这不是最低配置要求——它只是一个已知可用的参考点。更低规格的 GPU（如 GTX 10 系列 Pascal，sm_61）和纯 CPU 环境同样支持。*
 
@@ -365,7 +371,7 @@ mlipx 的核心设计是**引擎无关**：所有 MLIP 后端都实现统一的 
 **方式一：CLI 参数 `--model-type`**（适用于 sp/opt/md/batch）
 
 ```bash
-mlipx sp structure.cif --model mace.model --model-type mace --task bulk
+.venv-mace/bin/mlipx sp structure.cif --model mace.model --model-type mace --task bulk
 ```
 
 **方式二：INCAR 文件 `MODEL_TYPE` 键**
@@ -380,7 +386,9 @@ FMAX        = 0.05
 
 **方式三：TUI 下拉选择**
 
-在 `mlipx tui` 的配置界面中，Model Engine 选择框可切换 UMA/MACE/DPA/GRACE，task 选项会随之动态变化（UMA 显示 omat/omol/...，其他显示 bulk/molecule）。
+TUI 进程使用启动它的 Python 环境。因此 UMA 必须运行
+`uv run mlipx tui`，MACE 必须运行 `.venv-mace/bin/mlipx tui`。界面中的
+Model Engine 下拉框不会自动切换虚拟环境；不要在 UMA TUI 中选择 MACE。
 
 **方式四：Python API `model_type` 参数**
 
@@ -476,7 +484,7 @@ UMA 有明确的任务体系（对应不同训练数据集）；其他引擎不�
 mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --fmax 0.02
 
 # ── MACE ── 周期性体系单点能
-mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
 
 # ── DPA (DeepMD) ── 分子优化
 mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
@@ -625,30 +633,35 @@ mlipx md CONTCAR \
 
 ### 5.4 批量处理
 
-对目录中的多个结构运行相同类型的计算。支持 `sp` 和 `opt` 计算类型。可通过 `--parallel` 启用并行执行。
+对目录中的多个结构运行相同类型的计算，支持 `sp` 和 `opt`。当前批量
+入口仅在 CLI 中提供，并按顺序处理文件；模型在整批任务中只加载一次。
 
 **CLI 用法：**
 
 ```bash
-mlipx batch <input_dir> --model <model.pt> [选项]
+uv run mlipx batch <input_dir> --model <model.pt> [选项]
 
 # 对所有 CIF 文件进行 SP 计算
-mlipx batch structures/ \
+uv run mlipx batch structures/ \
     --model uma-s-1.pt \
     --calc-type sp \
     --pattern "*.cif" \
     --output batch_results
 
-# 并行对所有 POSCAR 文件进行 OPT
-mlipx batch poscars/ \
-    --model uma-s-1.pt \
-    --calc-type opt \
-    --pattern "POSCAR*" \
-    --parallel \
-    --workers 4
+# 使用独立 MACE 环境批量计算
+.venv-mace/bin/mlipx batch structures/ \
+    --model mace.model \
+    --model-type mace \
+    --task bulk \
+    --device cuda \
+    --calc-type sp \
+    --pattern "*.cif" \
+    --output mace_batch_results
 ```
 
-**输出：** 每个结构在输出目录下获得自己的子目录。`batch_summary.json` 文件列出所有结果。
+**输出：** 每个结构在输出目录下获得自己的子目录，`batch_summary.json`
+列出所有结果。当前 CLI 不接受 `--parallel` 或 `--workers`，TUI 也没有
+Batch 菜单。
 
 ---
 
@@ -711,6 +724,9 @@ mlipx batch INPUT_DIR --model MODEL [选项]
   --pattern PATTERN     文件匹配模式 [默认: *.cif]
   --output DIR          输出目录 [默认: batch_results]
 ```
+
+运行时仍须选择正确解释器：UMA 使用 `uv run mlipx batch ...`，MACE 使用
+`.venv-mace/bin/mlipx batch ...`。
 
 ##### `mlipx run` — 从 INCAR 文件运行
 
@@ -784,7 +800,8 @@ TUI 基于 [Textual](https://textual.textualize.io/) 构建，提供交互式、
 
 #### 屏幕说明
 
-**主菜单**（Main Menu）— 选择计算类型（SP、OPT、MD、Batch、Jobs、Template、Exit）。
+**主菜单**（Main Menu）— 选择 SP、OPT、MD、Jobs、Template 或 Exit。
+Batch 当前仅能通过 CLI 运行。
 
 **配置界面**（Configuration）— 填写路径、任务类型、设备和计算特定参数。路径支持实时验证和视觉反馈：
 
@@ -1084,7 +1101,7 @@ write("molecule.xyz", atoms)
 
 ```bash
 # MACE 周期性材料
-mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
 
 # DPA 孤立分子
 mlipx sp molecule.xyz --model dpa2.pth --model-type dpa --task molecule
@@ -1232,7 +1249,8 @@ mlipx md CONTCAR --model uma-s-1.pt \
 ### 14.4 批量筛选
 
 ```bash
-mlipx batch candidates/ --model uma-s-1.pt --calc-type sp --pattern "*.cif"
+uv run mlipx batch candidates/ --model uma-s-1.pt \
+  --model-type uma --task omat --calc-type sp --pattern "*.cif"
 ```
 
 ### 14.5 Python API 吸附能

@@ -39,6 +39,16 @@ uv run mlipx doctor
 
 GPU users: see the [installation section](uma/docs/README_EN.md#2-installation) of the manual for CUDA/PyTorch matching by GPU architecture.
 
+The repository environment created by `uv sync` is **UMA-only**. Choose the
+executable by engine:
+
+| Engine | Install location | Command prefix |
+|--------|------------------|----------------|
+| UMA | repository `.venv` from `uv sync` | `uv run mlipx ...` |
+| MACE | dedicated `.venv-mace` (instructions below) | `.venv-mace/bin/mlipx ...` |
+
+Never run bare `uv pip install mace-torch`; it targets the UMA `.venv`.
+
 ### Run a calculation
 
 ```bash
@@ -76,8 +86,29 @@ DEVICE      = cpu
 ```
 
 ```bash
-mlipx run -i INCAR.mlipx -s structure.cif
+uv run mlipx run -i INCAR.mlipx -s structure.cif
 ```
+
+### Batch calculations
+
+Batch mode is currently CLI-only and processes matching structures
+sequentially while reusing one loaded model:
+
+```bash
+# UMA batch single-point calculations
+uv run mlipx batch structures/ --model uma-s-1.pt \
+  --model-type uma --task omat --device cuda \
+  --calc-type sp --pattern "*.cif" --output batch_results
+
+# MACE batch single-point calculations
+.venv-mace/bin/mlipx batch structures/ --model mace.model \
+  --model-type mace --task bulk --device cuda \
+  --calc-type sp --pattern "*.cif" --output mace_batch_results
+```
+
+Each input gets its own output subdirectory and the root output directory gets
+`batch_summary.json`. The current CLI does not expose `--parallel` or
+`--workers`; do not include them.
 
 ---
 
@@ -85,8 +116,8 @@ mlipx run -i INCAR.mlipx -s structure.cif
 
 | Interface | Command | Best for |
 |-----------|---------|----------|
-| **CLI** | `mlipx <command>` | Scripts, HPC jobs, automation |
-| **TUI** | `mlipx tui` | Interactive exploration, live progress |
+| **CLI** | `uv run mlipx ...` (UMA) / `.venv-mace/bin/mlipx ...` (MACE) | Scripts, HPC jobs, automation |
+| **TUI** | `uv run mlipx tui` (UMA) / `.venv-mace/bin/mlipx tui` (MACE) | Interactive SP/OPT/MD, live progress |
 | **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
 | **INCAR** | `mlipx run -i INCAR` | VASP-style batch configuration |
 

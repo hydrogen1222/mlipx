@@ -7,22 +7,42 @@ Meta FAIR as part of the FAIRChem project.
 ## Quick Start
 
 ```bash
-# 1. Detect your GPU and get the matching PyTorch command (CPU-only users can skip).
-uv run mlipx setup
-
-# 2. Create a pinned venv (Python 3.12) + install everything from the lockfile.
+# 1. Create the UMA venv (Python 3.12) and install the lockfile.
 #    uv auto-creates .venv. Do NOT use `pip install -r requirements.txt`
 #    (that is a CI snapshot pinned to different torch versions).
 uv sync
 
-# 3. Verify & run
+# 2. Inspect GPU compatibility, then verify.
+uv run mlipx setup
 uv run mlipx doctor              # comprehensive environment diagnostic
+
+# 3. Run UMA
 uv run mlipx --help              # show all commands
 uv run mlipx tui                 # launch interactive TUI
 uv run mlipx template sp         # generate INCAR template
 ```
 
-> **Note:** All commands use `uv run` prefix which auto-detects the `.venv`. Alternatively, activate the venv first: `source .venv/bin/activate` (Linux/Mac) or `.venv\Scripts\activate` (Windows), then run `mlipx` directly.
+Running `uv run ...` before `uv sync` also triggers a project sync implicitly,
+but explicit `uv sync` is recommended so it is clear that this creates the
+UMA-only `.venv`.
+
+> **Important:** `uv run` always selects the repository UMA `.venv`. It must
+> not be used for MACE. UMA commands use `uv run mlipx ...`; MACE commands use
+> `.venv-mace/bin/mlipx ...`. See the complete MACE installation below.
+
+### MACE 独立安装 / Isolated MACE installation
+
+```bash
+uv venv --python 3.12 .venv-mace
+uv pip install --python .venv-mace/bin/python \
+  torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
+uv pip install --python .venv-mace/bin/python -e ./uma
+uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
+
+.venv-mace/bin/mlipx doctor
+```
+
+不要执行 `uv pip install mace-torch`，它会把 MACE 装进 UMA `.venv`。
 
 ### CUDA vs CPU Installation
 
@@ -73,13 +93,13 @@ mlipx 默认使用 **UMA (FAIRChem)** 引擎，现有用户无需修改任何配
 
 ```bash
 # 单点能
-mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
+uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
 
 # 几何优化（含晶胞弛豫）
-mlipx opt structure.cif --model uma-s-1.pt --task omat --cell-opt --fmax 0.02
+uv run mlipx opt structure.cif --model uma-s-1.pt --task omat --cell-opt --fmax 0.02
 
 # 分子动力学（GPU + turbo 模式）
-mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --steps 10000
+uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --steps 10000
 ```
 
 ### 2. 使用其他引擎（MACE / DPA / GRACE）
@@ -98,7 +118,7 @@ mlipx sp structure.cif --model grace_model/ --model-type grace --task bulk
 ### 3. 通过 INCAR 文件运行（VASP 风格）
 
 ```bash
-mlipx run -i INCAR.mlipx -s structure.cif
+.venv-mace/bin/mlipx run -i INCAR.mlipx -s structure.cif
 ```
 
 INCAR 中用 `MODEL_TYPE` 指定引擎：
@@ -114,18 +134,38 @@ DEVICE      = cpu
 ### 4. 检查环境与已安装的引擎
 
 ```bash
-mlipx doctor                # 诊断 Python/PyTorch/CUDA/各引擎后端
-mlipx template sp           # 生成 INCAR 模板
-mlipx tui                   # 交互式界面（可下拉选择引擎）
+uv run mlipx doctor                  # UMA 环境
+uv run mlipx tui                     # UMA TUI
+.venv-mace/bin/mlipx doctor          # MACE 环境
+.venv-mace/bin/mlipx tui             # MACE TUI
 ```
+
+### 5. 批量运行
+
+批量功能当前仅通过 CLI 提供，按顺序处理文件并复用同一个已加载模型：
+
+```bash
+# UMA 批量 SP
+uv run mlipx batch structures/ --model uma-s-1.pt \
+  --model-type uma --task omat --device cuda \
+  --calc-type sp --pattern "*.cif" --output batch_results
+
+# MACE 批量 SP
+.venv-mace/bin/mlipx batch structures/ --model mace.model \
+  --model-type mace --task bulk --device cuda \
+  --calc-type sp --pattern "*.cif" --output mace_batch_results
+```
+
+当前 CLI 没有 `--parallel` 或 `--workers` 参数，TUI 也没有 Batch 菜单。
+每个输入结构会获得独立子目录，汇总写入 `batch_summary.json`。
 
 
 ## Interfaces
 
 | Interface | How to use | Best for |
 |-----------|-----------|----------|
-| **CLI** | `mlipx <command>` in terminal | Scripts, HPC jobs, automation |
-| **TUI** | `mlipx tui` | Interactive exploration, live progress |
+| **CLI** | `uv run mlipx ...` (UMA) / `.venv-mace/bin/mlipx ...` (MACE) | Scripts, HPC jobs, automation |
+| **TUI** | `uv run mlipx tui` (UMA) / `.venv-mace/bin/mlipx tui` (MACE) | Interactive SP/OPT/MD |
 | **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
 
 ## Documentation

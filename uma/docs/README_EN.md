@@ -87,9 +87,9 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
-| Python | 3.9+ | 3.11+ |
+| Python | 3.10–3.12 | 3.12 |
 | RAM | 8 GB | 32 GB |
-| Disk | 2 GB (model: 1.2 GB) | 15 GB (larger models) |
+| Disk | 15 GB (environment plus a small model) | 30+ GB (multiple models) |
 | GPU (optional) | CUDA 11.8+ | CUDA 12.x, 8+ GB VRAM |
 
 ### 2.2 Installing with uv (recommended)
@@ -108,10 +108,16 @@ uv sync
 # Step 2 (optional): Detect your GPU and verify the PyTorch CUDA match.
 #         Uses nvidia-smi and the installed PyTorch.
 uv run mlipx setup
+```
+
+> Running `uv run mlipx doctor` immediately after cloning also performs an
+> implicit sync and creates `.venv`. That environment is still UMA-only.
+> Running `uv sync` explicitly first makes this boundary clearer.
 
 ### 2.3 CUDA GPU vs CPU Installation
 
-mlipx does not ship its own PyTorch — it inherits the PyTorch installation provided by `fairchem-core`.
+The root workspace installs and pins PyTorch through `uv.lock`. Do not replace
+it with a bare `uv pip install torch`.
 
 | Scenario | PyTorch | mlipx device flag |
 |----------|---------|--------------------|
@@ -125,8 +131,8 @@ uv run python -c "import torch; print('CUDA available' if torch.cuda.is_availabl
 ```
 
 **If CUDA is not available but you have a GPU:**
-- Ensure your PyTorch build includes CUDA (`pip install torch` with CUDA index)
-- Or install `fairchem-core` in a conda/venv environment that already has CUDA PyTorch
+- Run `uv run mlipx setup` for the GPU architecture recommendation
+- Verify that the recommended CUDA wheel, rather than a CPU wheel, is installed
 
 ### 2.3.1 Verified Setups
 
@@ -142,7 +148,7 @@ The following configuration has been tested and confirmed working:
 | **PyTorch** | 2.6.0+cu124 |
 | **Python** | 3.12.13 |
 | **OS** | Linux |
-| **Install time** | ~5 min (including model download) |
+| **Install note** | Models are not downloaded automatically by `uv sync` |
 
 *This is not a minimum requirement — it is one known-good reference point. Lower-spec GPUs (e.g., GTX 10-series Pascal, sm_61) and CPU-only setups are also supported.*
 
@@ -367,7 +373,7 @@ mlipx is designed to be **engine-agnostic**: every MLIP backend implements the u
 **Option 1: CLI flag `--model-type`** (applies to sp/opt/md/batch)
 
 ```bash
-mlipx sp structure.cif --model mace.model --model-type mace --task bulk
+.venv-mace/bin/mlipx sp structure.cif --model mace.model --model-type mace --task bulk
 ```
 
 **Option 2: INCAR file `MODEL_TYPE` key**
@@ -382,7 +388,10 @@ FMAX        = 0.05
 
 **Option 3: TUI dropdown**
 
-In the `mlipx tui` config screen, the Model Engine selector switches between UMA/MACE/DPA/GRACE, and the task options update dynamically (UMA shows omat/omol/...; others show bulk/molecule).
+The TUI uses the Python environment that launched it. Run `uv run mlipx tui`
+for UMA and `.venv-mace/bin/mlipx tui` for MACE. The Model Engine dropdown
+does not switch virtual environments automatically; do not select MACE inside
+the UMA TUI.
 
 **Option 4: Python API `model_type` parameter**
 
@@ -481,7 +490,7 @@ For UMA, the `omol` task **requires** charge and spin to be set; for non-UMA eng
 mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --fmax 0.02
 
 # -- MACE -- periodic single point
-mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
 
 # -- DPA (DeepMD) -- molecule optimization
 mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
@@ -630,30 +639,36 @@ mlipx md CONTCAR \
 
 ### 5.4 Batch Processing
 
-Run the same calculation type on many structures in a directory. Supports `sp` and `opt` calculation types. Parallel execution is available via `--parallel`.
+Run the same calculation type on many structures in a directory. Batch
+supports `sp` and `opt`, is currently CLI-only, and processes files
+sequentially while loading the model only once.
 
 **CLI usage:**
 
 ```bash
-mlipx batch <input_dir> --model <model.pt> [options]
+uv run mlipx batch <input_dir> --model <model.pt> [options]
 
 # SP calculation on all CIF files
-mlipx batch structures/ \
+uv run mlipx batch structures/ \
     --model uma-s-1.pt \
     --calc-type sp \
     --pattern "*.cif" \
     --output batch_results
 
-# OPT on all POSCAR files in parallel
-mlipx batch poscars/ \
-    --model uma-s-1.pt \
-    --calc-type opt \
-    --pattern "POSCAR*" \
-    --parallel \
-    --workers 4
+# MACE batch in the isolated environment
+.venv-mace/bin/mlipx batch structures/ \
+    --model mace.model \
+    --model-type mace \
+    --task bulk \
+    --device cuda \
+    --calc-type sp \
+    --pattern "*.cif" \
+    --output mace_batch_results
 ```
 
-**Output:** Each structure gets its own sub-directory under the output directory. A `batch_summary.json` file lists all results.
+**Output:** Each structure gets its own subdirectory and `batch_summary.json`
+contains the aggregate result. The current CLI does not accept `--parallel` or
+`--workers`, and the TUI has no Batch menu.
 
 ---
 
@@ -716,6 +731,9 @@ mlipx batch INPUT_DIR --model MODEL [options]
   --pattern PATTERN     File glob pattern [default: *.cif]
   --output DIR          Output directory [default: batch_results]
 ```
+
+Use the correct executable: `uv run mlipx batch ...` for UMA and
+`.venv-mace/bin/mlipx batch ...` for MACE.
 
 ##### `mlipx run` — Run from INCAR File
 
@@ -789,7 +807,8 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
 
 #### Screens
 
-**Main Menu** — Select calculation type (SP, OPT, MD, Batch, Jobs, Template, Exit).
+**Main Menu** — Select SP, OPT, MD, Jobs, Template, or Exit. Batch is currently
+CLI-only.
 
 **Configuration** — Fill in paths, task type, device, and calculation-specific parameters. Paths support live validation with visual feedback:
 
@@ -1180,7 +1199,7 @@ Non-UMA engines are not task-aware; `task` only controls the periodic-boundary (
 
 ```bash
 # MACE periodic material
-mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
 
 # DPA isolated molecule
 mlipx sp molecule.xyz --model dpa2.pth --model-type dpa --task molecule
@@ -1411,7 +1430,9 @@ A: Yes, if your terminal supports Unicode and 256 colors. Most modern terminals 
 
 **Q: Can I run multiple calculations simultaneously?**
 
-A: Yes. Use background jobs (`--detach` in TUI or `mlipx jobs`) for multiple independent calculations. For batch processing of many structures, use `mlipx batch --parallel --workers N`.
+A: Yes. TUI SP/OPT/MD jobs run as background processes. Batch processing is
+currently sequential and CLI-only; use `uv run mlipx batch ...` for UMA or
+`.venv-mace/bin/mlipx batch ...` for MACE.
 
 **Q: What file formats are supported for input structures?**
 
@@ -1498,7 +1519,7 @@ mlipx md CONTCAR \
 
 ```bash
 # Single-point energy on 100 CIF files
-mlipx batch candidates/ \
+uv run mlipx batch candidates/ \
     --model uma-s-1.pt \
     --calc-type sp \
     --pattern "*.cif" \

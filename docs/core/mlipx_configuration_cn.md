@@ -6,6 +6,9 @@
 `settings.ini` 文件、分层配置解析器、模型别名、可复用配置模板、MACE 后端支持，
 以及 `mlipx config` 命令行工具。
 
+> **环境约定：** UMA 使用 `uv run mlipx ...`，MACE 使用
+> `.venv-mace/bin/mlipx ...`。两个引擎不能共享虚拟环境。
+
 ---
 
 ## 1. 快速入门
@@ -47,7 +50,7 @@ dtype = float32
 ```
 
 ```bash
-mlipx sp structure.cif --model-alias mace_mpa0 --dtype float64
+.venv-mace/bin/mlipx sp structure.cif --model-alias mace_mpa0 --dtype float64
 ```
 
 这里 `--dtype float64` 覆盖了别名中的 `float32` 默认值。
@@ -187,10 +190,10 @@ max_steps = 2000
 **使用方式：**
 ```bash
 # 通过 --model-alias 参数
-mlipx sp s.xyz --model-alias mace_mpa0
+.venv-mace/bin/mlipx sp s.xyz --model-alias mace_mpa0
 
 # 通过 --model（当名称匹配别名时的简写形式）
-mlipx sp s.xyz --model mace_mpa0
+.venv-mace/bin/mlipx sp s.xyz --model mace_mpa0
 
 # 通过 Python API
 from mlipx.api import run_single_point
@@ -241,7 +244,7 @@ mace-torch Calculator
 
 ```bash
 # 覆盖别名的默认值
-mlipx sp s.xyz --model-alias mace_mpa0 --dtype float64
+.venv-mace/bin/mlipx sp s.xyz --model-alias mace_mpa0 --dtype float64
 
 # 在配置模板中设置
 [profile:mace_f64]
@@ -251,7 +254,7 @@ dtype = float64
 ### 7.3 Head（基础模型选择器）
 
 ```bash
-mlipx sp s.xyz --model-alias mace_fm --head "some_head_name"
+.venv-mace/bin/mlipx sp s.xyz --model-alias mace_fm --head "some_head_name"
 ```
 
 `--head` 参数会传递给 MACE 的基础模型加载过程。

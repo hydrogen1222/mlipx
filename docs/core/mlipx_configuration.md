@@ -7,6 +7,10 @@ configuration refactor. It covers the unified defaults model, `settings.ini` fil
 the layered config resolver, model aliases, reusable profiles, MACE backend support,
 and the `mlipx config` CLI.
 
+> **Environment convention:** use `uv run mlipx ...` for UMA and
+> `.venv-mace/bin/mlipx ...` for MACE. The two engines cannot share a virtual
+> environment.
+
 ---
 
 ## 1. Quick start
@@ -48,7 +52,7 @@ dtype = float32
 ```
 
 ```bash
-mlipx sp structure.cif --model-alias mace_mpa0 --dtype float64
+.venv-mace/bin/mlipx sp structure.cif --model-alias mace_mpa0 --dtype float64
 ```
 
 The `--dtype float64` overrides the alias default of `float32`.
@@ -188,10 +192,10 @@ A **model alias** is a named `[model:NAME]` section that bundles
 **Usage:**
 ```bash
 # Via --model-alias flag
-mlipx sp s.xyz --model-alias mace_mpa0
+.venv-mace/bin/mlipx sp s.xyz --model-alias mace_mpa0
 
 # Via --model (shorthand when the name matches an alias)
-mlipx sp s.xyz --model mace_mpa0
+.venv-mace/bin/mlipx sp s.xyz --model mace_mpa0
 
 # Via Python API
 from mlipx.api import run_single_point
@@ -243,7 +247,7 @@ mace-torch Calculator
 
 ```bash
 # Override the alias default
-mlipx sp s.xyz --model-alias mace_mpa0 --dtype float64
+.venv-mace/bin/mlipx sp s.xyz --model-alias mace_mpa0 --dtype float64
 
 # Set it in a profile
 [profile:mace_f64]
@@ -253,7 +257,7 @@ dtype = float64
 ### 7.3 Head (foundation model selector)
 
 ```bash
-mlipx sp s.xyz --model-alias mace_fm --head "some_head_name"
+.venv-mace/bin/mlipx sp s.xyz --model-alias mace_fm --head "some_head_name"
 ```
 
 The `--head` flag is passed to MACE's foundation model loading.
