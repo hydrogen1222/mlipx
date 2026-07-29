@@ -362,7 +362,11 @@ def run_diagnostics(
     import importlib.util  # noqa: PLC0415
 
     for engine_name, module_name, install_cmd in (
-        ("MACE engine", "mace", "pip install mace-torch"),
+        (
+            "MACE engine",
+            "mace",
+            "install in .venv-mace; see uma/docs/README_CN.md or README_EN.md",
+        ),
         ("DPA engine", "deepmd", "pip install 'deepmd-kit>=3.0.0'"),
         ("GRACE engine", "tensorpotential", "pip install tensorpotential"),
     ):

@@ -149,6 +149,7 @@ _build
 
 # Modern Python toolings
 .venv/
+.venv-*/
 .ruff_cache/
 .uv/
 

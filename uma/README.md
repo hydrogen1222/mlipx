@@ -85,8 +85,8 @@ mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --steps 1000
 ### 2. 使用其他引擎（MACE / DPA / GRACE）
 
 ```bash
-# MACE 单点能（需先 pip install mace-torch）
-mlipx sp structure.cif --model mace.model --model-type mace --task bulk --device cpu
+# MACE 必须从独立环境启动（参见 docs/README_CN.md）
+.venv-mace/bin/mlipx sp structure.cif --model mace.model --model-type mace --task bulk --device cpu
 
 # DPA 几何优化（需先 pip install 'deepmd-kit>=3.0.0'）
 mlipx opt structure.cif --model dpa2.pth --model-type dpa --task bulk --fmax 0.05

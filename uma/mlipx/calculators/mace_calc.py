@@ -85,12 +85,28 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
     def get_calculator(self) -> Calculator:
         """Return the cached MACE ASE calculator (lazy import)."""
         if self._calculator is None:
+            from mlipx.doctor import (  # noqa: PLC0415
+                _installed_dependency_conflicts,
+            )
+
+            conflicts = _installed_dependency_conflicts(("mace-torch",))
+            if conflicts:
+                details = "\n".join(f"  - {item}" for item in conflicts)
+                raise RuntimeError(
+                    "MACE environment is incompatible:\n"
+                    f"{details}\n"
+                    "MACE and UMA must not share the same virtual environment.\n"
+                    "Create .venv-mace and launch the TUI with:\n"
+                    "  .venv-mace/bin/mlipx tui\n"
+                    "See uma/docs/README_CN.md or README_EN.md."
+                )
             try:
                 from mace.calculators import MACECalculator  # noqa: PLC0415
             except ImportError as e:  # pragma: no cover
                 raise ImportError(
                     "MACE support requires the 'mace-torch' package.\n"
-                    "Install with: pip install mace-torch"
+                    "Install it in the dedicated .venv-mace environment; "
+                    "see uma/docs/README_CN.md or README_EN.md."
                 ) from e
 
             kwargs: dict[str, Any] = {

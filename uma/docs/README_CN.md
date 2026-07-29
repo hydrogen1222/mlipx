@@ -172,15 +172,19 @@ mlipx tui
 # 将 .pt 文件放在工作目录或已知路径下
 ```
 
-**其他引擎（可选）：** MACE / DPA / GRACE 的模型由各项目单独发布。安装对应后端包后即可使用：
+**其他引擎（可选）：** MACE / DPA / GRACE 的模型由各项目单独发布。
+MACE 必须使用独立环境，不能直接运行裸的 `pip install mace-torch` 或
+`uv pip install mace-torch`：这两条命令会污染刚由 `uv run` 创建的 UMA `.venv`。
 
 | 引擎 | 后端安装 | 模型格式 |
 |------|----------|----------|
-| MACE | `pip install mace-torch` | `.model` / `.pt` |
+| MACE | 使用下方“各引擎后端安装与环境隔离”的 `.venv-mace` 完整命令 | `.model` / `.pt` |
 | DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` / `.pt`（PyTorch 后端） |
 | GRACE | `pip install tensorpotential` | SavedModel 目录 / YAML |
 
-> 注意：`mace-torch` 依赖 `e3nn==0.4.4`，与 `fairchem-core`（`e3nn>=0.5`）冲突，二者不能装在同一环境。运行 `mlipx doctor` 可查看各引擎后端是否就绪。
+> **不要执行 `uv pip install mace-torch`。** `uv pip` 默认目标就是项目的
+> `.venv`；此时 doctor 虽能看到两个引擎，却会报告
+> `Engine dependencies: incompatible`，MACE 模型也无法加载。
 
 模型路径通过 `--model`（CLI）、TUI 配置界面或 INCAR 文件中的 `MODEL_PATH` 键指定。
 
@@ -398,7 +402,7 @@ result = run_single_point(
 
 | 引擎 | 安装命令 | 模型格式 |
 |------|----------|----------|
-| MACE | `pip install mace-torch` | `.model` / `.pt` |
+| MACE | 仅安装到 `.venv-mace`（见紧接着的完整命令） | `.model` / `.pt` |
 | DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth`（PyTorch 后端） |
 | GRACE | `pip install tensorpotential` | SavedModel 目录 / YAML |
 
@@ -409,6 +413,8 @@ result = run_single_point(
 > ```bash
 > # 在仓库根目录执行；明确使用 Python 3.12（项目不支持 3.13+）
 > uv venv --python 3.12 .venv-mace
+> uv pip install --python .venv-mace/bin/python \
+>   torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 > uv pip install --python .venv-mace/bin/python -e ./uma
 > uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
 >
@@ -420,6 +426,16 @@ result = run_single_point(
 > .venv-mace/bin/mlipx doctor
 > .venv-mace/bin/mlipx tui
 > ```
+
+如果已经误执行了 `uv pip install mace-torch`，无需删除仓库，按下面恢复：
+
+```bash
+# 恢复 UMA 项目环境；uv 会移除不在 uv.lock 中的 mace-torch
+uv sync
+uv run mlipx doctor       # 此环境中 MACE 应显示未安装，e3nn 应为 0.6.x
+
+# 再按上方三条 --python .venv-mace/bin/python 命令创建 MACE 环境
+```
 >
 > `doctor` 现在会检查已安装发行包的依赖约束；如果同一环境中同时出现
 > `mace-torch`、`fairchem-core` 和不兼容的 e3nn，会明确显示
@@ -473,7 +489,7 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 
 | 问题 | 原因 | 解决方案 |
 |------|------|----------|
-| `Backend mace_torch not installed` | 后端包未安装 | `pip install mace-torch`（在隔离环境） |
+| `Backend mace_torch not installed` | 当前解释器不是 MACE 环境 | 按隔离步骤安装，并用 `.venv-mace/bin/mlipx tui` 启动 |
 | `ImportError: e3nn` 版本冲突 | mace 与 fairchem 同环境 | 为 MACE 创建独立 venv |
 | `too many values to unpack (expected 2)` | MACE 模型由 e3nn 0.4.4 保存，却被 e3nn 0.5/0.6 加载 | 使用 `.venv-mace`，确认 `e3nn.__version__ == 0.4.4` |
 | `Object of type Tensor is not JSON serializable` | 旧版 mlipx 将 MACE Tensor 元数据直接写入 JSON | 更新 mlipx；当前版本已将 Tensor 转成标量/列表 |

@@ -111,6 +111,8 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 >
 > ```bash
 > uv venv --python 3.12 .venv-mace
+> uv pip install --python .venv-mace/bin/python \
+>   torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 > uv pip install --python .venv-mace/bin/python -e ./uma
 > uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
 >

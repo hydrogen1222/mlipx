@@ -173,15 +173,20 @@ mlipx tui
 # Place the .pt file in your working directory or a known path
 ```
 
-**Other engines (optional):** MACE / DPA / GRACE models are released by each project. Install the backend package, then use it:
+**Other engines (optional):** MACE / DPA / GRACE models are released by each
+project. MACE requires a separate environment. Do not run bare
+`pip install mace-torch` or `uv pip install mace-torch`: either command can
+pollute the UMA `.venv` just created by `uv run`.
 
 | Engine | Backend install | Model format |
 |--------|-----------------|--------------|
-| MACE | `pip install mace-torch` | `.model` / `.pt` |
+| MACE | Use the complete `.venv-mace` procedure under “Backend Installation & Environment Isolation” | `.model` / `.pt` |
 | DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` / `.pt` (PyTorch backend) |
 | GRACE | `pip install tensorpotential` | SavedModel dir / YAML |
 
-> Note: `mace-torch` depends on `e3nn==0.4.4`, which conflicts with `fairchem-core` (`e3nn>=0.5`) - they cannot coexist in one environment. Run `mlipx doctor` to check which engine backends are ready.
+> **Do not run `uv pip install mace-torch`.** The default target of `uv pip` is
+> the project `.venv`. Doctor may then find both engines but will report
+> `Engine dependencies: incompatible`, and MACE checkpoints cannot load.
 
 The model path is specified with `--model` (CLI), in the TUI config screen, or via the `MODEL_PATH` key in INCAR files.
 
@@ -399,7 +404,7 @@ result = run_single_point(
 
 | Engine | Install command | Model format |
 |--------|-----------------|--------------|
-| MACE | `pip install mace-torch` | `.model` / `.pt` |
+| MACE | Install only into `.venv-mace` using the complete commands below | `.model` / `.pt` |
 | DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` (PyTorch backend) |
 | GRACE | `pip install tensorpotential` | SavedModel dir / YAML |
 
@@ -411,6 +416,8 @@ result = run_single_point(
 > ```bash
 > # Run from the repository root; the project does not support Python 3.13+
 > uv venv --python 3.12 .venv-mace
+> uv pip install --python .venv-mace/bin/python \
+>   torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
 > uv pip install --python .venv-mace/bin/python -e ./uma
 > uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
 >
@@ -422,6 +429,17 @@ result = run_single_point(
 > .venv-mace/bin/mlipx doctor
 > .venv-mace/bin/mlipx tui
 > ```
+
+If you already ran `uv pip install mace-torch`, you do not need to delete the
+repository. Restore the UMA environment and then create `.venv-mace`:
+
+```bash
+# uv removes mace-torch because it is not present in uv.lock
+uv sync
+uv run mlipx doctor       # MACE should be absent here; e3nn should be 0.6.x
+
+# Now run the three --python .venv-mace/bin/python commands above
+```
 >
 > `doctor` now checks installed distribution constraints. If `mace-torch`,
 > `fairchem-core`, and an incompatible e3nn coexist, it reports
@@ -476,7 +494,7 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 
 | Problem | Cause | Solution |
 |---------|-------|----------|
-| `Backend mace_torch not installed` | Backend package missing | `pip install mace-torch` (in isolated env) |
+| `Backend mace_torch not installed` | The current interpreter is not the MACE environment | Follow the isolation procedure and launch `.venv-mace/bin/mlipx tui` |
 | `ImportError: e3nn` version conflict | mace + fairchem in same env | Create a separate venv for MACE |
 | `too many values to unpack (expected 2)` | A model saved with e3nn 0.4.4 is loaded by e3nn 0.5/0.6 | Use `.venv-mace`; verify `e3nn.__version__ == 0.4.4` |
 | `Object of type Tensor is not JSON serializable` | An older mlipx wrote MACE tensor metadata directly to JSON | Update mlipx; the current writer converts tensors to scalars/lists |
