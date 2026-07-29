@@ -303,6 +303,13 @@ class MDRunner(BaseRunner):
         self.log(f"Save interval:    {self.save_interval}")
         self.log(f"Pre-relaxation:   {'Yes' if self.pre_relax else 'No'}")
 
+        # Copy atoms to prevent mutating the caller's object. Pre-relaxation
+        # (FIRE) modifies positions and velocity initialisation modifies
+        # momenta on this same object. (_prepare_atoms now copies internally
+        # as well, but this top-level copy is still required to shield the
+        # pre-relax / velocity phases that run afterwards.)
+        atoms = atoms.copy()
+
         # Prepare atoms
         atoms = self._prepare_atoms(atoms)
 
@@ -375,19 +382,29 @@ class MDRunner(BaseRunner):
             # a "successful" result.
             self._check_finite(atoms, pe, context=f"MD step {step}")
 
-            # Explosion guard (every 100 steps): warn on suspiciously large
-            # forces and abort on non-finite ones, which the >50 comparison
-            # alone would miss (NaN > 50 is False).
-            if step > 0 and step % 100 == 0:
-                forces_chk = atoms.get_forces()
-                self._check_finite(atoms, pe, forces=forces_chk, context=f"MD step {step}")
-                max_force = np.max(np.linalg.norm(forces_chk, axis=1))
-                if max_force > 50:  # eV/Å - suspiciously high
-                    self.log(f"⚠️ WARNING: Large forces detected ({max_force:.1f} eV/Å)")
-                    self.log("   Structure may be unstable. Consider:")
-                    self.log("   - Lowering temperature")
-                    self.log("   - Increasing pre-relaxation steps")
-                    self.log("   - Checking initial structure")
+            # Check forces for NaN/inf EVERY step. NaN forces corrupt positions
+            # and velocities via the integrator and must be caught immediately.
+            forces_chk = atoms.get_forces()
+            self._check_finite(atoms, pe, forces=forces_chk, context=f"MD step {step}")
+
+            # Explosion guard: warn on suspiciously large (but finite) forces.
+            # _check_finite above already aborts on NaN/inf; this catches a run
+            # that is diverging while still producing finite numbers. The old
+            # threshold of 50 eV/Å is far too late -- by then atoms have already
+            # flown apart -- so use 20 eV/Å (matching the configured fmax_abort
+            # safety default). max_force is computed every step because
+            # forces_chk is already available (free), but the warning is only
+            # logged every 100 steps to avoid flooding the log.
+            max_force = float(np.max(np.linalg.norm(forces_chk, axis=1)))
+            if max_force > 20.0 and (step > 0 and (step % 100 == 0 or step == self.steps)):
+                self.log(
+                    f"⚠️ WARNING: Large forces detected ({max_force:.1f} eV/Å)",
+                    level="warning",
+                )
+                self.log("   Structure may be unstable. Consider:")
+                self.log("   - Lowering temperature")
+                self.log("   - Increasing pre-relaxation steps")
+                self.log("   - Checking initial structure")
 
             # Save trajectory frame
             if step % self.save_interval == 0:

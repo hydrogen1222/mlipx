@@ -25,6 +25,11 @@ class ASELangevinUMARunner(Runner):
         task_name: str = "omat",
         timestep_fs: float = 1.0,
         temp_k: float = 300.0,
+        # NOTE: misleading name -- the value is interpreted in 1/fs (it is
+        # divided by ``units.fs`` below), NOT 1/ps. The default 0.001 /fs ==
+        # 1 /ps, which is a reasonable Langevin friction. Passing a value
+        # intended as 1/ps would be treated as 1/fs and yield 1000x
+        # over-damping.
         friction_ps_inv: float = 0.001,
         steps_total: int = 1000,
         warmup_steps: int = 10,
@@ -67,6 +72,9 @@ class ASELangevinUMARunner(Runner):
                 atoms,
                 timestep=self.timestep_fs * units.fs,
                 temperature_K=self.temp_k,
+                # friction_ps_inv is in 1/fs despite the name (see __init__);
+                # /units.fs converts 1/fs -> 1/ASE-time as ASE's Langevin
+                # expects. Do NOT add an extra /1000 here.
                 friction=self.friction_ps_inv / units.fs,
             )
 

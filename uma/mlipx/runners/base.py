@@ -254,6 +254,12 @@ class BaseRunner(ABC):
         Returns:
             Prepared Atoms object
         """
+        # Copy first so the task-specific PBC / cell / info / center() changes
+        # below never mutate the caller's Atoms object. Every runner shares
+        # this helper (single-point / optimisation / MD), so guarding it here
+        # protects all of them; MDRunner.run() additionally copies to shield
+        # pre-relaxation and velocity initialisation.
+        atoms = atoms.copy()
         task = self.calculator.task
 
         # Periodic vs molecular task classification. UMA tasks (omat/oc20/...)

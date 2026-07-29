@@ -33,7 +33,20 @@ def get_te_drift(filename):
     Et = Et[equil_time:]
     total_time = time[-1] - time[equil_time]
     Et = moving_avg(Et, window=20)
-    drift = 1000 * np.abs(Et[-1] - Et[equil_time]) / total_time
+    # The thermo log is written by ASE's MDLogger(peratom=True): energies are
+    # already divided by the atom count (eV/atom) and the time column is
+    # already in ps (MDLogger divides the simulation time by 1000*units.fs).
+    # The drift rate is therefore 1000 * |dE| / dt with dE in eV/atom and dt in
+    # ps, which yields meV/(atom*ps) -- no extra normalisation needed.
+    #
+    # Compare the FIRST smoothed value (Et[0], the start of the
+    # post-equilibration window) with the LAST (Et[-1]). The previous code
+    # indexed ``Et[equil_time]`` *after* the moving-average truncation, which
+    # points at the wrong frame (around 0.2*N rather than 0.1*N) and returns
+    # an incorrect drift magnitude.
+    if Et.size == 0 or total_time <= 0:
+        return 0.0
+    drift = 1000 * np.abs(Et[-1] - Et[0]) / total_time
     return float(drift)
 
 

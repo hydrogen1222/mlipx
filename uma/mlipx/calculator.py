@@ -163,9 +163,20 @@ class UMACalculator(BaseMLIPCalculator):
                 )
         except RuntimeError:
             raise
-        except Exception:
-            # If we can't check GPU compat, let the calculation fail naturally
-            pass
+        except Exception as exc:
+            # We could not run the GPU-compat probe (e.g. CUDA not
+            # initialised, driver mismatch, unexpected torch error).
+            # Surface this as a warning instead of silently swallowing it:
+            # a silent skip lets the run proceed and only fail much later
+            # inside the MD loop with a confusing "no kernel image" error.
+            import warnings
+
+            warnings.warn(
+                "GPU compatibility check could not be performed and was "
+                f"skipped: {exc!r}. The calculation may fail later if the "
+                "PyTorch build lacks kernels for this GPU.",
+                stacklevel=2,
+            )
 
     def load_predictor(self) -> MLIPPredictUnit:
         """Load the prediction unit from checkpoint.
