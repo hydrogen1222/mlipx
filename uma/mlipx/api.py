@@ -507,6 +507,7 @@ def calculate_adsorption_energy(
     model_path: str,
     model_type: str | None = None,
     task: str | None = None,
+    gas_task: str | None = None,
     device: str | None = None,
     relax: bool = False,
     verbose: bool = True,
@@ -529,7 +530,10 @@ def calculate_adsorption_energy(
         surface_structure: Clean surface structure.
         model_path: Path to model checkpoint.
         model_type: MLIP engine (uma, mace, dpa, grace).
-        task: Model head.
+        task: Model head for the periodic slab / adsorbed system.
+        gas_task: Model head for the non-periodic gas molecule. Defaults to
+            ``omol`` for UMA (when a periodic task is given) or ``molecule``
+            otherwise; the isolated gas must NOT be scored with a periodic head.
         device: Device for calculation (cpu or cuda).
         relax: Whether to relax structures before calculation.
         verbose: Whether to print progress messages.
@@ -574,6 +578,24 @@ def calculate_adsorption_energy(
         **kwargs,
     }
 
+    # The isolated gas molecule is non-periodic and (for UMA) must be evaluated
+    # with the molecular head, while the slab / adsorbed system use the periodic
+    # task the caller requested. Using one task for all three is a methodological
+    # error: it either errors (zero-volume cell) or scores the gas with the wrong
+    # head / forced PBC, breaking the E_ads = E(ads) - E(gas) - E(slab) reference.
+    _PERIODIC_UMA_TASKS = {"omat", "oc20", "oc25", "odac", "omc"}
+    if gas_task is None:
+        _t = task.lower() if task else None
+        if _t in _PERIODIC_UMA_TASKS or _t == "omol":
+            gas_task = "omol"
+        elif _t in {"bulk", "molecule"}:
+            gas_task = "molecule"
+        else:
+            # task unspecified: pick the molecular task for this engine.
+            gas_task = "omol" if (model_type or "uma").lower() in {"uma", "fairchem"} else "molecule"
+    gas_kwargs = dict(calc_kwargs)
+    gas_kwargs["task"] = gas_task
+
     if verbose:
         print("1. Calculating adsorbed system energy...")
     E_adsorbed = calculate_energy(adsorbed_structure, model_path, **calc_kwargs)
@@ -583,7 +605,8 @@ def calculate_adsorption_energy(
 
     if verbose:
         print("2. Calculating gas molecule energy...")
-    E_gas = calculate_energy(gas_structure, model_path, **calc_kwargs)
+        print(f"   (using task={gas_task!r} for the non-periodic gas molecule)")
+    E_gas = calculate_energy(gas_structure, model_path, **gas_kwargs)
     if verbose:
         print(f"   Energy: {E_gas:.6f} eV")
         print()

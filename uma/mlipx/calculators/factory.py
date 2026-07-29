@@ -151,14 +151,15 @@ class CalculatorFactory:
         elif m_type == "mace":
             from mlipx.calculators.mace_calc import MACECalculatorWrapper  # noqa: PLC0415
 
-            # Plan section 11.1 / 12: factory-level dtype fallback is float32
-            # (recommended for long MD on V100). The wrapper constructor still
-            # defaults to float64 for direct/test construction.
+            # Dtype fallback for *direct* factory construction is float64 (the
+            # safe high-precision default). The engine overrides this with a
+            # calc-type-aware default (float32 for MD, float64 for sp/opt) when
+            # nothing in the config layer already set default_dtype.
             return MACECalculatorWrapper(
                 model_path=model_path,
                 device=device,
                 task=task,
-                default_dtype=kwargs.get("default_dtype", "float32"),
+                default_dtype=kwargs.get("default_dtype", "float64"),
                 head=kwargs.get("head"),
             )
         elif m_type == "dpa":

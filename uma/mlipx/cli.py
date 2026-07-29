@@ -86,7 +86,7 @@ Examples:
             type=str,
             default=None,
             choices=["float32", "float64"],
-            help="MACE model dtype (default: float32).",
+            help="MACE model dtype (default: float32 for MD, float64 for sp/opt).",
         )
         p.add_argument(
             "--head",
@@ -346,7 +346,7 @@ Examples:
         "--pre-relax",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Pre-relax the structure before MD (default: enabled).",
+        help="Pre-relax the structure before MD (default: enabled for NVT, disabled for NVE).",
     )
     md_parser.add_argument(
         "--pre-relax-steps",

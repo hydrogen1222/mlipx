@@ -23,7 +23,6 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import units
-from ase.constraints import FixAtoms, FixSymmetry
 from ase.io.trajectory import TrajectoryWriter as AseTrajectoryWriter
 from ase.md.langevin import Langevin
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
@@ -154,9 +153,24 @@ class MDRunner(BaseRunner):
             )
 
     def _calculate_temperature(self, atoms: Atoms) -> float:
-        """Calculate temperature accounting for constraints.
+        """Instantaneous temperature for logging / trajectory.
 
-        Uses proper degrees of freedom calculation considering constraints.
+        Delegates to ASE's canonical ``atoms.get_temperature()``, which uses
+        ``get_number_of_degrees_of_freedom() = 3N - sum(constraint removed_dof)``.
+        This is the *same* convention that ``MaxwellBoltzmannDistribution`` /
+        ``force_temperature`` (used in ``_initialize_velocities``) and the NVT
+        thermostat operate on, so the reported value matches the requested
+        target temperature instead of being offset by an extra centre-of-mass
+        correction. It also correctly accounts for every constraint that
+        reports its removed DOF (FixAtoms, FixCom, FixBondLengths, ...) without
+        double-counting the COM translation.
+
+        A few constraints -- notably ``FixSymmetry`` -- do not report a
+        removed-DOF count and raise ``NotImplementedError``. For those we fall
+        back to the standard MD estimate ``3N - 3`` (the COM translation that
+        ``Stationary`` zeroes at init) and warn; the previous code hard-coded
+        an arbitrary ``ndof -= 3`` for FixSymmetry, which is wrong because the
+        real count depends on the space group / number of atoms.
 
         Args:
             atoms: ASE Atoms object
@@ -164,31 +178,21 @@ class MDRunner(BaseRunner):
         Returns:
             Temperature in Kelvin
         """
-        ke = atoms.get_kinetic_energy()
-        natoms = len(atoms)
-
-        # Calculate degrees of freedom
-        # Start with 3N - 3 (remove center of mass translation)
-        ndof = 3 * natoms - 3
-
-        # Account for constraints
-        for constraint in atoms.constraints:
-            if isinstance(constraint, FixAtoms):
-                # Fixed atoms have 0 DOF
-                # constraint.index can be a boolean mask or an array of indices
-                index = constraint.index
-                num_fixed = np.sum(index) if index.dtype == bool else len(index)
-                ndof -= 3 * num_fixed
-            elif isinstance(constraint, FixSymmetry):
-                # Symmetry constraints reduce DOF
-                # This is complex; for now use conservative estimate
-                ndof -= 3
-
-        # Ensure at least 1 DOF to avoid division by zero
-        ndof = max(ndof, 1)
-
-        # T = 2E_k / (N_dof * k_B)
-        return 2 * ke / (ndof * units.kB)
+        try:
+            # ASE's own temperature: 2*KE / (ndof*kB) with
+            # ndof = 3N - sum(constraint.get_removed_dof()). Self-consistent
+            # with velocity initialisation and the thermostat.
+            return atoms.get_temperature()
+        except NotImplementedError:
+            # A constraint (e.g. FixSymmetry) cannot report its removed DOF.
+            self.log(
+                "Temperature DOF is approximate: a constraint does not "
+                "report removed DOF; falling back to 3N-3 (COM removed).",
+                level="warning",
+            )
+            ke = atoms.get_kinetic_energy()
+            ndof = max(3 * len(atoms) - 3, 1)  # COM translation removed
+            return 2 * ke / (ndof * units.kB)
 
     def _initialize_velocities(self, atoms: Atoms) -> None:
         """Initialize velocities at the requested MD temperature.
@@ -318,6 +322,10 @@ class MDRunner(BaseRunner):
             self.log(
                 f"Setting up Langevin dynamics (friction={self.friction * units.fs:.4f} fs^-1)"
             )
+            self.log(
+                "Note: under NVT the total energy E = PE + KE is NOT conserved "
+                "(the thermostat exchanges heat); monitor T instead."
+            )
             dyn = Langevin(
                 atoms,
                 timestep=self.timestep,
@@ -363,9 +371,17 @@ class MDRunner(BaseRunner):
             ke = atoms.get_kinetic_energy()
             total_e = pe + ke
 
-            # Check for explosion (simple check)
+            # Abort on NaN/inf energy so it never propagates or is written as
+            # a "successful" result.
+            self._check_finite(atoms, pe, context=f"MD step {step}")
+
+            # Explosion guard (every 100 steps): warn on suspiciously large
+            # forces and abort on non-finite ones, which the >50 comparison
+            # alone would miss (NaN > 50 is False).
             if step > 0 and step % 100 == 0:
-                max_force = np.max(np.linalg.norm(atoms.get_forces(), axis=1))
+                forces_chk = atoms.get_forces()
+                self._check_finite(atoms, pe, forces=forces_chk, context=f"MD step {step}")
+                max_force = np.max(np.linalg.norm(forces_chk, axis=1))
                 if max_force > 50:  # eV/Å - suspiciously high
                     self.log(f"⚠️ WARNING: Large forces detected ({max_force:.1f} eV/Å)")
                     self.log("   Structure may be unstable. Consider:")

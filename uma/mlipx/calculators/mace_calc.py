@@ -58,9 +58,9 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
             device: Device for calculation (``cpu``, ``cuda`` or ``cuda:N``).
             default_dtype: Model dtype (``float32`` or ``float64``).
             task: PBC hint (``bulk`` or ``molecule``); not consumed by MACE.
-            head: Optional MACE foundation-model head name. Only forwarded to
-                ``MACECalculator`` when not ``None`` (older MACE builds do not
-                accept ``heads=``).
+            head: Optional MACE foundation-model head name. Forwarded to
+                ``MACECalculator`` as ``head=`` (a single string) when not
+                ``None``; MACE ignores ``None`` and picks its default head.
 
         Raises:
             FileNotFoundError: If ``model_path`` does not exist.
@@ -114,11 +114,14 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
                 "device": self._device,
                 "default_dtype": self._default_dtype,
             }
-            # ``heads`` is only accepted by newer MACE builds and only when a
-            # head is actually requested; pass it conditionally so older MACE
-            # installs keep working.
+            # MACE's MACECalculator selects the active head via the ``head``
+            # keyword (singular, a string) -- NOT ``heads`` (plural). The
+            # plural ``heads`` attribute lives on the trained *model* object;
+            # passing ``heads=[...]`` to the calculator is silently swallowed
+            # into ASE's parameter dict and never selects a head, so a user's
+            # ``--head`` choice would be ignored (or fall back / error).
             if self._head is not None:
-                kwargs["heads"] = [self._head]
+                kwargs["head"] = self._head
             self._calculator = MACECalculator(**kwargs)
         return self._calculator
 
@@ -149,27 +152,44 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
             "implemented_properties": self.implemented_properties,
             "has_stress": self.has_stress,
         }
-        # Best-effort enrichment from the real MACE model. These attributes are
-        # not part of the ASE Calculator contract, so guard every access.
+        # Best-effort enrichment from the real MACE model. These attributes
+        # are not part of the ASE Calculator contract, so guard every access.
+        # NOTE: MACE exposes ``r_max``/``atomic_numbers`` on each *model*, and
+        # ``available_heads``/``head``/``z_table``/``num_models`` on the
+        # calculator -- there is no ``elements``/``heads``/``num_elements``
+        # attribute, so the previous lookups silently never resolved.
         calc = self._calculator
         if calc is not None:
             model = getattr(calc, "models", None)
             if isinstance(model, list) and model:
                 first = model[0]
-                for attr, key in (
-                    ("r_max", "cutoff"),
-                    ("num_elements", "num_elements"),
-                ):
-                    value = getattr(first, attr, None)
-                    if value is not None:
-                        base[key] = value
-                # Element list / head list live on the MACECalculator itself.
-                for attr, key in (
-                    ("elements", "elements"),
-                    ("heads", "heads"),
-                ):
-                    value = getattr(calc, attr, None)
-                    if value is not None:
-                        base[key] = value
+                r_max = getattr(first, "r_max", None)
+                if r_max is not None:
+                    base["cutoff"] = float(r_max)
+                atomic_numbers = getattr(first, "atomic_numbers", None)
+                if atomic_numbers is not None:
+                    base["num_elements"] = len(atomic_numbers)
+            # Cutoff may also be readable from the calculator.
+            if "cutoff" not in base:
+                r_max = getattr(calc, "r_max", None)
+                if r_max is not None:
+                    base["cutoff"] = float(r_max)
+            available_heads = getattr(calc, "available_heads", None)
+            if available_heads is not None:
+                base["available_heads"] = list(available_heads)
+            active_head = getattr(calc, "head", None)
+            if active_head is not None:
+                # Record the head MACE actually selected (may differ from the
+                # requested ``self._head`` when it was None / not found).
+                base["active_head"] = active_head
+            z_table = getattr(calc, "z_table", None)
+            if z_table is not None:
+                try:
+                    from ase.data import chemical_symbols  # noqa: PLC0415
+
+                    zs = list(getattr(z_table, "zs", z_table))
+                    base["elements"] = [chemical_symbols[int(z)] for z in zs]
+                except Exception:
+                    pass
             base["num_models"] = len(model) if isinstance(model, list) else 1
         return base

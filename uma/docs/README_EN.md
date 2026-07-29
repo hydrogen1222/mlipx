@@ -479,9 +479,13 @@ UMA has a well-defined task system (each maps to a training dataset); other engi
 | `task` | PBC | Equivalent UMA task | Suitable systems |
 |--------|------|---------------------|-------------------|
 | `bulk` | True | `omat` | Periodic crystals, surface slabs, MOFs |
-| `molecule` | False | `omol` | Isolated molecules (auto charge=0/spin=1) |
+| `molecule` | False | `omol` | Isolated molecules (auto charge=0) |
 
-For UMA, the `omol` task **requires** charge and spin to be set; for non-UMA engines, the `molecule` task auto-fills defaults.
+> **Charge/spin defaults (task-dependent):**
+> - UMA `omol`: when `atoms.info` is unset, auto-fills `charge=0` and `spin=1` (spin **multiplicity**, 1 = singlet).
+> - Non-UMA `molecule` (MACE/DPA/GRACE): auto-fills only `charge=0`; **no** `spin` is injected. MACE reads `atoms.info["spin"]` as **total spin S** (0 = singlet), a different semantic from UMA's multiplicity -- blindly injecting `spin=1` would force spin-sensitive MACE models into a doublet radical. Set spin explicitly if needed.
+> - Either can be overridden by setting `charge`/`spin` explicitly in the input structure's `atoms.info`.
+> - Molecular systems (`pbc=False`) do not compute a stress tensor.
 
 ### Complete Examples per Engine
 
@@ -492,12 +496,27 @@ mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --
 # -- MACE -- periodic single point
 .venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
 
+# -- MACE multi-head model (e.g. mace-mpa): select the molecule head
+.venv-mace/bin/mlipx sp molecule.xyz --model mace-mpa-0-medium.model --model-type mace --task molecule --head omol
+
+# -- MACE dtype (default is calc-type aware: float32 for MD speed, float64 for sp/opt accuracy)
+.venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float64
+
 # -- DPA (DeepMD) -- molecule optimization
 mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
 
 # -- GRACE -- high-throughput screening (batch)
 mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --calc-type sp --output results/
 ```
+
+### MACE-specific options
+
+| Option | Description |
+|--------|-------------|
+| `--head HEAD` | Select a MACE foundation-model head (e.g. `omol`, `default`). Required for multi-head models (mace-mpa); optional for single-head models (mace-mp-0). |
+| `--dtype float32\|float64` | Compute precision. Default is calc-type aware: **`float32` for MD** (faster, suited to long runs), **`float64` for sp/opt** (high accuracy for energy differences). Override explicitly with this flag. |
+
+> ⚠️ `--head` takes a single head name (string). MACE's `MACECalculator` selects the head via the `head=` keyword; an unknown head falls back to the model's last head with a warning.
 
 ### Engine Troubleshooting
 
@@ -600,7 +619,11 @@ Simulates the time evolution of atoms at a given temperature. Supports two ensem
 | NVT | Langevin | Constant particle number, volume, temperature (canonical) |
 | NVE | Velocity Verlet | Constant particle number, volume, energy (microcanonical) |
 
-**Pre-relaxation:** Before starting MD, mlipx automatically performs a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress. This prevents "atom explosion" — a common failure mode where high initial forces cause atoms to fly apart. You can disable this with `--no-pre-relax` in the CLI or with the Pre-relax switch in the TUI.
+**Pre-relaxation:** Before starting MD, mlipx can perform a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress and prevent "atom explosion" - a common failure mode where high initial forces cause atoms to fly apart. The default depends on the ensemble:
+- **NVT**: pre-relaxation is **on** by default (avoids explosions from high initial forces).
+- **NVE**: pre-relaxation is **off** by default -- NVE is energy-conserving, and pre-relaxing first moves the structure to a 0 K minimum, changing the conserved-energy baseline so the trajectory no longer corresponds to the input structure. If the input has large internal stress, enable it explicitly with `--pre-relax`.
+
+Override the default with `--pre-relax` / `--no-pre-relax` (CLI) or `PRE_RELAX = .TRUE./.FALSE.` (INCAR).
 
 **CLI usage:**
 
@@ -634,6 +657,9 @@ mlipx md CONTCAR \
 | `--steps` | 1000 | Number of MD steps |
 | `--friction` | 0.001 | Friction coefficient (NVT only, fs⁻¹) |
 | `--save-interval` | 10 | Save trajectory every N steps |
+| `--pre-relax` | NVT on / NVE off | Pre-relax before MD (`--no-pre-relax` to disable) |
+| `--pre-relax-steps` | 50 | Max pre-relaxation steps |
+| `--pre-relax-fmax` | 0.1 | Pre-relaxation force threshold (eV/Å) |
 
 **Output files:** `OUTCAR`, `CONTCAR` (final structure), `XDATCAR` (trajectory), `trajectory.traj` (ASE format), `mlipx_results.json`
 
@@ -684,13 +710,15 @@ The CLI is invoked via `mlipx <command> [options]`. Running `mlipx` without argu
 
 ```
 mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
-                       [--output DIR] [--name NAME]
+                       [--dtype DTYPE] [--head HEAD] [--output DIR] [--name NAME]
 
   STRUCTURE             Input structure file (CIF, XYZ, POSCAR, VASP, etc.)
   --model MODEL         Path to model checkpoint [required]
   --model-type TYPE     MLIP engine: uma|mace|dpa|grace [default: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc; others: bulk|molecule [default: omat]
   --device DEVICE       cpu|cuda [default: cpu]
+  --dtype DTYPE         MACE dtype float32|float64 [default: float64 for sp/opt, float32 for md]
+  --head HEAD           MACE foundation-model head name (multi-head models)
   --output DIR, -o DIR  Output directory [default: .]
   --name NAME, -n NAME  Job name (output goes to DIR/NAME)
 ```
@@ -720,6 +748,9 @@ mlipx md STRUCTURE --model MODEL [options]
   --steps N             Number of MD steps [default: 1000]
   --friction FRICTION   Friction coefficient for NVT [default: 0.001]
   --save-interval N     Save trajectory every N steps [default: 10]
+  --pre-relax           Pre-relax before MD [default: on for NVT, off for NVE]
+  --pre-relax-steps N   Max pre-relaxation steps [default: 50]
+  --pre-relax-fmax F    Pre-relaxation force threshold eV/Å [default: 0.1]
 ```
 
 ##### `mlipx batch` — Batch Processing
@@ -873,12 +904,16 @@ energy = calculate_energy("structure.cif", "uma-s-1.pt")
 print(f"Energy: {energy:.4f} eV")
 
 # Adsorption energy
+# `task` sets the task for the periodic slab/adsorbed system; the isolated
+# gas molecule is scored automatically with a molecular task (UMA periodic
+# task -> omol; generic engine -> molecule) -- no need to set it separately.
 ads_results = calculate_adsorption_energy(
     adsorbed_structure="adsorbed.cif",
     gas_structure="co2.xyz",
     surface_structure="slab.cif",
     model_path="uma-s-1.pt",
-    task="oc20",
+    task="oc20",          # periodic task for slab/adsorbed system
+    # gas_task="omol",    # optional: override the gas molecule's task
 )
 print(f"Adsorption energy: {ads_results['adsorption_energy']:.4f} eV")
 ```
@@ -891,7 +926,7 @@ Full API reference:
 | `run_optimization(structure, model_path, ...)` | `dict` | OPT with convergence info |
 | `run_md(structure, model_path, ...)` | `dict` | MD with trajectory and temperature |
 | `calculate_energy(structure, model_path, ...)` | `float` | Quick energy value |
-| `calculate_adsorption_energy(ads, gas, surf, ...)` | `dict` | E_ads = E_adsorbed - E_gas - E_surface |
+| `calculate_adsorption_energy(ads, gas, surf, ...)` | `dict` | E_ads = E_adsorbed - E_gas - E_surface; gas scored with a molecular task automatically (`gas_task` overrides) |
 
 ---
 
@@ -916,6 +951,8 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `TASK` | string | `omat` | Task type. UMA: `omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`; others: `bulk`/`molecule` |
 | `DEVICE` | string | `cpu` | Compute device: `cpu`, `cuda` |
 | `INFERENCE_MODE` | string | `default` | Inference mode: `default`, `turbo` |
+| `DEFAULT_DTYPE` | string | calc-type aware | MACE dtype: `float32` (MD) / `float64` (sp/opt). MACE only. |
+| `HEAD` | string | - | MACE foundation-model head name (multi-head models like mace-mpa). MACE only. |
 
 #### Output Control
 
@@ -946,6 +983,9 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `STEPS` | int | `10000` | Number of MD steps |
 | `FRICTION` | float | `0.001` | Friction coefficient |
 | `SAVE_INTERVAL` | int | `10` | Trajectory save interval |
+| `PRE_RELAX` | bool | NVT=`.TRUE.`/NVE=`.FALSE.` | Pre-relax before MD (ensemble-aware default) |
+| `PRE_RELAX_STEPS` | int | `50` | Max pre-relaxation steps |
+| `PRE_RELAX_FMAX` | float | `0.1` | Pre-relaxation force threshold (eV/Å) |
 
 ### 7.2 Template Examples
 
@@ -1170,13 +1210,13 @@ UMA models are trained on different datasets; each task corresponds to a specifi
 | Task | Domain | Systems | Charge/Spin | Stress | Typical Use |
 |------|--------|---------|-------------|--------|-------------|
 | `omat` | Inorganic Materials | Bulk crystals | Optional | ✓ | Battery materials, solid electrolytes, oxides |
-| `omol` | Molecules | Isolated molecules | **Required** | ✗ | Organic chemistry, drug-like molecules |
+| `omol` | Molecules | Isolated molecules | Default 0/1 | ✗ | Organic chemistry, drug-like molecules |
 | `oc20` | Catalysis (OC20) | Surface slabs | Optional | ✓ | Heterogeneous catalysis, adsorption |
 | `oc25` | Catalysis (OC25) | Surface slabs | Optional | ✓ | Extended catalysis benchmark |
 | `odac` | MOFs | Metal-organic frameworks | Optional | ✓ | Gas storage, separation |
 | `omc` | Molecular Crystals | Organic crystals | Optional | ✓ | Pharmaceuticals, organic electronics |
 
-**Important for molecular systems (omol):** Molecules must have `charge` and `spin` set in the Atoms info:
+**Important for molecular systems (omol):** UMA's `omol` task needs the total charge and spin multiplicity. If `atoms.info` does not set them, mlipx auto-fills `charge=0` and `spin=1` (singlet); to change this (e.g. ions, radicals, triplets) set them explicitly:
 
 ```python
 from ase.io import read, write
@@ -1401,7 +1441,7 @@ uv pip install textual
 **Cause:** High initial forces cause atoms to fly apart in early MD steps.
 
 **Solution:**
-- Pre-relaxation is enabled by default (50 FIRE steps before MD)
+- Pre-relaxation is on by default for NVT (50 FIRE steps before MD); for NVE it is off by default, enable with `--pre-relax` if the input has large internal stress
 - If it still fails, run a full geometry optimization first:
   ```bash
   mlipx opt POSCAR --model uma-s-1.pt --fmax 0.02
@@ -1409,6 +1449,7 @@ uv pip install textual
   ```
 - Lower the initial temperature: `--temp 100`
 - Check that your initial structure is physically reasonable
+- If energy/forces become NaN or inf, the run aborts automatically (no NaN results are written) -- check for atoms too close or outside the training distribution
 
 ### 12.2 FAQ
 
@@ -1463,7 +1504,7 @@ MD: ~1000 steps/minute for a 28-atom system on GPU.
 1. **GPU for large systems, CPU for small ones:** GPU has overhead; for < 20 atoms, CPU may be faster
 2. **turbo mode for MD/production:** `--inference-mode turbo` (auto for MD via CLI)
 3. **Batch for throughput:** Process many structures in one invocation to avoid model reloading overhead
-4. **Pre-relax before MD:** Enabled by default, saves wasted MD steps on high-force structures
+4. **Pre-relax before MD:** On by default for NVT (saves wasted MD steps on high-force structures); for NVE enable explicitly with `--pre-relax` if needed
 
 ### 13.3 Memory Scaling
 

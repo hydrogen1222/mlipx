@@ -277,12 +277,31 @@ class BaseRunner(ABC):
         elif task in MOLECULAR_TASKS:
             # Molecules should not have PBC
             atoms.pbc = False
-            if "charge" not in atoms.info:
-                self.log("Setting default charge=0 for molecule", level="warning")
-                atoms.info["charge"] = 0
-            if "spin" not in atoms.info:
-                self.log("Setting default spin=1 for molecule", level="warning")
-                atoms.info["spin"] = 1
+            # A non-periodic molecule still needs a bounding-box cell for
+            # output writers (CONTCAR/OUTCAR call atoms.get_volume()) and for
+            # logging. ASE's .xyz reader leaves no cell (rank 0); add a vacuum
+            # box. For pbc=False this never affects energies/forces -- it only
+            # fixes output formatting (e.g. the isolated gas in an adsorption
+            # energy calculation).
+            if atoms.cell.rank < 3:
+                atoms.center(vacuum=6.0)
+                self.log(
+                    "Added a 6 Å vacuum cell for the non-periodic molecule."
+                )
+            if task == "omol":
+                # UMA omol reads atoms.info["charge"] (total charge) and
+                # atoms.info["spin"] (spin *multiplicity*, 1 = singlet).
+                # FAIRChemCalculator already defaults these to 0 / 1, but set
+                # them explicitly so the run is deterministic.
+                atoms.info.setdefault("charge", 0)
+                atoms.info.setdefault("spin", 1)
+            else:
+                # Generic molecular engines (MACE/DPA/GRACE). MACE reads
+                # atoms.info["spin"] as *total spin* (number of unpaired
+                # electrons, 0 = singlet) -- NOT multiplicity -- so injecting a
+                # blanket default spin=1 would wrongly force a doublet radical
+                # on spin-enabled MACE models. Only default the total charge.
+                atoms.info.setdefault("charge", 0)
         else:
             # Unknown task type: preserve the input structure's PBC settings
             self.log(
@@ -298,6 +317,41 @@ class BaseRunner(ABC):
             ASE Calculator
         """
         return self.calculator.get_calculator()
+
+    def _check_finite(
+        self,
+        atoms: Atoms,
+        energy: float,
+        forces: Any | None = None,
+        *,
+        context: str = "calculation",
+    ) -> None:
+        """Abort the run if energy/forces are non-finite (NaN/inf).
+
+        MLIPs can return NaN when atoms get too close or leave the training
+        distribution. Without this guard ASE integrators propagate NaN to the
+        end and write "successful" NaN results. Non-finite values are always
+        fatal, so this raises unconditionally (plan safety.abort_on_nan).
+        """
+        import numpy as np  # noqa: PLC0415
+
+        if not np.isfinite(energy):
+            raise RuntimeError(
+                f"Non-finite energy ({energy!r}) during {context}; aborting "
+                "before NaN is written to outputs."
+            )
+        if forces is not None:
+            arr = np.asarray(forces, dtype=float)
+            if arr.size and not np.all(np.isfinite(arr)):
+                fmax = (
+                    float(np.max(np.linalg.norm(arr, axis=1)))
+                    if arr.ndim == 2
+                    else float("nan")
+                )
+                raise RuntimeError(
+                    f"Non-finite forces during {context} (max|F|={fmax}); "
+                    "aborting before NaN is written to outputs."
+                )
 
     def _write_summary(self, results: dict[str, Any], atoms: Atoms) -> None:
         """Write calculation summary to stdout.

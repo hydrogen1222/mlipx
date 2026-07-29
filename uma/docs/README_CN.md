@@ -473,9 +473,13 @@ UMA 有明确的任务体系（对应不同训练数据集）；其他引擎不�
 | `task` | PBC | 等价 UMA task | 适用体系 |
 |--------|------|---------------|----------|
 | `bulk` | True | `omat` | 周期性晶体、表面 slab、MOF |
-| `molecule` | False | `omol` | 孤立分子（自动设 charge=0/spin=1） |
+| `molecule` | False | `omol` | 孤立分子（自动设 charge=0） |
 
-对于 UMA，`omol` 任务**必需**指定电荷与自旋；非 UMA 引擎的 `molecule` 任务会自动填充默认值。
+> **电荷/自旋默认值（任务相关）：**
+> - UMA `omol`：`atoms.info` 未设置时自动填 `charge=0`、`spin=1`（自旋**多重度**，1 = 单重态）。
+> - 非 UMA `molecule`（MACE/DPA/GRACE）：仅自动填 `charge=0`；**不**注入 `spin`。MACE 将 `atoms.info["spin"]` 读作**总自旋 S**（0 = 单重态），与 UMA 的多重度语义不同，贸然注入 `spin=1` 会把自旋敏感的 MACE 模型强制为双自由基。如需自旋，请显式设置。
+> - 二者均可通过在输入结构的 `atoms.info` 中显式设置 `charge`/`spin` 覆盖默认值。
+> - 分子体系（`pbc=False`）不计算应力张量。
 
 ### 各引擎完整示例
 
@@ -486,12 +490,27 @@ mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --
 # ── MACE ── 周期性体系单点能
 .venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
 
+# ── MACE 多 head 模型（如 mace-mpa）选择分子 head
+.venv-mace/bin/mlipx sp molecule.xyz --model mace-mpa-0-medium.model --model-type mace --task molecule --head omol
+
+# ── MACE dtype（默认按计算类型：MD=float32 提速，sp/opt=float64 高精度）
+.venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float64
+
 # ── DPA (DeepMD) ── 分子优化
 mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
 
 # ── GRACE ── 高通量筛选（批量）
 mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --calc-type sp --output results/
 ```
+
+### MACE 专属选项
+
+| 选项 | 说明 |
+|------|------|
+| `--head HEAD` | 选择 MACE 基础模型的 head（如 `omol`、`default`）。多 head 模型（mace-mpa）必须指定；单 head 模型（mace-mp-0）可省略。 |
+| `--dtype float32\|float64` | 计算精度。默认按计算类型自动选择：**MD 用 `float32`**（提速，适合长时模拟），**sp/opt 用 `float64`**（高精度，适合能量差）。可用此参数显式覆盖。 |
+
+> ⚠️ `--head` 接受单个 head 名称（字符串）。MACE 的 `MACECalculator` 通过 `head=` 关键字选择 head；错误的 head 名会回退到模型的最后一个 head 并告警。
 
 ### 引擎故障排除
 
@@ -594,7 +613,11 @@ mlipx opt structure.cif \
 | NVT | Langevin | 恒粒子数、体积、温度（正则系综） |
 | NVE | Velocity Verlet | 恒粒子数、体积、能量（微正则系综） |
 
-**预弛豫：** 在开始 MD 之前，mlipx 会自动执行快速的 FIRE 优化（默认：50 步，fmax=0.1 eV/Å）以消除内应力。这可以防止"原子爆炸"——由高初始力导致原子飞散的常见失败模式。
+**预弛豫：** 在开始 MD 之前，mlipx 可自动执行快速的 FIRE 优化（默认：50 步，fmax=0.1 eV/Å）以消除内应力，防止"原子爆炸"--由高初始力导致原子飞散的常见失败模式。预弛豫的默认开关与系综相关：
+- **NVT**：默认**启用**（避免初始高力导致爆炸）。
+- **NVE**：默认**关闭**--NVE 是能量守恒系综，预弛豫会先把结构移到 0 K 极小值、改变守恒能量基准，使得轨迹不再对应输入结构。若输入结构内应力较大，可用 `--pre-relax` 显式开启。
+
+可用 `--pre-relax` / `--no-pre-relax`（CLI）或 `PRE_RELAX = .TRUE./.FALSE.`（INCAR）显式覆盖默认值。
 
 **CLI 用法：**
 
@@ -628,6 +651,9 @@ mlipx md CONTCAR \
 | `--steps` | 1000 | MD 步数 |
 | `--friction` | 0.001 | 摩擦系数（仅 NVT，fs⁻¹） |
 | `--save-interval` | 10 | 每隔 N 步保存轨迹 |
+| `--pre-relax` | NVT 开 / NVE 关 | MD 前预弛豫（`--no-pre-relax` 关闭） |
+| `--pre-relax-steps` | 50 | 预弛豫最大步数 |
+| `--pre-relax-fmax` | 0.1 | 预弛豫力收敛阈值 (eV/Å) |
 
 **输出文件：** `OUTCAR`、`CONTCAR`（最终结构）、`XDATCAR`（轨迹）、`trajectory.traj`（ASE 格式）、`mlipx_results.json`
 
@@ -677,13 +703,15 @@ CLI 通过 `mlipx <command> [选项]` 调用。不带参数运行 `mlipx` 默认
 
 ```
 mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
-                       [--output DIR] [--name NAME]
+                       [--dtype DTYPE] [--head HEAD] [--output DIR] [--name NAME]
 
   STRUCTURE             输入结构文件（CIF, XYZ, POSCAR, VASP 等）
   --model MODEL         模型检查点路径 [必需]
   --model-type TYPE     MLIP 引擎：uma|mace|dpa|grace [默认: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc；其他: bulk|molecule [默认: omat]
   --device DEVICE       cpu|cuda [默认: cpu]
+  --dtype DTYPE         MACE 精度 float32|float64 [默认: sp/opt=float64, md=float32]
+  --head HEAD           MACE 基础模型 head 名称（多 head 模型）
   --output DIR, -o DIR  输出目录 [默认: .]
   --name NAME, -n NAME  任务名称（输出至 DIR/NAME）
 ```
@@ -713,6 +741,9 @@ mlipx md STRUCTURE --model MODEL [选项]
   --steps N             MD 步数 [默认: 1000]
   --friction FRICTION   摩擦系数（NVT）[默认: 0.001]
   --save-interval N     轨迹保存间隔 [默认: 10]
+  --pre-relax           MD 前预弛豫 [默认: NVT 开 / NVE 关]
+  --pre-relax-steps N   预弛豫最大步数 [默认: 50]
+  --pre-relax-fmax F    预弛豫力收敛阈值 eV/Å [默认: 0.1]
 ```
 
 ##### `mlipx batch` — 批量处理
@@ -866,12 +897,15 @@ energy = calculate_energy("structure.cif", "uma-s-1.pt")
 print(f"能量: {energy:.4f} eV")
 
 # 吸附能
+# task 指定周期性 slab/吸附体系的任务；孤立气体分子会自动用分子任务评分
+# （UMA 周期任务 -> omol；通用引擎 -> molecule），无需为气体单独指定。
 ads_results = calculate_adsorption_energy(
     adsorbed_structure="adsorbed.cif",
     gas_structure="co2.xyz",
     surface_structure="slab.cif",
     model_path="uma-s-1.pt",
-    task="oc20",
+    task="oc20",          # slab/吸附体系用周期任务
+    # gas_task="omol",    # 可选：显式指定气体分子的任务（默认按引擎自动派生）
 )
 print(f"吸附能: {ads_results['adsorption_energy']:.4f} eV")
 ```
@@ -884,7 +918,7 @@ print(f"吸附能: {ads_results['adsorption_energy']:.4f} eV")
 | `run_optimization(structure, model_path, ...)` | `dict` | OPT 含收敛信息 |
 | `run_md(structure, model_path, ...)` | `dict` | MD 含轨迹和温度 |
 | `calculate_energy(structure, model_path, ...)` | `float` | 快速获取能量值 |
-| `calculate_adsorption_energy(ads, gas, surf, ...)` | `dict` | E吸附 = E吸附体系 - E气体 - E表面 |
+| `calculate_adsorption_energy(ads, gas, surf, ...)` | `dict` | E吸附 = E吸附体系 - E气体 - E表面；气体分子自动用分子任务评分（`gas_task` 可覆盖） |
 
 ---
 
@@ -909,6 +943,8 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `TASK` | 字符串 | `omat` | 任务类型。UMA：`omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`；其他引擎：`bulk`/`molecule` |
 | `DEVICE` | 字符串 | `cpu` | 计算设备：`cpu`、`cuda` |
 | `INFERENCE_MODE` | 字符串 | `default` | 推理模式：`default`、`turbo` |
+| `DEFAULT_DTYPE` | 字符串 | 按计算类型 | MACE 精度：`float32`（MD）/ `float64`（sp/opt）。仅 MACE。 |
+| `HEAD` | 字符串 | - | MACE 基础模型 head 名称（多 head 模型如 mace-mpa）。仅 MACE。 |
 
 #### 输出控制
 
@@ -939,6 +975,9 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `STEPS` | 整数 | `10000` | MD 步数 |
 | `FRICTION` | 浮点数 | `0.001` | 摩擦系数 |
 | `SAVE_INTERVAL` | 整数 | `10` | 轨迹保存间隔 |
+| `PRE_RELAX` | 布尔 | NVT=`.TRUE.`/NVE=`.FALSE.` | MD 前预弛豫（系综相关默认值） |
+| `PRE_RELAX_STEPS` | 整数 | `50` | 预弛豫最大步数 |
+| `PRE_RELAX_FMAX` | 浮点数 | `0.1` | 预弛豫力收敛阈值 (eV/Å) |
 
 ### 7.2 模板示例
 
@@ -1071,13 +1110,13 @@ UMA 模型在不同数据集上训练；每个任务对应特定领域：
 | 任务 | 领域 | 体系 | 电荷/自旋 | 应力 | 典型用途 |
 |------|------|------|-----------|------|----------|
 | `omat` | 无机材料 | 块体晶体 | 可选 | ✓ | 电池材料、固态电解质、氧化物 |
-| `omol` | 分子 | 孤立分子 | **必需** | ✗ | 有机化学、药物分子 |
+| `omol` | 分子 | 孤立分子 | 默认 0/1 | ✗ | 有机化学、药物分子 |
 | `oc20` | 催化 (OC20) | 表面 slab | 可选 | ✓ | 多相催化、吸附 |
 | `oc25` | 催化 (OC25) | 表面 slab | 可选 | ✓ | 扩展催化基准 |
 | `odac` | MOFs | 金属有机框架 | 可选 | ✓ | 气体存储、分离 |
 | `omc` | 分子晶体 | 有机晶体 | 可选 | ✓ | 药物、有机电子学 |
 
-**分子体系（omol）重要提示：** 分子必须在 Atoms info 中设置 `charge` 和 `spin`：
+**分子体系（omol）重要提示：** UMA 的 `omol` 任务需要总电荷与自旋多重度。若 `atoms.info` 未设置，mlipx 自动填 `charge=0`、`spin=1`（单重态）；如需改变（如离子、自由基、三重态），请显式设置：
 
 ```python
 from ase.io import read, write
@@ -1207,9 +1246,10 @@ uv run mlipx doctor     # 显示 GPU 的 CC 以及 PyTorch 是否支持
 #### MD 原子爆炸
 
 **解决方案：**
-1. 预弛豫默认启用
+1. NVT 默认启用预弛豫；NVE 默认关闭，可用 `--pre-relax` 开启
 2. 先运行几何优化：`mlipx opt ...` 再 `mlipx md CONTCAR ...`
 3. 降低初始温度
+4. 若出现 NaN/inf 能量或力，运行会自动中止（不会写出 NaN 结果）--检查输入结构是否有原子过近或超出训练分布
 
 ---
 

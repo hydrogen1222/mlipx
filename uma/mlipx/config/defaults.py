@@ -107,9 +107,10 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "steps": 1000,
         "friction": 0.001,
         "save_interval": 10,
-        # Current MD runner still uses the legacy pre_relax* booleans; the
-        # plan's pre_relax_mode vocabulary lands in Phase 3.
-        "pre_relax": True,
+        # ``pre_relax`` has NO built-in default here: its default is
+        # ensemble-aware (off for NVE, on for NVT) and is applied by the
+        # engine (CalculationEngine._create_runner). Putting a blanket
+        # True here would override that logic for every config-layer path.
         "pre_relax_steps": 50,
         "pre_relax_fmax": 0.1,
     },
@@ -124,10 +125,11 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "activation_checkpointing": None,
     },
     "calculator.mace": {
-        # Plan section 12: MACE MD defaults to float32. The factory-level
-        # fallback (factory.py) is also float32. The wrapper constructor still
-        # defaults to float64 for direct/test construction.
-        "default_dtype": "float32",
+        # MACE dtype default is calc-type aware (applied by the engine, not
+        # the resolver): float32 for MD (speed), float64 for sp/opt (accuracy
+        # for energy differences). Direct factory construction defaults to
+        # float64; users override via --default-dtype / DEFAULT_DTYPE.
+        "default_dtype": "float64",
         "head": None,
     },
     "calculator.dpa": {},

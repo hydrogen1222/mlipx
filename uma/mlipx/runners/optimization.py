@@ -196,6 +196,9 @@ class OptimizationRunner(BaseRunner):
             energy = atoms.get_potential_energy()
             forces = atoms.get_forces()
 
+            # Abort on NaN/inf before it pollutes the trajectory/outputs.
+            self._check_finite(atoms, energy, forces, context=f"optimization step {step}")
+
             trajectory.append(
                 {
                     "step": step,
@@ -236,14 +239,22 @@ class OptimizationRunner(BaseRunner):
         except Exception as e:
             self.log(f"Optimization failed: {e}", level="error")
             converged = False
+            # A non-finite (NaN/inf) abort from _check_finite must propagate
+            # immediately: by then the structure may hold NaN positions that
+            # crash the model on re-evaluation, and we must never write NaN
+            # results. Other optimizer failures fall through to the graceful
+            # "return partial results" path below.
+            if isinstance(e, RuntimeError) and "Non-finite" in str(e):
+                raise
 
         opt_time = time.time() - start_time
 
         # Get final results
         energy = atoms.get_potential_energy()
         forces = atoms.get_forces()
+        self._check_finite(atoms, energy, forces, context="optimization final")
         stress = None
-        if self.calculator.has_stress:
+        if self.calculator.has_stress and atoms.pbc.any():
             stress = atoms.get_stress()
 
         self.log(f"\nOptimization finished in {opt.nsteps} steps")

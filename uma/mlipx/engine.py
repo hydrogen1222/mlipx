@@ -206,6 +206,15 @@ class CalculationEngine:
                 calc_opts.setdefault(
                     "activation_checkpointing", self.config.activation_checkpointing
                 )
+        # MACE dtype default is calc-type aware: float32 is recommended for long
+        # MD, but float64 is the safer default for high-accuracy single-point /
+        # optimization energy differences. Only applies when nothing higher in
+        # the config layer (settings/INCAR/CLI) already set default_dtype.
+        if self.config.model_type.lower() == "mace":
+            calc_opts.setdefault(
+                "default_dtype",
+                "float32" if self.config.calc_type == "md" else "float64",
+            )
         return CalculatorFactory.create(
             model_type=self.config.model_type,
             model_path=self.config.model_path,
@@ -264,7 +273,14 @@ class CalculationEngine:
                 steps=opts.get("steps", 1000),
                 friction=opts.get("friction", 0.001),
                 save_interval=opts.get("save_interval", 10),
-                pre_relax=opts.get("pre_relax", True),
+                # NVE is energy-conserving: pre-relaxing first moves the
+                # structure to a 0 K minimum and changes the conserved-energy
+                # baseline, so default it OFF for NVE (still ON for NVT to avoid
+                # explosions). An explicit user setting always wins.
+                pre_relax=opts.get(
+                    "pre_relax",
+                    str(opts.get("ensemble", "NVT")).upper() != "NVE",
+                ),
                 pre_relax_steps=opts.get("pre_relax_steps", 50),
                 pre_relax_fmax=opts.get("pre_relax_fmax", 0.1),
                 **common,

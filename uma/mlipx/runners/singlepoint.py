@@ -99,10 +99,14 @@ class SinglePointRunner(BaseRunner):
         self.log(f"PBC: {atoms.pbc}")
         self.log(f"Volume: {atoms.cell.volume:.2f} Å³")
 
-        # Validate structure
-        if atoms.cell.volume <= 0:
+        # Validate structure: a *periodic* system needs a real, non-zero
+        # volume cell; a non-periodic molecule does not (the cell is only a
+        # bounding box and is absent for e.g. .xyz input, which is normal for
+        # the isolated gas molecule in an adsorption-energy calculation).
+        if atoms.pbc.any() and atoms.cell.volume <= 0:
             raise ValueError(
-                "Invalid cell: zero or negative volume. Check input structure."
+                "Invalid cell: zero or negative volume for a periodic "
+                "system. Check input structure."
             )
 
         # Setup calculator
@@ -143,9 +147,14 @@ class SinglePointRunner(BaseRunner):
                 ) from e
             raise
 
-        # Get stress if supported
+        # Abort early on NaN/inf so it never reaches the output files.
+        self._check_finite(atoms, energy, forces, context="single point")
+
+        # Get stress if supported. Stress is only physically defined for
+        # periodic systems; MACE advertises "stress" even for non-periodic
+        # molecules, so gate on PBC to avoid a meaningless / erroring tensor.
         stress = None
-        if self.calculator.has_stress:
+        if self.calculator.has_stress and atoms.pbc.any():
             self._emit_progress(
                 "running", "Calculating stress...", extra={"energy": float(energy)}
             )
