@@ -15,8 +15,11 @@ logic shared with ``mlipx setup``.
 from __future__ import annotations
 
 import sys
+from importlib import metadata
 from pathlib import Path
 from typing import TYPE_CHECKING
+
+from packaging.requirements import Requirement
 
 from mlipx.gpu_compat import arch_supports_device
 from mlipx.gpu_setup import (
@@ -28,6 +31,43 @@ from mlipx.gpu_setup import (
 
 if TYPE_CHECKING:
     from typing import Any
+
+
+def _installed_dependency_conflicts(
+    distribution_names: tuple[str, ...],
+) -> list[str]:
+    """Return installed requirements that are not satisfied.
+
+    Import-only checks are insufficient for plugin-style engines: MACE can be
+    imported with a newer e3nn and then fail only while unpickling a model.
+    Inspecting distribution metadata catches that invalid environment before a
+    calculation is submitted.
+    """
+    conflicts: list[str] = []
+    for distribution_name in distribution_names:
+        try:
+            requirements = metadata.requires(distribution_name) or []
+        except metadata.PackageNotFoundError:
+            continue
+        for raw_requirement in requirements:
+            requirement = Requirement(raw_requirement)
+            # e3nn is the shared, mutually exclusive UMA/MACE dependency.
+            # Other workspace pins (notably the intentional PyTorch override
+            # for Pascal GPUs) are diagnosed by their dedicated checks.
+            if requirement.name.lower() != "e3nn":
+                continue
+            if requirement.marker and not requirement.marker.evaluate():
+                continue
+            try:
+                installed = metadata.version(requirement.name)
+            except metadata.PackageNotFoundError:
+                continue
+            if requirement.specifier and installed not in requirement.specifier:
+                conflicts.append(
+                    f"{distribution_name} requires {requirement.name}"
+                    f"{requirement.specifier}, but {installed} is installed"
+                )
+    return conflicts
 
 
 def _recommendation_detail(rec, *, installed_torch: str | None = None) -> str:
@@ -289,7 +329,8 @@ def run_diagnostics(
             )
             failures += 1
 
-    # 6. UMA engine (fairchem-core) - required in this workspace
+    # 6. UMA engine. It is optional in a deliberately isolated MACE
+    # environment, just as MACE/DPA/GRACE are optional in the UMA environment.
     try:
         import importlib.util
 
@@ -309,11 +350,13 @@ def run_diagnostics(
             {
                 "name": "UMA engine (fairchem-core)",
                 "value": "not installed",
-                "status": "fail",
-                "detail": "Install: cd packages/fairchem-core && uv pip install -e '.[dev]'",
+                "status": "warn",
+                "detail": (
+                    "Optional in a dedicated non-UMA environment. "
+                    "For UMA, run `uv sync` from the repository root."
+                ),
             }
         )
-        failures += 1
 
     # 6b. Optional MLIP engine backends (MACE / DPA / GRACE)
     import importlib.util  # noqa: PLC0415
@@ -342,6 +385,33 @@ def run_diagnostics(
                     "detail": f"Optional. Install with: {install_cmd}",
                 }
             )
+
+    dependency_conflicts = _installed_dependency_conflicts(
+        ("mace-torch", "fairchem-core")
+    )
+    if dependency_conflicts:
+        checks.append(
+            {
+                "name": "Engine dependencies",
+                "value": "incompatible",
+                "status": "fail",
+                "detail": (
+                    "\n".join(dependency_conflicts)
+                    + "\n  UMA and MACE must use separate virtual environments."
+                    "\n  See the Multi-Engine Guide in uma/docs/README_EN.md"
+                    " or README_CN.md."
+                ),
+            }
+        )
+        failures += 1
+    else:
+        checks.append(
+            {
+                "name": "Engine dependencies",
+                "value": "compatible",
+                "status": "ok",
+            }
+        )
     # 7. mlipx
     try:
         from mlipx import __version__ as mlipx_ver

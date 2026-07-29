@@ -120,7 +120,8 @@ class UMACalculator(BaseMLIPCalculator):
         PyTorch 2.6.x (CUDA 12.4) wheels, which include ``sm_60`` — and
         ``sm_60`` kernels are binary-compatible with ``sm_61`` devices.
         """
-        if self.device not in ("cuda", "gpu"):
+        # Treat ``cuda`` and ``cuda:N`` (and the ``gpu`` alias) as GPU devices.
+        if not str(self.device).lower().startswith("cuda") and self.device != "gpu":
             return
 
         try:

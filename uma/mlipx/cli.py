@@ -24,7 +24,13 @@ from pathlib import Path
 
 from ase.io import read
 
-from mlipx.config import IncarConfig, get_default_config
+from mlipx.config import (
+    IncarConfig,
+    get_default_config,
+    get_schema,
+    resolve_config,
+)
+from mlipx.config.settings import init_settings_file
 from mlipx.engine import CalculationEngine, EngineConfig
 
 
@@ -59,7 +65,47 @@ Examples:
         """,
     )
 
+    # Global option: explicit settings.ini (plan section 4.2). Must precede
+    # the subcommand, e.g. `mlipx --settings path.ini sp ...`.
+    parser.add_argument(
+        "--settings",
+        type=str,
+        default=None,
+        help="Path to a settings.ini file (overrides MLIPX_SETTINGS env / "
+        "./settings.ini / ~/.config/mlipx/settings.ini).",
+    )
+
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    def _add_resolver_args(p: argparse.ArgumentParser) -> None:
+        """Add config-resolver args shared by sp/opt/md/batch."""
+        p.add_argument(
+            "--dtype",
+            "--default-dtype",
+            dest="default_dtype",
+            type=str,
+            default=None,
+            choices=["float32", "float64"],
+            help="MACE model dtype (default: float32).",
+        )
+        p.add_argument(
+            "--head",
+            type=str,
+            default=None,
+            help="MACE foundation-model head name.",
+        )
+        p.add_argument(
+            "--model-alias",
+            type=str,
+            default=None,
+            help="Model alias defined in settings.ini [model:NAME].",
+        )
+        p.add_argument(
+            "--profile",
+            type=str,
+            default=None,
+            help="Reusable profile from settings.ini [profile:NAME].",
+        )
 
     # run command
     run_parser = subparsers.add_parser(
@@ -103,28 +149,27 @@ Examples:
     sp_parser.add_argument(
         "--model",
         type=str,
-        required=True,
-        help="Path to model checkpoint",
+        default=None,
+        help="Path to model checkpoint (or a model-alias name; see --model-alias).",
     )
     sp_parser.add_argument(
         "--model-type",
         type=str,
-        default="uma",
+        default=None,
         choices=["uma", "mace", "dpa", "grace"],
-        help="MLIP engine type (default: uma)",
+        help="MLIP engine type (default: uma; resolved from settings).",
     )
     sp_parser.add_argument(
         "--task",
         type=str,
-        default="omat",
-        help="Task type. UMA: omat/omol/oc20/oc25/odac/omc. Others: bulk/molecule (default: omat)",
+        default=None,
+        help="Task type. UMA: omat/omol/...; others: bulk/molecule (default: engine-specific).",
     )
     sp_parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        choices=["cpu", "cuda"],
-        help="Device for calculation (default: cpu)",
+        default=None,
+        help="Device for calculation: cpu, cuda, gpu or cuda:N (default: cpu).",
     )
     sp_parser.add_argument(
         "--output",
@@ -140,7 +185,7 @@ Examples:
         default=None,
         help="Job name (output will be in OUTPUT/NAME)",
     )
-
+    _add_resolver_args(sp_parser)
     # opt command
     opt_parser = subparsers.add_parser(
         "opt",
@@ -155,57 +200,58 @@ Examples:
     opt_parser.add_argument(
         "--model",
         type=str,
-        required=True,
-        help="Path to model checkpoint",
+        default=None,
+        help="Path to model checkpoint (or a model-alias name; see --model-alias).",
     )
     opt_parser.add_argument(
         "--model-type",
         type=str,
-        default="uma",
+        default=None,
         choices=["uma", "mace", "dpa", "grace"],
-        help="MLIP engine type (default: uma)",
+        help="MLIP engine type (default: uma; resolved from settings).",
     )
     opt_parser.add_argument(
         "--task",
         type=str,
-        default="omat",
-        help="Task type. UMA: omat/omol/oc20/oc25/odac/omc. Others: bulk/molecule (default: omat)",
+        default=None,
+        help="Task type. UMA: omat/omol/...; others: bulk/molecule (default: engine-specific).",
     )
     opt_parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        choices=["cpu", "cuda"],
-        help="Device for calculation (default: cpu)",
+        default=None,
+        help="Device for calculation: cpu, cuda, gpu or cuda:N (default: cpu).",
     )
     opt_parser.add_argument(
         "--fmax",
         type=float,
-        default=0.05,
-        help="Force convergence threshold in eV/Å (default: 0.05)",
+        default=None,
+        help="Force convergence threshold in eV/Angstrom (default: 0.05).",
     )
     opt_parser.add_argument(
         "--max-steps",
         type=int,
-        default=500,
-        help="Maximum optimization steps (default: 500)",
+        default=None,
+        help="Maximum optimization steps (default: 500).",
     )
     opt_parser.add_argument(
         "--optimizer",
         type=str,
-        default="FIRE",
+        default=None,
         choices=["FIRE", "BFGS", "LBFGS"],
-        help="Optimization algorithm (default: FIRE)",
+        help="Optimization algorithm (default: FIRE).",
     )
     opt_parser.add_argument(
         "--cell-opt",
-        action="store_true",
-        help="Optimize cell parameters (requires stress support)",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Optimize cell parameters (requires stress support).",
     )
     opt_parser.add_argument(
         "--fix-symmetry",
-        action="store_true",
-        help="Preserve crystal symmetry during optimization",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Preserve crystal symmetry during optimization.",
     )
     opt_parser.add_argument(
         "--output",
@@ -221,6 +267,7 @@ Examples:
         default=None,
         help="Job name (output will be in OUTPUT/NAME)",
     )
+    _add_resolver_args(opt_parser)
 
     # md command
     md_parser = subparsers.add_parser(
@@ -236,83 +283,82 @@ Examples:
     md_parser.add_argument(
         "--model",
         type=str,
-        required=True,
-        help="Path to model checkpoint",
+        default=None,
+        help="Path to model checkpoint (or a model-alias name; see --model-alias).",
     )
     md_parser.add_argument(
         "--model-type",
         type=str,
-        default="uma",
+        default=None,
         choices=["uma", "mace", "dpa", "grace"],
-        help="MLIP engine type (default: uma)",
+        help="MLIP engine type (default: uma; resolved from settings).",
     )
     md_parser.add_argument(
         "--task",
         type=str,
-        default="omat",
-        help="Task type. UMA: omat/omol/oc20/oc25/odac/omc. Others: bulk/molecule (default: omat)",
+        default=None,
+        help="Task type. UMA: omat/omol/...; others: bulk/molecule (default: engine-specific).",
     )
     md_parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        choices=["cpu", "cuda"],
-        help="Device for calculation (default: cuda)",
+        default=None,
+        help="Device for calculation: cpu, cuda, gpu or cuda:N (default: cuda).",
     )
     md_parser.add_argument(
         "--ensemble",
         type=str,
-        default="NVT",
+        default=None,
         choices=["NVT", "NVE"],
-        help="MD ensemble (default: NVT)",
+        help="MD ensemble (default: NVT).",
     )
     md_parser.add_argument(
         "--temp",
         type=float,
-        default=300.0,
-        help="Temperature in Kelvin (default: 300)",
+        default=None,
+        help="Temperature in Kelvin (default: 300).",
     )
     md_parser.add_argument(
         "--timestep",
         type=float,
-        default=1.0,
-        help="Time step in femtoseconds (default: 1.0)",
+        default=None,
+        help="Time step in femtoseconds (default: 1.0).",
     )
     md_parser.add_argument(
         "--steps",
         type=int,
-        default=1000,
-        help="Number of MD steps (default: 1000)",
+        default=None,
+        help="Number of MD steps (default: 1000).",
     )
     md_parser.add_argument(
         "--friction",
         type=float,
-        default=0.001,
-        help="Friction coefficient for NVT (default: 0.001)",
+        default=None,
+        help="Friction coefficient for NVT (default: 0.001).",
     )
     md_parser.add_argument(
         "--save-interval",
         type=int,
-        default=10,
-        help="Interval for saving trajectory frames (default: 10)",
+        default=None,
+        help="Interval for saving trajectory frames (default: 10).",
     )
     md_parser.add_argument(
         "--pre-relax",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Pre-relax the structure before MD (default: enabled)",
+        default=None,
+        help="Pre-relax the structure before MD (default: enabled).",
     )
     md_parser.add_argument(
         "--pre-relax-steps",
         type=int,
-        default=50,
-        help="Maximum pre-relaxation steps (default: 50)",
+        default=None,
+        help="Maximum pre-relaxation steps (default: 50).",
     )
     md_parser.add_argument(
         "--pre-relax-fmax",
         type=float,
-        default=0.1,
-        help="Pre-relaxation force threshold in eV/Å (default: 0.1)",
+        default=None,
+        help="Pre-relaxation force threshold in eV/Angstrom (default: 0.1).",
     )
     md_parser.add_argument(
         "--output",
@@ -328,6 +374,7 @@ Examples:
         default=None,
         help="Job name (output will be in OUTPUT/NAME)",
     )
+    _add_resolver_args(md_parser)
 
     # batch command
     batch_parser = subparsers.add_parser(
@@ -343,41 +390,40 @@ Examples:
     batch_parser.add_argument(
         "--model",
         type=str,
-        required=True,
-        help="Path to model checkpoint",
+        default=None,
+        help="Path to model checkpoint (or a model-alias name; see --model-alias).",
     )
     batch_parser.add_argument(
         "--model-type",
         type=str,
-        default="uma",
+        default=None,
         choices=["uma", "mace", "dpa", "grace"],
-        help="MLIP engine type (default: uma)",
+        help="MLIP engine type (default: uma; resolved from settings).",
     )
     batch_parser.add_argument(
         "--task",
         type=str,
-        default="omat",
-        help="Task type. UMA: omat/omol/oc20/oc25/odac/omc. Others: bulk/molecule (default: omat)",
+        default=None,
+        help="Task type. UMA: omat/omol/...; others: bulk/molecule (default: engine-specific).",
     )
     batch_parser.add_argument(
         "--device",
         type=str,
-        default="cpu",
-        choices=["cpu", "cuda"],
-        help="Device for calculation (default: cpu)",
+        default=None,
+        help="Device for calculation: cpu, cuda, gpu or cuda:N (default: cpu).",
     )
     batch_parser.add_argument(
         "--calc-type",
         type=str,
-        default="sp",
+        default=None,
         choices=["sp", "opt"],
-        help="Type of calculation (default: sp)",
+        help="Sub-calculation type for the sweep (default: sp).",
     )
     batch_parser.add_argument(
         "--pattern",
         type=str,
-        default="*.cif",
-        help="File pattern to match (default: *.cif)",
+        default=None,
+        help="File pattern to match (default: *.cif).",
     )
     batch_parser.add_argument(
         "--output",
@@ -393,8 +439,67 @@ Examples:
         default=None,
         help="Job name (output will be in OUTPUT/NAME)",
     )
+    _add_resolver_args(batch_parser)
 
-    # template command
+    # config command (plan section 4.2 / 9 / 17.6 / 24)
+    config_parser = subparsers.add_parser(
+        "config",
+        help="Inspect and manage mlipx configuration",
+        description="Show resolved config, settings search paths, validate "
+        "settings.ini, or explain where a parameter value comes from.",
+    )
+    config_sub = config_parser.add_subparsers(
+        dest="config_command", required=True
+    )
+    config_sub.add_parser("show", help="Show the resolved configuration")
+    config_sub.add_parser("paths", help="List settings.ini search paths")
+    config_init = config_sub.add_parser("init", help="Create a settings.ini")
+    config_init.add_argument(
+        "--project",
+        action="store_true",
+        help="Write ./settings.ini",
+    )
+    config_init.add_argument(
+        "--user",
+        action="store_true",
+        help="Write the user-level settings.ini",
+    )
+    config_init.add_argument(
+        "-o",
+        "--output",
+        type=str,
+        default=None,
+        help="Explicit output path (overrides --project/--user)",
+    )
+    config_init.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing file",
+    )
+    config_validate = config_sub.add_parser(
+        "validate", help="Validate a settings.ini file"
+    )
+    config_validate.add_argument(
+        "path",
+        type=str,
+        nargs="?",
+        default=None,
+        help="settings.ini path (default: resolved search)",
+    )
+    config_explain = config_sub.add_parser(
+        "explain",
+        help="Explain why a parameter has its resolved value",
+    )
+    config_explain.add_argument("key", type=str, help="Parameter name")
+    config_show = config_sub.add_parser(
+        "schema", help="List recognised option keys"
+    )
+    config_show.add_argument(
+        "--strict",
+        action="store_true",
+        help="Only show keys valid in strict mode",
+    )
+
     template_parser = subparsers.add_parser(
         "template",
         help="Generate template INCAR files",
@@ -486,8 +591,126 @@ def _console_log(message: str, level: str = "info") -> None:
     print(message, flush=True)
 
 
+def _load_settings(args: argparse.Namespace):
+    """Load settings.ini honouring --settings / MLIPX_SETTINGS / cwd / user."""
+    from mlipx.config.settings import load_settings  # noqa: PLC0415
+
+    return load_settings(explicit=getattr(args, "settings", None))
+
+
+def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
+    """Collect non-None CLI args into a canonical option dict.
+
+    Only explicitly-provided values are included so that unspecified
+    parameters fall through to settings/profile/built-in defaults
+    (plan section 17.6: argparse defaults -> None, resolved by ConfigResolver).
+    """
+    opts: dict = {}
+    for key in ("model_type", "task", "device", "default_dtype", "head"):
+        value = getattr(args, key, None)
+        if value is not None:
+            opts[key] = value
+    if calc_type == "opt":
+        for key in ("fmax", "max_steps", "optimizer", "cell_opt", "fix_symmetry"):
+            value = getattr(args, key, None)
+            if value is not None:
+                opts[key] = value
+    elif calc_type == "md":
+        if getattr(args, "temp", None) is not None:
+            opts["temperature"] = args.temp
+        for key in (
+            "ensemble",
+            "timestep",
+            "steps",
+            "friction",
+            "save_interval",
+            "pre_relax",
+            "pre_relax_steps",
+            "pre_relax_fmax",
+        ):
+            value = getattr(args, key, None)
+            if value is not None:
+                opts[key] = value
+    elif calc_type == "batch":
+        # batch `--calc-type` selects the sub-calculation (sp/opt).
+        if getattr(args, "calc_type", None) is not None:
+            opts["sub_calc_type"] = args.calc_type
+        for key in ("pattern",):
+            value = getattr(args, key, None)
+            if value is not None:
+                opts[key] = value
+    return opts
+
+
+def _resolve_engine_config(
+    args: argparse.Namespace,
+    calc_type: str,
+    *,
+    model_path: str | None = None,
+    incar_layer: dict | None = None,
+    output_dir: str | None = None,
+    job_name: str | None = None,
+) -> tuple:
+    """Resolve a full config and build an EngineConfig from it.
+
+    Returns ``(EngineConfig, ResolvedConfig, MlipxSettings)``.
+    """
+    from mlipx.config.aliases import parse_model_aliases  # noqa: PLC0415
+
+    settings = _load_settings(args)
+    aliases = parse_model_aliases(settings.parser)
+
+    model_alias = getattr(args, "model_alias", None)
+    cli = _build_cli_opts(args, calc_type)
+
+    # `--model` may be a filesystem path OR a model-alias name (plan section
+    # 5.1: `--model mace_mpa0`). An explicit --model-alias wins; otherwise a
+    # value matching a known alias is treated as the alias.
+    if model_path is not None:
+        cli.setdefault("model_path", model_path)
+    else:
+        model_arg = getattr(args, "model", None)
+        if model_arg is not None:
+            if model_alias is None and model_arg in aliases:
+                model_alias = model_arg
+            else:
+                cli.setdefault("model_path", model_arg)
+        elif model_alias is None and not incar_layer:
+            raise SystemExit(
+                "Error: one of --model PATH or --model-alias NAME is required."
+            )
+
+    resolved = resolve_config(
+        calc_type=calc_type,
+        settings=settings,
+        model_alias_name=model_alias,
+        profile_name=getattr(args, "profile", None),
+        incar=incar_layer,
+        cli=cli,
+    )
+    engine_config = EngineConfig.from_resolved(resolved)
+    engine_config.output_dir = Path(output_dir if output_dir else getattr(args, "output", "."))
+    engine_config.job_name = job_name if job_name is not None else getattr(args, "name", None)
+    return engine_config, resolved, settings
+
+
+def _emit_resolved_config(resolved, output_dir: Path) -> None:
+    """Write resolved_config.json when enabled (plan section 15 / 4.5)."""
+    import json  # noqa: PLC0415
+
+    if not resolved.settings.get("write_resolved_config", True):
+        return
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        (output_dir / "resolved_config.json").write_text(
+            json.dumps(resolved.as_dict(), indent=2, default=str),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
 def cmd_run(args: argparse.Namespace) -> int:
-    """Execute 'run' command."""
     started_at = _run_started_at(args)
     # Load configuration
     incar_path = Path(args.incar)
@@ -540,36 +763,23 @@ def cmd_run(args: argparse.Namespace) -> int:
     print(f"Atoms: {len(atoms)}")
     print()
 
-    # Determine calculation type
+    # Determine calculation type from INCAR (authoritative for the `run` flow).
     calc_type = config.get_str("CALC_TYPE", "sp").lower()
-    output_dir = Path(args.output)
     job_name = config.get_str("JOB_NAME", None)
+    # The INCAR dict (UPPER keys) is passed as a resolver layer; aliases are
+    # canonicalised automatically (MODEL_TYPE -> model_type, FMAX -> fmax ...).
+    incar_layer = {str(k): v for k, v in config.items()}
 
-    engine_config = EngineConfig(
-        calc_type=calc_type,
-        model_path=Path(config.get_str("MODEL_PATH", "uma-s-1.pt")),
-        model_type=config.get_str("MODEL_TYPE", "uma"),
-        task=config.get_str("TASK", "omat"),
-        device=config.get_str("DEVICE", "cpu"),
-        inference_mode=config.get_str("INFERENCE_MODE", "default"),
-        output_dir=output_dir,
+    engine_config, resolved, _settings = _resolve_engine_config(
+        args,
+        calc_type,
+        incar_layer=incar_layer,
+        output_dir=args.output,
         job_name=job_name,
-        options={
-            "fmax": config.get_float("FMAX", 0.05),
-            "max_steps": config.get_int("MAX_STEPS", 500),
-            "optimizer": config.get_str("OPT_ALGO", "FIRE"),
-            "cell_opt": config.get_bool("CELL_OPT", False),
-            "fix_symmetry": config.get_bool("FIX_SYMMETRY", False),
-            "ensemble": config.get_str("MD_ENSEMBLE", "NVT"),
-            "temperature": config.get_float("TEMPERATURE", 300.0),
-            "timestep": config.get_float("TIMESTEP", 1.0),
-            "steps": config.get_int("STEPS", 1000),
-            "friction": config.get_float("FRICTION", 0.001),
-            "save_interval": config.get_int("SAVE_INTERVAL", 10),
-        },
     )
 
     try:
+        _emit_resolved_config(resolved, engine_config.output_dir)
         engine = CalculationEngine.from_config(engine_config)
         engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
@@ -587,15 +797,7 @@ def cmd_sp(args: argparse.Namespace) -> int:
         print(f"Error: Structure file not found: {structure_path}")
         return 1
 
-    config = EngineConfig(
-        calc_type="sp",
-        model_path=Path(args.model),
-        model_type=args.model_type,
-        task=args.task,
-        device=args.device,
-        output_dir=Path(args.output),
-        job_name=args.name,
-    )
+    config, resolved, _settings = _resolve_engine_config(args, "sp")
 
     print_header()
     print(f"System: reading from {structure_path}")
@@ -605,6 +807,7 @@ def cmd_sp(args: argparse.Namespace) -> int:
         print(f"System: {atoms.get_chemical_formula()}")
         print(f"Atoms: {len(atoms)}")
 
+        _emit_resolved_config(resolved, config.output_dir / (config.job_name or "") if config.job_name else config.output_dir)
         engine = CalculationEngine.from_config(config)
         engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
@@ -622,22 +825,7 @@ def cmd_opt(args: argparse.Namespace) -> int:
         print(f"Error: Structure file not found: {structure_path}")
         return 1
 
-    config = EngineConfig(
-        calc_type="opt",
-        model_path=Path(args.model),
-        model_type=args.model_type,
-        task=args.task,
-        device=args.device,
-        output_dir=Path(args.output),
-        job_name=args.name,
-        options={
-            "fmax": args.fmax,
-            "max_steps": args.max_steps,
-            "optimizer": args.optimizer,
-            "cell_opt": args.cell_opt,
-            "fix_symmetry": args.fix_symmetry,
-        },
-    )
+    config, resolved, _settings = _resolve_engine_config(args, "opt")
 
     print_header()
     print(f"Reading structure from: {structure_path}")
@@ -647,6 +835,7 @@ def cmd_opt(args: argparse.Namespace) -> int:
         print(f"System: {atoms.get_chemical_formula()}")
         print(f"Atoms: {len(atoms)}")
 
+        _emit_resolved_config(resolved, config.output_dir / (config.job_name or "") if config.job_name else config.output_dir)
         engine = CalculationEngine.from_config(config)
         engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
@@ -664,27 +853,7 @@ def cmd_md(args: argparse.Namespace) -> int:
         print(f"Error: Structure file not found: {structure_path}")
         return 1
 
-    config = EngineConfig(
-        calc_type="md",
-        model_path=Path(args.model),
-        model_type=args.model_type,
-        task=args.task,
-        device=args.device,
-        inference_mode="turbo",
-        output_dir=Path(args.output),
-        job_name=args.name,
-        options={
-            "ensemble": args.ensemble,
-            "temperature": args.temp,
-            "timestep": args.timestep,
-            "steps": args.steps,
-            "friction": args.friction,
-            "save_interval": args.save_interval,
-            "pre_relax": args.pre_relax,
-            "pre_relax_steps": args.pre_relax_steps,
-            "pre_relax_fmax": args.pre_relax_fmax,
-        },
-    )
+    config, resolved, _settings = _resolve_engine_config(args, "md")
 
     print_header()
     print(f"Reading structure from: {structure_path}")
@@ -694,6 +863,7 @@ def cmd_md(args: argparse.Namespace) -> int:
         print(f"System: {atoms.get_chemical_formula()}")
         print(f"Atoms: {len(atoms)}")
 
+        _emit_resolved_config(resolved, config.output_dir / (config.job_name or "") if config.job_name else config.output_dir)
         engine = CalculationEngine.from_config(config)
         engine.run(atoms, log_fn=_console_log, started_at=started_at)
         return 0
@@ -711,27 +881,17 @@ def cmd_batch(args: argparse.Namespace) -> int:
         print(f"Error: Input directory not found: {input_dir}")
         return 1
 
-    config = EngineConfig(
-        calc_type="batch",
-        model_path=Path(args.model),
-        model_type=args.model_type,
-        task=args.task,
-        device=args.device,
-        output_dir=Path(args.output),
-        job_name=args.name,
-        options={
-            "sub_calc_type": args.calc_type,
-            "pattern": args.pattern,
-        },
-    )
+    config, resolved, _settings = _resolve_engine_config(args, "batch")
+    pattern = resolved.run_options.get("pattern", "*.cif")
 
     print_header()
 
     try:
+        _emit_resolved_config(resolved, config.output_dir / (config.job_name or "") if config.job_name else config.output_dir)
         engine = CalculationEngine.from_config(config)
-        files = list(input_dir.glob(args.pattern))
+        files = list(input_dir.glob(pattern))
         if not files:
-            print(f"No files matching '{args.pattern}' found in {input_dir}")
+            print(f"No files matching '{pattern}' found in {input_dir}")
             return 1
         print(f"Found {len(files)} structure files")
         summary = engine.run_batch(
@@ -745,6 +905,99 @@ def cmd_batch(args: argparse.Namespace) -> int:
     except Exception as e:
         print(f"Error: {e}")
         return 1
+
+def cmd_config(args: argparse.Namespace) -> int:
+    """Execute 'config' subcommands (plan section 4.2 / 9 / 17.6)."""
+    sub = args.config_command
+
+    if sub == "paths":
+        settings = _load_settings(args)
+        print("settings.ini search paths (high priority first):")
+        for path in settings.searched:
+            marker = "  (loaded)" if path in settings.loaded_paths else ""
+            print(f"  {path}{marker}")
+        if not settings.loaded_paths:
+            print("  (no settings.ini found; using built-in defaults)")
+        return 0
+
+    if sub == "init":
+        if args.output:
+            target = args.output
+        elif args.user:
+            target = "user"
+        else:
+            # default to project-level when neither flag is given
+            target = "project"
+        try:
+            path = init_settings_file(target, force=args.force)
+        except FileExistsError as exc:
+            print(f"Error: {exc} (use --force to overwrite)")
+            return 1
+        print(f"Wrote settings.ini: {path}")
+        return 0
+
+    if sub == "validate":
+        explicit = args.path
+        settings = _load_settings(argparse.Namespace(settings=explicit)) if explicit else _load_settings(args)
+        # Re-parse strictly to surface parser errors.
+        import configparser  # noqa: PLC0415
+        parser = configparser.ConfigParser(interpolation=None)
+        paths_to_check = [Path(explicit)] if explicit else settings.loaded_paths
+        if not paths_to_check:
+            print("No settings.ini found to validate.")
+            return 1
+        errors: list[str] = []
+        for p in paths_to_check:
+            try:
+                parser.read(p, encoding="utf-8")
+            except (configparser.Error, OSError) as exc:
+                errors.append(f"{p}: {exc}")
+        # Schema-validate every section's keys.
+        schema = get_schema()
+        known = schema.known_names()
+        for section in parser.sections():
+            for key, _value in parser.items(section):
+                if key.lower() not in known and not section.startswith(("engine:", "model:", "profile:")):
+                    suggestion = schema.suggest(key)
+                    hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+                    errors.append(f"[{section}] unknown key {key!r}.{hint}")
+        if errors:
+            print("settings.ini validation errors:")
+            for err in errors:
+                print(f"  - {err}")
+            return 1
+        print(f"settings.ini OK ({len(paths_to_check)} file(s)).")
+        return 0
+
+    if sub == "explain":
+        # Explain uses a representative md resolve; the source trace is what matters.
+        settings = _load_settings(args)
+        resolved = resolve_config(calc_type="md", settings=settings)
+        print(resolved.explain(args.key))
+        return 0
+
+    if sub == "schema":
+        schema = get_schema()
+        print(f"{'name':24s} {'type':8s} {'scopes':24s} aliases")
+        print("-" * 80)
+        for spec in schema.specs:
+            scopes = ",".join(sorted(spec.scopes))
+            aliases = ",".join(sorted(spec.aliases)) if spec.aliases else ""
+            print(f"{spec.name:24s} {spec.type.__name__:8s} {scopes:24s} {aliases}")
+        return 0
+
+    # sub == "show"
+    settings = _load_settings(args)
+    resolved = resolve_config(calc_type="md", settings=settings)
+    print("Resolved configuration (calc_type=md, no CLI overrides):")
+    print(f"  settings.ini: {resolved.settings_path or '(built-in defaults)'}")
+    print(f"  model_type  : {resolved.model_type}")
+    print(f"  task        : {resolved.task}")
+    print(f"  device      : {resolved.device}")
+    print(f"  inference_mode: {resolved.inference_mode}")
+    print(f"  calculator_options: {resolved.calculator_options}")
+    print(f"  run_options: {resolved.run_options}")
+    return 0
 
 
 def cmd_template(args: argparse.Namespace) -> int:
@@ -880,8 +1133,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
-    # --json output must be clean (no banner) for scripting.
-    if not (args.command == "setup" and getattr(args, "json", False)):
+    # --json output must be clean (no banner) for scripting. The `config`
+    # subcommands also produce machine/script-oriented output, so suppress the
+    # banner for them too.
+    suppress_banner = (
+        args.command == "setup"
+        and getattr(args, "json", False)
+    ) or args.command == "config"
+    if not suppress_banner:
         print_header()
 
     # Dispatch to appropriate command handler
@@ -891,6 +1150,7 @@ def main(argv: list[str] | None = None) -> int:
         "opt": cmd_opt,
         "md": cmd_md,
         "batch": cmd_batch,
+        "config": cmd_config,
         "template": cmd_template,
         "doctor": cmd_doctor,
         "setup": cmd_setup,

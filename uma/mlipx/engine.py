@@ -42,13 +42,22 @@ class EngineConfig:
         model_path: Path to model checkpoint/file.
         model_type: MLIP engine (uma, mace, dpa, grace).
         task: Task type. UMA: omat/omol/...; others: bulk/molecule.
-        device: cpu or cuda.
-        inference_mode: default or turbo (UMA only).
+        device: cpu, cuda, gpu or cuda:N.
+        inference_mode: default or turbo (UMA only; ignored by other engines).
         output_dir: Directory for output files.
         job_name: Optional job name.
-        options: Calc-type-specific parameters (fmax, temperature, etc.).
-        torch_num_threads: CPU thread count for torch.
-        activation_checkpointing: GPU memory saving (overrides inference_mode preset).
+        calculator_options: Engine-specific options that reach the underlying
+            ASE calculator (e.g. MACE ``default_dtype``/``head``, UMA
+            ``inference_mode``/``torch_num_threads``). Plan section 11.1.
+        run_options: Calc-type-specific parameters (fmax, temperature, ...).
+        options: *Deprecated* untyped bag. Kept for backward compatibility;
+            routed into run/calculator options on first use with a
+            DeprecationWarning. New code should use the two fields above.
+        torch_num_threads: CPU thread count for torch (UMA).
+        activation_checkpointing: GPU memory saving (UMA; overrides
+            inference_mode preset).
+        strict_config: When True, unknown option keys raise instead of warn
+            (plan section 10).
         detach: If True, submit as background job.
     """
 
@@ -60,10 +69,34 @@ class EngineConfig:
     inference_mode: str = "default"
     output_dir: Path = field(default_factory=lambda: Path("./results"))
     job_name: str | None = None
+    calculator_options: dict = field(default_factory=dict)
+    run_options: dict = field(default_factory=dict)
+    # Deprecated; kept for backward compatibility (plan section 11).
     options: dict = field(default_factory=dict)
     torch_num_threads: int | None = None
     activation_checkpointing: bool | None = None
+    strict_config: bool = False
     detach: bool = False
+
+    @classmethod
+    def from_resolved(cls, resolved: Any) -> EngineConfig:
+        """Build an EngineConfig from a :class:`ResolvedConfig`.
+
+        This is the bridge between the layered config resolver and the
+        execution engine: CLI/API build a resolved config and hand it here so
+        the engine receives cleanly split calculator/run options.
+        """
+        return cls(
+            calc_type=resolved.calc_type,
+            model_path=Path(resolved.model_path) if resolved.model_path else Path(""),
+            model_type=resolved.model_type,
+            task=resolved.task,
+            device=resolved.device,
+            inference_mode=resolved.inference_mode,
+            calculator_options=dict(resolved.calculator_options),
+            run_options=dict(resolved.run_options),
+            strict_config=resolved.strict,
+        )
 
 
 class CalculationEngine:
@@ -89,39 +122,97 @@ class CalculationEngine:
                 f"Unknown calc_type '{self.config.calc_type}'. "
                 f"Must be one of: {', '.join(self.VALID_CALC_TYPES)}"
             )
-        # Warn about unknown option keys
-        known_sp = set()
-        known_opt = {"fmax", "max_steps", "optimizer", "cell_opt", "fix_symmetry"}
-        known_md = {
-            "ensemble",
-            "temperature",
-            "timestep",
-            "steps",
-            "friction",
-            "save_interval",
-            "pre_relax",
-            "pre_relax_steps",
-            "pre_relax_fmax",
-        }
-        known_batch = {"pattern", "sub_calc_type", "parallel", "max_workers"}
-        known_all = known_sp | known_opt | known_md | known_batch
-        unknown = set(self.config.options.keys()) - known_all
-        for key in unknown:
-            warnings.warn(
-                f"Unknown option '{key}' for calc_type '{self.config.calc_type}'"
+        # Validate option keys against the central schema (plan section 10).
+        # In strict mode unknown / mistyped keys raise; otherwise they warn,
+        # preserving the historical non-fatal behaviour.
+        from mlipx.config.schema import get_schema  # noqa: PLC0415
+
+        schema = get_schema()
+        merged: dict[str, Any] = {}
+        merged.update(self._effective_calculator_options())
+        merged.update(self._effective_run_options())
+        errors = schema.validate_dict(
+            merged,
+            strict=self.config.strict_config,
+            context=f"calc_type={self.config.calc_type}",
+        )
+        if self.config.strict_config and errors:
+            raise ValueError(
+                "Strict config validation failed:\n  - " + "\n  - ".join(errors)
             )
+        for err in errors:
+            warnings.warn(err)
+        # Non-strict mode: still warn about unknown keys (with a typo hint) so
+        # silent typos remain visible, matching the historical behaviour.
+        if not self.config.strict_config:
+            for key in merged:
+                if schema.resolve(key) is None:
+                    suggestion = schema.suggest(key)
+                    hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
+                    warnings.warn(
+                        f"Unknown option {key!r} for "
+                        f"calc_type '{self.config.calc_type}'.{hint}"
+                    )
+
+    # Calculator-option keys that may live in the legacy ``options`` dict and
+    # must be routed to ``calculator_options`` for backward compatibility.
+    _CALC_OPTION_KEYS = {
+        "default_dtype",
+        "head",
+        "inference_mode",
+        "torch_num_threads",
+        "activation_checkpointing",
+    }
+
+    def _effective_calculator_options(self) -> dict:
+        """Return calculator options, merging legacy ``options`` calc keys."""
+        opts = dict(self.config.calculator_options)
+        if self.config.options:
+            for key in self._CALC_OPTION_KEYS:
+                if key in self.config.options and key not in opts:
+                    opts[key] = self.config.options[key]
+        return opts
+
+    def _effective_run_options(self) -> dict:
+        """Return run options, falling back to the legacy ``options`` dict."""
+        if self.config.run_options:
+            return dict(self.config.run_options)
+        if self.config.options:
+            warnings.warn(
+                "EngineConfig.options is deprecated; use calculator_options "
+                "and run_options instead (plan section 11).",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return {
+                k: v
+                for k, v in self.config.options.items()
+                if k not in self._CALC_OPTION_KEYS
+            }
+        return {}
 
     def _create_calculator(self) -> BaseMLIPCalculator:
         from mlipx.calculators.factory import CalculatorFactory  # noqa: PLC0415
 
+        calc_opts = self._effective_calculator_options()
+        # The UMA-only top-level fields feed the calculator for UMA engines;
+        # they are intentionally NOT forwarded to MACE/DPA/GRACE (which would
+        # otherwise trigger a cross-engine warning in the factory).
+        if self.config.model_type.lower() in {"uma", "fairchem"}:
+            calc_opts.setdefault("inference_mode", self.config.inference_mode)
+            if self.config.torch_num_threads is not None:
+                calc_opts.setdefault("torch_num_threads", self.config.torch_num_threads)
+            if self.config.activation_checkpointing is not None:
+                calc_opts.setdefault(
+                    "activation_checkpointing", self.config.activation_checkpointing
+                )
         return CalculatorFactory.create(
             model_type=self.config.model_type,
             model_path=self.config.model_path,
             device=self.config.device,
             task=self.config.task,
-            inference_mode=self.config.inference_mode,
-            torch_num_threads=self.config.torch_num_threads,
-            activation_checkpointing=self.config.activation_checkpointing,
+            strict=self.config.strict_config,
+            **calc_opts,
         )
 
     @property
@@ -143,7 +234,7 @@ class CalculationEngine:
         from mlipx.runners.optimization import OptimizationRunner  # noqa: PLC0415
         from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
 
-        opts = self.config.options
+        opts = self._effective_run_options()
         common = dict(
             calculator=calculator,
             output_dir=self.config.output_dir,
@@ -361,7 +452,7 @@ class CalculationEngine:
             calculator.get_calculator()
             timing.mark_compute_started()
 
-            opts = self.config.options
+            opts = self._effective_run_options()
             runner = BatchRunner(
                 calculator,
                 calc_type=opts.get("sub_calc_type", "sp"),

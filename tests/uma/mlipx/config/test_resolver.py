@@ -1,0 +1,197 @@
+"""Tests for mlipx.config.resolver (layered config resolution)."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+
+from mlipx.config.resolver import ResolvedValue, resolve_config
+from mlipx.config.settings import load_settings
+
+# ---------------------------------------------------------------------------
+# Basic resolution (built-in only)
+# ---------------------------------------------------------------------------
+
+def test_builtin_sp_defaults() -> None:
+    rc = resolve_config(calc_type="sp")
+    assert rc.calc_type == "sp"
+    assert rc.model_type == "uma"
+    assert rc.device == "cpu"
+    assert rc.inference_mode == "default"
+    # model_type is a model-level attribute, not in sources dict
+    assert rc.model_type == "uma"
+
+
+def test_builtin_md_defaults() -> None:
+    rc = resolve_config(calc_type="md")
+    assert rc.model_type == "uma"
+    assert rc.device == "cuda"
+    assert rc.inference_mode == "turbo"
+    # MD auto-seeds
+    assert "seed" in rc.run_options
+    assert rc.sources["seed"].source == "auto-generated"
+
+
+def test_builtin_opt_defaults() -> None:
+    rc = resolve_config(calc_type="opt")
+    assert rc.run_options.get("fmax") == 0.05
+    assert rc.run_options.get("optimizer") == "FIRE"
+    assert rc.run_options.get("max_steps") == 500
+
+
+# ---------------------------------------------------------------------------
+# Source tracking
+# ---------------------------------------------------------------------------
+
+def test_source_tracking_cli_override() -> None:
+    rc = resolve_config(calc_type="sp", cli={"device": "cuda:0"})
+    assert rc.device == "cuda:0"
+    assert rc.sources["device"] == ResolvedValue("cuda:0", "CLI")
+
+
+def test_source_tracking_settings_override() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text("[general]\ndevice = cuda:0\n")
+        s = load_settings(explicit=str(ini))
+        rc = resolve_config(calc_type="sp", settings=s)
+        assert rc.device == "cuda:0"
+        source = rc.sources["device"]
+        assert source.source == "settings.ini"
+
+
+def test_source_tracking_cli_beats_settings() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text("[general]\ndevice = cuda:0\n")
+        s = load_settings(explicit=str(ini))
+        rc = resolve_config(calc_type="sp", settings=s, cli={"device": "cpu"})
+        assert rc.device == "cpu"
+        assert rc.sources["device"] == ResolvedValue("cpu", "CLI")
+
+
+# ---------------------------------------------------------------------------
+# Model aliases
+# ---------------------------------------------------------------------------
+
+def test_model_alias_sets_engine_and_task() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[model:mace_test]\n"
+            "engine = mace\n"
+            "path = ./fake.model\n"
+            "task = bulk\n"
+            "dtype = float64\n"
+        )
+        s = load_settings(explicit=str(ini))
+        rc = resolve_config(calc_type="sp", settings=s, model_alias_name="mace_test")
+        assert rc.model_type == "mace"
+        assert rc.task == "bulk"
+        assert rc.calculator_options.get("default_dtype") == "float64"
+
+
+def test_model_alias_path_resolves_relative_to_ini() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        model_file = Path(d) / "fake.model"
+        model_file.touch()
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[model:mace_mpa0]\n"
+            "engine = mace\n"
+            "path = ./fake.model\n"
+            "task = bulk\n"
+        )
+        s = load_settings(explicit=str(ini))
+        rc = resolve_config(calc_type="sp", settings=s, model_alias_name="mace_mpa0")
+        assert rc.model_path == str(model_file.resolve())
+
+
+def test_cli_dtype_overrides_alias() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[model:mace_test]\n"
+            "engine = mace\n"
+            "path = ./fake.model\n"
+            "dtype = float32\n"
+        )
+        s = load_settings(explicit=str(ini))
+        # CLI dtype=float64 overrides alias dtype=float32
+        rc = resolve_config(
+            calc_type="sp", settings=s, model_alias_name="mace_test",
+            cli={"default_dtype": "float64"},
+        )
+        assert rc.calculator_options.get("default_dtype") == "float64"
+        assert rc.sources["default_dtype"] == ResolvedValue("float64", "CLI")
+
+
+# ---------------------------------------------------------------------------
+# Profiles
+# ---------------------------------------------------------------------------
+
+def test_profile_applies_overrides() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[profile:gpu_prod]\n"
+            "device = cuda:1\n"
+            "max_steps = 1000\n"
+        )
+        s = load_settings(explicit=str(ini))
+        rc = resolve_config(calc_type="opt", settings=s, profile_name="gpu_prod")
+        assert rc.device == "cuda:1"
+        assert rc.run_options.get("max_steps") == 1000
+
+
+# ---------------------------------------------------------------------------
+# Settings bag - non-run keys don't pollute run_options
+# ---------------------------------------------------------------------------
+
+def test_output_keys_land_in_settings() -> None:
+    """INCAR output keys (WRITE_FORCES, etc.) go to settings, not run_options."""
+    rc = resolve_config(calc_type="sp", incar={"WRITE_FORCES": True})
+    assert "write_forces" not in rc.run_options
+    assert rc.settings.get("write_forces") is True
+
+
+# ---------------------------------------------------------------------------
+# as_dict / JSON roundtrip
+# ---------------------------------------------------------------------------
+
+def test_as_dict_is_serializable() -> None:
+    rc = resolve_config(calc_type="md", cli={"temperature": 500.0})
+    d = rc.as_dict()
+    assert d["calc_type"] == "md"
+    assert d["run_options"]["temperature"] == 500.0
+    # Must be JSON-serializable (ResolvedValue converted via default=str)
+    json.dumps(d, default=str)
+
+
+# ---------------------------------------------------------------------------
+# Edge cases
+# ---------------------------------------------------------------------------
+
+def test_empty_cli_is_noop() -> None:
+    rc_default = resolve_config(calc_type="sp")
+    rc_empty = resolve_config(calc_type="sp", cli={})
+    assert rc_default.device == rc_empty.device
+    assert rc_default.inference_mode == rc_empty.inference_mode
+
+
+def test_none_cli_is_noop() -> None:
+    rc = resolve_config(calc_type="sp", cli=None)
+    assert rc.device == "cpu"
+
+
+def test_batch_calc_type() -> None:
+    rc = resolve_config(calc_type="batch")
+    assert rc.calc_type == "batch"
+    assert rc.device == "cpu"
+
+
+def test_sp_no_auto_seed() -> None:
+    """Only MD auto-generates a seed."""
+    rc = resolve_config(calc_type="sp")
+    assert "seed" not in rc.run_options

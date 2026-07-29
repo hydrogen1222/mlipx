@@ -36,7 +36,7 @@ if TYPE_CHECKING:
 
 
 class NumpyEncoder(json.JSONEncoder):
-    """JSON encoder that handles numpy arrays and other special types."""
+    """JSON encoder that handles arrays, tensors, and other special types."""
 
     def default(self, obj: Any) -> Any:
         """Convert numpy types to JSON-serializable types."""
@@ -50,6 +50,18 @@ class NumpyEncoder(json.JSONEncoder):
             return bool(obj)
         if isinstance(obj, Path):
             return str(obj)
+        # Do not import torch at module import time: JSON output must keep
+        # working for non-PyTorch backends.  PyTorch tensors expose all three
+        # methods below; detach before moving to CPU to avoid autograd/device
+        # conversion errors.
+        if (
+            type(obj).__module__.startswith("torch")
+            and hasattr(obj, "detach")
+            and hasattr(obj, "cpu")
+            and hasattr(obj, "tolist")
+        ):
+            value = obj.detach().cpu()
+            return value.item() if value.ndim == 0 else value.tolist()
         return super().default(obj)
 
 

@@ -404,15 +404,43 @@ result = run_single_point(
 
 > ⚠️ **环境隔离警告**：`mace-torch` 锁定 `e3nn==0.4.4`，与 `fairchem-core`（`e3nn>=0.5`）**根本冲突**，二者不能装在同一 Python 环境中。
 >
-> **推荐做法**：为 MACE/DPA/GRACE 创建独立环境：
+> **推荐做法**：保留 `uv sync` 创建的 `.venv` 专供 UMA，并创建另一个
+> `.venv-mace`。不要在 UMA 环境里执行 `pip install mace-torch`：
 > ```bash
-> # MACE 专用环境
-> uv venv .venv-mace && source .venv-mace/bin/activate
-> pip install mace-torch
-> pip install -e uma/        # 安装 mlipx（不含 fairchem-core 依赖时仍可调用 MACE）
+> # 在仓库根目录执行；明确使用 Python 3.12（项目不支持 3.13+）
+> uv venv --python 3.12 .venv-mace
+> uv pip install --python .venv-mace/bin/python -e ./uma
+> uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
+>
+> # UMA：始终使用仓库的 uv 环境
+> uv run mlipx doctor
+> uv run mlipx tui
+>
+> # MACE：始终显式使用 MACE 环境
+> .venv-mace/bin/mlipx doctor
+> .venv-mace/bin/mlipx tui
 > ```
 >
-> 运行 `mlipx doctor` 可检测各引擎后端是否就绪（未安装的引擎会显示 warn 状态）。
+> `doctor` 现在会检查已安装发行包的依赖约束；如果同一环境中同时出现
+> `mace-torch`、`fairchem-core` 和不兼容的 e3nn，会明确显示
+> `Engine dependencies: incompatible`。但“包可以 import”仍不等于模型一定
+> 可加载，因此安装后应按下文执行一次模型冒烟测试。
+
+**MACE CUDA 冒烟测试（正式长 MD 前必须先跑）：**
+
+```bash
+nvidia-smi
+.venv-mace/bin/python -c \
+  "import torch,e3nn; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), e3nn.__version__)"
+
+.venv-mace/bin/mlipx md test.vasp --model mace.model \
+  --model-type mace --task bulk --device cuda \
+  --steps 1 --save-interval 1 --no-pre-relax \
+  --output /tmp/mlipx-mace-smoke --name smoke
+```
+
+成功标准：日志完成第 1 步、退出码为 0，并生成完整的 OUTCAR、XDATCAR 和
+`mlipx_results.json`。之后再通过 `.venv-mace/bin/mlipx tui` 提交长任务。
 
 ### 任务映射与周期性边界 (PBC)
 
@@ -447,6 +475,8 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 |------|------|----------|
 | `Backend mace_torch not installed` | 后端包未安装 | `pip install mace-torch`（在隔离环境） |
 | `ImportError: e3nn` 版本冲突 | mace 与 fairchem 同环境 | 为 MACE 创建独立 venv |
+| `too many values to unpack (expected 2)` | MACE 模型由 e3nn 0.4.4 保存，却被 e3nn 0.5/0.6 加载 | 使用 `.venv-mace`，确认 `e3nn.__version__ == 0.4.4` |
+| `Object of type Tensor is not JSON serializable` | 旧版 mlipx 将 MACE Tensor 元数据直接写入 JSON | 更新 mlipx；当前版本已将 Tensor 转成标量/列表 |
 | `Model file not found` | 路径错误 | 用绝对路径指定 `--model` |
 | UMA 能用但 MACE 报错 | 同环境 e3nn 冲突 | 见上文环境隔离 |
 | task `bulk` 在 UMA 下无效 | UMA 不识别 bulk | UMA 用 omat；bulk 仅用于非 UMA 引擎 |

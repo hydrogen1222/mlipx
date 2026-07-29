@@ -30,8 +30,11 @@ Both manuals are wiki-level references covering: installation, quick start, arch
 git clone https://github.com/hydrogen1222/mlipx.git
 cd mlipx
 
-# Create .venv and install all dependencies
+# Create the UMA environment and install its dependencies
 uv sync
+
+# Always run the copy belonging to this repository
+uv run mlipx doctor
 ```
 
 GPU users: see the [installation section](uma/docs/README_EN.md#2-installation) of the manual for CUDA/PyTorch matching by GPU architecture.
@@ -40,20 +43,20 @@ GPU users: see the [installation section](uma/docs/README_EN.md#2-installation) 
 
 ```bash
 # Single-point energy with the default UMA engine
-mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
+uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
 
 # Geometry optimization (with cell relaxation)
-mlipx opt structure.cif --model uma-s-1.pt --task omat --cell-opt --fmax 0.02
+uv run mlipx opt structure.cif --model uma-s-1.pt --task omat --cell-opt --fmax 0.02
 
 # Molecular dynamics on GPU with turbo inference
-mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --steps 10000
+uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --steps 10000
 ```
 
 ### Use a different MLIP engine
 
 ```bash
-# MACE (install backend first: pip install mace-torch)
-mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
+# MACE must run from its isolated environment; see below
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
 
 # DPA / DeepMD (pip install 'deepmd-kit>=3.0.0')
 mlipx opt bulk.cif --model dpa2.pth --model-type dpa --task bulk --fmax 0.05
@@ -100,7 +103,27 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 | `dpa` | DPA — DeepMD-kit | `deepmd-kit` | `bulk` / `molecule` |
 | `grace` | GRACE | `tensorpotential` | `bulk` / `molecule` |
 
-> ⚠️ **Engine isolation note:** `mace-torch` pins `e3nn==0.4.4`, which conflicts with `fairchem-core` (`e3nn>=0.5`). MACE/DPA/GRACE backends must be installed in a **separate environment** from `fairchem-core`. See the [Multi-Engine Guide](uma/docs/README_EN.md#multi-engine-guide) for details.
+> ⚠️ **MACE isolation is mandatory:** `mace-torch==0.3.16` pins
+> `e3nn==0.4.4`, while `fairchem-core` requires `e3nn>=0.5`. Installing MACE
+> into the UMA `.venv` can pass an import-only check and still fail while
+> loading a model with `ValueError: too many values to unpack (expected 2)`.
+> Create a dedicated MACE environment:
+>
+> ```bash
+> uv venv --python 3.12 .venv-mace
+> uv pip install --python .venv-mace/bin/python -e ./uma
+> uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
+>
+> .venv-mace/bin/mlipx tui
+> # or:
+> .venv-mace/bin/mlipx md structure.cif --model mace.model \
+>   --model-type mace --task bulk --device cuda --steps 10
+> ```
+>
+> Use `uv run mlipx ...` for UMA and `.venv-mace/bin/mlipx ...` for MACE.
+> Do not activate both environments or run a globally installed `mlipx`.
+> See the [English](uma/docs/README_EN.md#backend-installation--environment-isolation)
+> or [Chinese](uma/docs/README_CN.md#各引擎后端安装与环境隔离) guide.
 
 ---
 

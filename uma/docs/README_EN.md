@@ -405,15 +405,45 @@ result = run_single_point(
 
 > ⚠️ **Environment isolation warning:** `mace-torch` pins `e3nn==0.4.4`, which **fundamentally conflicts** with `fairchem-core` (`e3nn>=0.5`) - they cannot coexist in one Python environment.
 >
-> **Recommended approach:** create a separate environment for MACE/DPA/GRACE:
+> **Recommended approach:** keep the `.venv` created by `uv sync` for UMA and
+> create a separate `.venv-mace`. Never install `mace-torch` into the UMA
+> environment:
 > ```bash
-> # MACE-dedicated environment
-> uv venv .venv-mace && source .venv-mace/bin/activate
-> pip install mace-torch
-> pip install -e uma/        # install mlipx (can still call MACE without fairchem-core)
+> # Run from the repository root; the project does not support Python 3.13+
+> uv venv --python 3.12 .venv-mace
+> uv pip install --python .venv-mace/bin/python -e ./uma
+> uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
+>
+> # UMA: always use the repository's uv environment
+> uv run mlipx doctor
+> uv run mlipx tui
+>
+> # MACE: explicitly use the MACE environment
+> .venv-mace/bin/mlipx doctor
+> .venv-mace/bin/mlipx tui
 > ```
 >
-> Run `mlipx doctor` to check whether each engine backend is ready (uninstalled engines show a warn status).
+> `doctor` now checks installed distribution constraints. If `mace-torch`,
+> `fairchem-core`, and an incompatible e3nn coexist, it reports
+> `Engine dependencies: incompatible`. An import check still cannot prove that
+> a checkpoint can be loaded, so run the model smoke test below after setup.
+
+**MACE CUDA smoke test (required before a long MD run):**
+
+```bash
+nvidia-smi
+.venv-mace/bin/python -c \
+  "import torch,e3nn; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), e3nn.__version__)"
+
+.venv-mace/bin/mlipx md test.vasp --model mace.model \
+  --model-type mace --task bulk --device cuda \
+  --steps 1 --save-interval 1 --no-pre-relax \
+  --output /tmp/mlipx-mace-smoke --name smoke
+```
+
+Success means step 1 completes, the process exits with code 0, and complete
+OUTCAR, XDATCAR, and `mlipx_results.json` files are produced. Only then submit
+the long job with `.venv-mace/bin/mlipx tui`.
 
 ### Task Mapping & Periodic Boundaries (PBC)
 
@@ -448,6 +478,8 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 |---------|-------|----------|
 | `Backend mace_torch not installed` | Backend package missing | `pip install mace-torch` (in isolated env) |
 | `ImportError: e3nn` version conflict | mace + fairchem in same env | Create a separate venv for MACE |
+| `too many values to unpack (expected 2)` | A model saved with e3nn 0.4.4 is loaded by e3nn 0.5/0.6 | Use `.venv-mace`; verify `e3nn.__version__ == 0.4.4` |
+| `Object of type Tensor is not JSON serializable` | An older mlipx wrote MACE tensor metadata directly to JSON | Update mlipx; the current writer converts tensors to scalars/lists |
 | `Model file not found` | Wrong path | Use an absolute path for `--model` |
 | UMA works but MACE errors | e3nn conflict in same env | See environment isolation above |
 | task `bulk` invalid under UMA | UMA does not recognize bulk | Use omat for UMA; bulk is for non-UMA engines |

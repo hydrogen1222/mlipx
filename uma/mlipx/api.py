@@ -8,8 +8,10 @@ Modified for the mlipx project: multi-engine MLIP support (UMA/MACE/DPA/GRACE).
 Programmatic API for mlipx.
 
 Provides high-level functions for running calculations from Python scripts.
-This module is designed for external scripts that need to integrate UMA
-calculations into complex workflows.
+This module is designed for external scripts that need to integrate MLIP
+calculations into complex workflows.  All functions route through
+``resolve_config()`` so built-in defaults, model aliases and settings.ini
+are honoured (Phase 1 plan).
 
 Example:
     >>> from mlipx.api import run_single_point, calculate_energy
@@ -72,15 +74,89 @@ def _console_log(message: str, level: str = "info") -> None:
     print(message, flush=True)
 
 
+def _build_api_cli(
+    calc_type: str,
+    model_type: str | None,
+    task: str | None,
+    device: str | None,
+    inference_mode: str | None,
+    default_dtype: str | None,
+    head: str | None,
+    extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Collect non-None API kwargs into a canonical option dict for the resolver."""
+    cli: dict[str, Any] = {}
+    for key, value in (
+        ("model_type", model_type),
+        ("task", task),
+        ("device", device),
+        ("inference_mode", inference_mode),
+        ("default_dtype", default_dtype),
+        ("head", head),
+    ):
+        if value is not None:
+            cli[key] = value
+    if extra:
+        for k, v in extra.items():
+            if v is not None:
+                cli[k] = v
+    return cli
+
+
+def _api_resolve(
+    calc_type: str,
+    model_path: str,
+    cli: dict[str, Any],
+    output_dir: str,
+    job_name: str | None,
+    settings_path: str | None,
+    model_alias: str | None,
+    profile: str | None,
+    strict_config: bool | None,
+) -> EngineConfig:
+    """Thin wrapper around resolve_config for the API layer."""
+    from mlipx.config import load_settings  # noqa: PLC0415
+    from mlipx.config import resolve_config  # noqa: PLC0415
+
+    settings = load_settings(explicit=settings_path)
+    if model_path:
+        cli.setdefault("model_path", model_path)
+    resolved = resolve_config(
+        calc_type=calc_type,
+        settings=settings,
+        cli=cli,
+        model_alias_name=model_alias,
+        profile_name=profile,
+    )
+    ec = EngineConfig.from_resolved(resolved)
+    ec.output_dir = Path(output_dir)
+    if job_name:
+        ec.job_name = job_name
+    if strict_config is not None:
+        ec.strict_config = strict_config
+    return ec
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
 def run_single_point(
     structure: Atoms | str | Path,
     model_path: str,
-    model_type: str = "uma",
-    task: str = "omat",
-    device: str = "cpu",
+    model_type: str | None = None,
+    task: str | None = None,
+    device: str | None = None,
+    inference_mode: str | None = None,
     job_name: str | None = None,
     output_dir: str = "./results",
     verbose: bool = True,
+    settings_path: str | None = None,
+    model_alias: str | None = None,
+    default_dtype: str | None = None,
+    head: str | None = None,
+    profile: str | None = None,
+    strict_config: bool | None = None,
     **kwargs,
 ) -> dict[str, Any]:
     """Run single point calculation.
@@ -90,12 +166,20 @@ def run_single_point(
     Args:
         structure: ASE Atoms object or path to structure file
         model_path: Path to model checkpoint
-        model_type: MLIP engine (uma, mace, dpa, grace) (omat, omol, oc20, oc25, odac, omc)
-        device: Device for calculation (cpu or cuda)
-        job_name: Optional job name for organizing results
-        output_dir: Base directory for output files
-        verbose: Whether to print progress messages
-        **kwargs: Additional arguments passed to SinglePointRunner
+        model_type: MLIP engine (uma, mace, dpa, grace). None = resolver decides.
+        task: Model head (omat, omol, oc20, oc25, odac, omc).
+        device: Device for calculation (cpu or cuda).
+        inference_mode: Inference-mode override.
+        job_name: Optional job name for organizing results.
+        output_dir: Base directory for output files.
+        verbose: Whether to print progress messages.
+        settings_path: Explicit path to settings.ini.
+        model_alias: Named model alias from settings.ini [model:NAME].
+        default_dtype: MACE dtype override (float32 or float64).
+        head: MACE foundation-model head name.
+        profile: Reusable profile from settings.ini [profile:NAME].
+        strict_config: Override strict-config behaviour.
+        **kwargs: Additional calc/run options forwarded to the resolver.
 
     Returns:
         Dictionary with results (energy, forces, stress, time)
@@ -116,15 +200,10 @@ def run_single_point(
         print(f"Atoms: {len(atoms)}")
         print(f"Loading model: {model_path}")
 
-    config = EngineConfig(
-        calc_type="sp",
-        model_path=Path(model_path),
-        model_type=model_type,
-        task=task,
-        device=device,
-        output_dir=Path(output_dir),
-        job_name=job_name,
-    )
+    cli = _build_api_cli("sp", model_type, task, device, inference_mode,
+                          default_dtype, head, kwargs)
+    config = _api_resolve("sp", model_path, cli, output_dir, job_name,
+                           settings_path, model_alias, profile, strict_config)
     engine = CalculationEngine.from_config(config)
     return engine.run(
         atoms,
@@ -136,38 +215,54 @@ def run_single_point(
 def run_optimization(
     structure: Atoms | str | Path,
     model_path: str,
-    model_type: str = "uma",
-    task: str = "omat",
-    device: str = "cpu",
+    model_type: str | None = None,
+    task: str | None = None,
+    device: str | None = None,
+    inference_mode: str | None = None,
     job_name: str | None = None,
     output_dir: str = "./results",
-    fmax: float = 0.05,
-    max_steps: int = 500,
-    optimizer: str = "FIRE",
-    cell_opt: bool = False,
-    fix_symmetry: bool = False,
+    fmax: float | None = None,
+    max_steps: int | None = None,
+    optimizer: str | None = None,
+    cell_opt: bool | None = None,
+    fix_symmetry: bool | None = None,
     verbose: bool = True,
+    settings_path: str | None = None,
+    model_alias: str | None = None,
+    default_dtype: str | None = None,
+    head: str | None = None,
+    profile: str | None = None,
+    strict_config: bool | None = None,
     **kwargs,
 ) -> dict[str, Any]:
     """Run geometry optimization.
 
     Optimizes atomic positions and optionally cell parameters
-    until forces converge below threshold.
+    until forces converge below threshold.  All defaults are drawn from
+    ``resolve_config()``; only explicitly-passed values act as overrides.
 
     Args:
-        structure: ASE Atoms object or path to structure file
-        model_path: Path to model checkpoint
-        model_type: MLIP engine (uma, mace, dpa, grace) (omat, omol, oc20, oc25, odac, omc)
-        device: Device for calculation (cpu or cuda)
-        job_name: Optional job name for organizing results
-        output_dir: Base directory for output files
-        fmax: Force convergence threshold in eV/Å
-        max_steps: Maximum optimization steps
-        optimizer: Optimization algorithm (FIRE, BFGS, LBFGS)
-        cell_opt: Whether to optimize cell parameters
-        fix_symmetry: Whether to preserve symmetry
-        verbose: Whether to print progress messages
-        **kwargs: Additional arguments passed to OptimizationRunner
+        structure: ASE Atoms object or path to structure file.
+        model_path: Path to model checkpoint.
+        model_type: MLIP engine (uma, mace, dpa, grace).
+        task: Model head.
+        device: Device for calculation (cpu or cuda).
+        inference_mode: Inference-mode override.
+        job_name: Optional job name for organizing results.
+        output_dir: Base directory for output files.
+        fmax: Force convergence threshold in eV/Å.
+        max_steps: Maximum optimization steps.
+        optimizer: Optimization algorithm (FIRE, BFGS, LBFGS).
+        cell_opt: Whether to optimize cell parameters.
+        fix_symmetry: Whether to preserve symmetry.
+        verbose: Whether to print progress messages.
+        settings_path: Explicit path to settings.ini.
+        model_alias: Named model alias from settings.ini.
+        default_dtype: MACE dtype override.
+        head: MACE foundation-model head name.
+        profile: Reusable profile from settings.ini.
+        strict_config: Override strict-config behaviour.
+        **kwargs: Additional options forwarded to the resolver.
 
     Returns:
         Dictionary with results (energy, converged, nsteps, etc.)
@@ -181,7 +276,6 @@ def run_optimization(
         ...     job_name="opt_calc"
         ... )
         >>> print(f"Converged: {results['converged']}")
-        >>> print(f"Final energy: {results['energy']:.4f} eV")
     """
     started_at = time.perf_counter()
     atoms = _load_structure(structure)
@@ -190,22 +284,21 @@ def run_optimization(
         print(f"Atoms: {len(atoms)}")
         print(f"Loading model: {model_path}")
 
-    config = EngineConfig(
-        calc_type="opt",
-        model_path=Path(model_path),
-        model_type=model_type,
-        task=task,
-        device=device,
-        output_dir=Path(output_dir),
-        job_name=job_name,
-        options={
-            "fmax": fmax,
-            "max_steps": max_steps,
-            "optimizer": optimizer,
-            "cell_opt": cell_opt,
-            "fix_symmetry": fix_symmetry,
-        },
-    )
+    extra = dict(kwargs)
+    for name, value in (
+        ("fmax", fmax),
+        ("max_steps", max_steps),
+        ("optimizer", optimizer),
+        ("cell_opt", cell_opt),
+        ("fix_symmetry", fix_symmetry),
+    ):
+        if value is not None:
+            extra[name] = value
+
+    cli = _build_api_cli("opt", model_type, task, device, inference_mode,
+                          default_dtype, head, extra)
+    config = _api_resolve("opt", model_path, cli, output_dir, job_name,
+                           settings_path, model_alias, profile, strict_config)
     engine = CalculationEngine.from_config(config)
     return engine.run(
         atoms,
@@ -217,42 +310,58 @@ def run_optimization(
 def run_md(
     structure: Atoms | str | Path,
     model_path: str,
-    model_type: str = "uma",
-    task: str = "omat",
-    device: str = "cuda",
+    model_type: str | None = None,
+    task: str | None = None,
+    device: str | None = None,
+    inference_mode: str | None = None,
     job_name: str | None = None,
     output_dir: str = "./results",
-    ensemble: str = "NVT",
-    temperature: float = 300.0,
-    timestep: float = 1.0,
-    steps: int = 1000,
-    friction: float = 0.001,
-    save_interval: int = 10,
-    pre_relax: bool = True,
+    ensemble: str | None = None,
+    temperature: float | None = None,
+    timestep: float | None = None,
+    steps: int | None = None,
+    friction: float | None = None,
+    save_interval: int | None = None,
+    pre_relax: bool | None = None,
     verbose: bool = True,
+    settings_path: str | None = None,
+    model_alias: str | None = None,
+    default_dtype: str | None = None,
+    head: str | None = None,
+    profile: str | None = None,
+    strict_config: bool | None = None,
     **kwargs,
 ) -> dict[str, Any]:
     """Run molecular dynamics simulation.
 
     Runs MD simulation using NVT (Langevin) or NVE (Velocity Verlet) ensemble.
-    Includes pre-relaxation step to eliminate internal stress.
+    Includes pre-relaxation step to eliminate internal stress.  All defaults
+    are drawn from ``resolve_config()``.
 
     Args:
-        structure: ASE Atoms object or path to structure file
-        model_path: Path to model checkpoint
-        model_type: MLIP engine (uma, mace, dpa, grace) (omat, omol, oc20, oc25, odac, omc)
-        device: Device for calculation (cpu or cuda)
-        job_name: Optional job name for organizing results
-        output_dir: Base directory for output files
-        ensemble: MD ensemble (NVT or NVE)
-        temperature: Temperature in Kelvin
-        timestep: Time step in femtoseconds
-        steps: Number of MD steps
-        friction: Friction coefficient for NVT (1/fs)
-        save_interval: Interval for saving trajectory frames
-        pre_relax: Whether to perform pre-relaxation before MD
-        verbose: Whether to print progress messages
-        **kwargs: Additional arguments passed to MDRunner
+        structure: ASE Atoms object or path to structure file.
+        model_path: Path to model checkpoint.
+        model_type: MLIP engine (uma, mace, dpa, grace).
+        task: Model head.
+        device: Device for calculation (cpu or cuda).
+        inference_mode: Inference-mode override (md defaults to "turbo").
+        job_name: Optional job name for organizing results.
+        output_dir: Base directory for output files.
+        ensemble: MD ensemble (NVT or NVE).
+        temperature: Temperature in Kelvin.
+        timestep: Time step in femtoseconds.
+        steps: Number of MD steps.
+        friction: Friction coefficient for NVT (1/fs).
+        save_interval: Interval for saving trajectory frames.
+        pre_relax: Whether to perform pre-relaxation before MD.
+        verbose: Whether to print progress messages.
+        settings_path: Explicit path to settings.ini.
+        model_alias: Named model alias from settings.ini.
+        default_dtype: MACE dtype override.
+        head: MACE foundation-model head name.
+        profile: Reusable profile from settings.ini.
+        strict_config: Override strict-config behaviour.
+        **kwargs: Additional options forwarded to the resolver.
 
     Returns:
         Dictionary with results (temperature, energy, etc.)
@@ -275,25 +384,23 @@ def run_md(
         print(f"Atoms: {len(atoms)}")
         print(f"Loading model: {model_path}")
 
-    config = EngineConfig(
-        calc_type="md",
-        model_path=Path(model_path),
-        model_type=model_type,
-        task=task,
-        device=device,
-        inference_mode="turbo",
-        output_dir=Path(output_dir),
-        job_name=job_name,
-        options={
-            "ensemble": ensemble,
-            "temperature": temperature,
-            "timestep": timestep,
-            "steps": steps,
-            "friction": friction,
-            "save_interval": save_interval,
-            "pre_relax": pre_relax,
-        },
-    )
+    extra = dict(kwargs)
+    for name, value in (
+        ("ensemble", ensemble),
+        ("temperature", temperature),
+        ("timestep", timestep),
+        ("steps", steps),
+        ("friction", friction),
+        ("save_interval", save_interval),
+        ("pre_relax", pre_relax),
+    ):
+        if value is not None:
+            extra[name] = value
+
+    cli = _build_api_cli("md", model_type, task, device, inference_mode,
+                          default_dtype, head, extra)
+    config = _api_resolve("md", model_path, cli, output_dir, job_name,
+                           settings_path, model_alias, profile, strict_config)
     engine = CalculationEngine.from_config(config)
     return engine.run(
         atoms,
@@ -305,13 +412,19 @@ def run_md(
 def calculate_energy(
     structure: Atoms | str | Path,
     model_path: str,
-    model_type: str = "uma",
-    task: str = "omat",
-    device: str = "cpu",
+    model_type: str | None = None,
+    task: str | None = None,
+    device: str | None = None,
     relax: bool = False,
-    fmax: float = 0.05,
-    max_steps: int = 100,
+    fmax: float | None = None,
+    max_steps: int | None = None,
     verbose: bool = False,
+    settings_path: str | None = None,
+    model_alias: str | None = None,
+    default_dtype: str | None = None,
+    head: str | None = None,
+    profile: str | None = None,
+    strict_config: bool | None = None,
     **kwargs,
 ) -> float:
     """Calculate energy of a structure.
@@ -320,26 +433,34 @@ def calculate_energy(
     a quick geometry optimization before calculating energy.
 
     Args:
-        structure: ASE Atoms object or path to structure file
-        model_path: Path to model checkpoint
-        model_type: MLIP engine (uma, mace, dpa, grace) (omat, omol, oc20, oc25, odac, omc)
-        device: Device for calculation (cpu or cuda)
-        relax: Whether to pre-relax structure before energy calculation
-        fmax: Force convergence threshold for relaxation (if relax=True)
-        max_steps: Maximum steps for relaxation (if relax=True)
-        verbose: Whether to print progress messages
-        **kwargs: Additional arguments
+        structure: ASE Atoms object or path to structure file.
+        model_path: Path to model checkpoint.
+        model_type: MLIP engine (uma, mace, dpa, grace).
+        task: Model head.
+        device: Device for calculation (cpu or cuda).
+        relax: Whether to pre-relax structure before energy calculation.
+        fmax: Force convergence threshold for relaxation (if relax=True).
+        max_steps: Maximum steps for relaxation (if relax=True).
+        verbose: Whether to print progress messages.
+        settings_path: Explicit path to settings.ini.
+        model_alias: Named model alias from settings.ini.
+        default_dtype: MACE dtype override.
+        head: MACE foundation-model head name.
+        profile: Reusable profile from settings.ini.
+        strict_config: Override strict-config behaviour.
+        **kwargs: Additional options.
 
     Returns:
         Energy in eV
 
     Example:
-        >>> # Direct energy calculation
         >>> energy = calculate_energy("structure.cif", "uma-s-1.pt")
         >>> print(f"Energy: {energy:.4f} eV")
         >>>
         >>> # With pre-relaxation
-        >>> energy = calculate_energy("structure.cif", "uma-s-1.pt", relax=True)
+        >>> energy = calculate_energy(
+        ...     "structure.cif", "uma-s-1.pt", relax=True
+        ... )
     """
     if relax:
         results = run_optimization(
@@ -351,6 +472,12 @@ def calculate_energy(
             fmax=fmax,
             max_steps=max_steps,
             verbose=verbose,
+            settings_path=settings_path,
+            model_alias=model_alias,
+            default_dtype=default_dtype,
+            head=head,
+            profile=profile,
+            strict_config=strict_config,
             **kwargs,
         )
     else:
@@ -361,6 +488,12 @@ def calculate_energy(
             task=task,
             device=device,
             verbose=verbose,
+            settings_path=settings_path,
+            model_alias=model_alias,
+            default_dtype=default_dtype,
+            head=head,
+            profile=profile,
+            strict_config=strict_config,
             **kwargs,
         )
 
@@ -372,11 +505,17 @@ def calculate_adsorption_energy(
     gas_structure: Atoms | str | Path,
     surface_structure: Atoms | str | Path,
     model_path: str,
-    model_type: str = "uma",
-    task: str = "omat",
-    device: str = "cpu",
+    model_type: str | None = None,
+    task: str | None = None,
+    device: str | None = None,
     relax: bool = False,
     verbose: bool = True,
+    settings_path: str | None = None,
+    model_alias: str | None = None,
+    default_dtype: str | None = None,
+    head: str | None = None,
+    profile: str | None = None,
+    strict_config: bool | None = None,
     **kwargs,
 ) -> dict[str, float]:
     """Calculate adsorption energy.
@@ -385,24 +524,26 @@ def calculate_adsorption_energy(
     E_adsorption = E(adsorbed) - E(gas) - E(surface)
 
     Args:
-        adsorbed_structure: Structure with adsorbed molecule
-        gas_structure: Isolated gas molecule structure
-        surface_structure: Clean surface structure
-        model_path: Path to model checkpoint
-        model_type: MLIP engine (uma, mace, dpa, grace) (omat, omol, oc20, oc25, odac, omc)
-        device: Device for calculation (cpu or cuda)
-        relax: Whether to relax structures before calculation
-        verbose: Whether to print progress messages
-        **kwargs: Additional arguments passed to calculate_energy
+        adsorbed_structure: Structure with adsorbed molecule.
+        gas_structure: Isolated gas molecule structure.
+        surface_structure: Clean surface structure.
+        model_path: Path to model checkpoint.
+        model_type: MLIP engine (uma, mace, dpa, grace).
+        task: Model head.
+        device: Device for calculation (cpu or cuda).
+        relax: Whether to relax structures before calculation.
+        verbose: Whether to print progress messages.
+        settings_path: Explicit path to settings.ini.
+        model_alias: Named model alias from settings.ini.
+        default_dtype: MACE dtype override.
+        head: MACE foundation-model head name.
+        profile: Reusable profile from settings.ini.
+        strict_config: Override strict-config behaviour.
+        **kwargs: Additional options passed to calculate_energy.
 
     Returns:
-        Dictionary with energies and adsorption energy:
-        {
-            "adsorbed_energy": float,
-            "gas_energy": float,
-            "surface_energy": float,
-            "adsorption_energy": float
-        }
+        Dict with keys: adsorbed_energy, gas_energy, surface_energy,
+        adsorption_energy
 
     Example:
         >>> results = calculate_adsorption_energy(
@@ -410,7 +551,6 @@ def calculate_adsorption_energy(
         ...     gas_structure="co2.xyz",
         ...     surface_structure="slab.cif",
         ...     model_path="uma-s-1.pt",
-        ...     task="oc20"
         ... )
         >>> print(f"Adsorption energy: {results['adsorption_energy']:.4f} eV")
     """
@@ -420,55 +560,41 @@ def calculate_adsorption_energy(
         print("=" * 60)
         print()
 
-    # Calculate energies
+    calc_kwargs = {
+        "model_type": model_type,
+        "task": task,
+        "device": device,
+        "relax": relax,
+        "settings_path": settings_path,
+        "model_alias": model_alias,
+        "default_dtype": default_dtype,
+        "head": head,
+        "profile": profile,
+        "strict_config": strict_config,
+        **kwargs,
+    }
+
     if verbose:
         print("1. Calculating adsorbed system energy...")
-    E_adsorbed = calculate_energy(
-        adsorbed_structure,
-        model_path,
-        model_type=model_type,
-        task=task,
-        device=device,
-        relax=relax,
-        verbose=verbose,
-        **kwargs,
-    )
-
+    E_adsorbed = calculate_energy(adsorbed_structure, model_path, **calc_kwargs)
     if verbose:
         print(f"   Energy: {E_adsorbed:.6f} eV")
         print()
-        print("2. Calculating gas molecule energy...")
-    E_gas = calculate_energy(
-        gas_structure,
-        model_path,
-        model_type=model_type,
-        task=task,
-        device=device,
-        relax=relax,
-        verbose=verbose,
-        **kwargs,
-    )
 
+    if verbose:
+        print("2. Calculating gas molecule energy...")
+    E_gas = calculate_energy(gas_structure, model_path, **calc_kwargs)
     if verbose:
         print(f"   Energy: {E_gas:.6f} eV")
         print()
-        print("3. Calculating clean surface energy...")
-    E_surface = calculate_energy(
-        surface_structure,
-        model_path,
-        model_type=model_type,
-        task=task,
-        device=device,
-        relax=relax,
-        verbose=verbose,
-        **kwargs,
-    )
 
+    if verbose:
+        print("3. Calculating clean surface energy...")
+    E_surface = calculate_energy(surface_structure, model_path, **calc_kwargs)
     if verbose:
         print(f"   Energy: {E_surface:.6f} eV")
         print()
 
-    # Calculate adsorption energy
     adsorption_energy = E_adsorbed - E_gas - E_surface
 
     if verbose:

@@ -120,6 +120,7 @@ docs/legacy_tutorials/videos/
 # No ASE dbs, or OG LMDBs!
 *.pt
 *.pth
+*.model
 *.lmdb
 *.lmdb-lock
 *.aselmdb
@@ -162,4 +163,3 @@ results/
 
 # Superpowers working directory
 .superpowers/
-

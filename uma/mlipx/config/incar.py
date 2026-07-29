@@ -1,14 +1,8 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-#
-# This source code is licensed under the MIT license found in the
-# LICENSE file in the root directory of this source tree.
+"""INCAR-style configuration parser.
 
-# Modified for the mlipx project: multi-engine MLIP support (UMA/MACE/DPA/GRACE).
-"""
-INCAR-style configuration parser for MLIP calculations.
-
-Parses VASP-style INCAR files with key-value pairs.
-Supports boolean (.TRUE./.FALSE.), integers, floats, and strings.
+Moved here from the top-level :mod:`mlipx.config` module so the configuration
+package owns all parsing code (plan section 17.7). The behaviour is unchanged;
+the legacy module re-exports this class for backward compatibility.
 """
 
 from __future__ import annotations
@@ -181,15 +175,7 @@ class IncarConfig(dict):
         return value
 
     def get_bool(self, key: str, default: bool = False) -> bool:
-        """Get boolean value with default.
-
-        Args:
-            key: Configuration key
-            default: Default value if key not found
-
-        Returns:
-            Boolean value
-        """
+        """Get boolean value with default."""
         value = self.get(key, default)
         if isinstance(value, bool):
             return value
@@ -202,63 +188,31 @@ class IncarConfig(dict):
         raise ValueError(f"Cannot convert {key}={value!r} to boolean")
 
     def get_int(self, key: str, default: int = 0) -> int:
-        """Get integer value with default.
-
-        Args:
-            key: Configuration key
-            default: Default value if key not found
-
-        Returns:
-            Integer value
-        """
+        """Get integer value with default."""
         value = self.get(key, default)
         if isinstance(value, int) and not isinstance(value, bool):
             return value
         return int(value)
 
     def get_float(self, key: str, default: float = 0.0) -> float:
-        """Get float value with default.
-
-        Args:
-            key: Configuration key
-            default: Default value if key not found
-
-        Returns:
-            Float value
-        """
+        """Get float value with default."""
         value = self.get(key, default)
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             return float(value)
         return float(value)
 
     def get_str(self, key: str, default: str = "") -> str:
-        """Get string value with default.
-
-        Args:
-            key: Configuration key
-            default: Default value if key not found
-
-        Returns:
-            String value
-        """
+        """Get string value with default."""
         value = self.get(key, default)
         return str(value)
 
     def write(self, filepath: str | Path) -> None:
-        """Write configuration to file.
-
-        Args:
-            filepath: Output file path
-        """
+        """Write configuration to file."""
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(self.to_string())
 
     def to_string(self) -> str:
-        """Convert configuration to INCAR-formatted string.
-
-        Returns:
-            Formatted configuration string
-        """
+        """Convert configuration to INCAR-formatted string."""
         lines = []
         lines.append("# mlipx Calculation Settings")
         lines.append("")
@@ -272,6 +226,8 @@ class IncarConfig(dict):
             "MODEL": "Model Settings",
             "DEVICE": "Device Settings",
             "INFERENCE_MODE": "Inference Settings",
+            "DEFAULT_DTYPE": "Inference Settings",
+            "HEAD": "Inference Settings",
             "OPT_ALGO": "Optimization",
             "FMAX": "Optimization",
             "MAX_STEPS": "Optimization",
@@ -353,22 +309,24 @@ class IncarConfig(dict):
                 errors.append(
                     f"Invalid TASK '{task}'. Must be one of: {', '.join(valid_tasks)}"
                 )
-        valid_calc_types = {"sp", "opt", "md", "batch", "phonon"}
+        valid_calc_types = {"sp", "opt", "md", "batch", "phonon", "analyze"}
         if "CALC_TYPE" in self:
             calc_type = self.get_str("CALC_TYPE").lower()
             if calc_type not in valid_calc_types:
                 errors.append(
-                    f"Invalid CALC_TYPE '{calc_type}'. "
+                    f"Invalid CALC_TYPE '{calc_type}. "
                     f"Must be one of: {', '.join(valid_calc_types)}"
                 )
 
         valid_devices = {"cpu", "cuda", "gpu"}
         if "DEVICE" in self:
             device = self.get_str("DEVICE").lower()
-            if device not in valid_devices:
+            # Allow cuda:N device strings (plan section 17.2).
+            is_device = device in valid_devices or device.startswith("cuda:")
+            if not is_device:
                 errors.append(
                     f"Invalid DEVICE '{device}'. "
-                    f"Must be one of: {', '.join(valid_devices)}"
+                    f"Must be one of: {', '.join(valid_devices)} or cuda:N"
                 )
 
         valid_optimizers = {"fire", "bfgs", "lbfgs", "gpmin", "mdmin"}
@@ -376,7 +334,7 @@ class IncarConfig(dict):
             optimizer = self.get_str("OPT_ALGO").lower()
             if optimizer not in valid_optimizers:
                 errors.append(
-                    f"Invalid OPT_ALGO '{optimizer}'. "
+                    f"Invalid OPT_ALGO '{optimizer}. "
                     f"Must be one of: {', '.join(valid_optimizers)}"
                 )
 
@@ -385,98 +343,16 @@ class IncarConfig(dict):
             ensemble = self.get_str("MD_ENSEMBLE").lower()
             if ensemble not in valid_md_ensembles:
                 errors.append(
-                    f"Invalid MD_ENSEMBLE '{ensemble}'. "
+                    f"Invalid MD_ENSEMBLE '{ensemble}. "
                     f"Must be one of: {', '.join(valid_md_ensembles)}"
                 )
 
+        # Validate MACE dtype if present.
+        if "DEFAULT_DTYPE" in self:
+            dtype = self.get_str("DEFAULT_DTYPE").lower()
+            if dtype not in {"float32", "float64"}:
+                errors.append(
+                    f"Invalid DEFAULT_DTYPE '{dtype}'. Must be float32 or float64"
+                )
+
         return errors
-
-
-# Default configurations for different calculation types
-DEFAULT_SP_CONFIG = """
-# Single Point Calculation
-CALC_TYPE = SP
-TASK = omat
-
-# Model Settings
-MODEL_TYPE = UMA
-MODEL_PATH = uma-s-1.pt
-DEVICE = cpu
-INFERENCE_MODE = default
-
-# Output Control
-WRITE_FORCES = .TRUE.
-WRITE_STRESS = .TRUE.
-OUTPUT_FORMAT = VASP
-"""
-
-DEFAULT_OPT_CONFIG = """
-# Geometry Optimization
-CALC_TYPE = OPT
-TASK = omat
-
-# Model Settings
-MODEL_TYPE = UMA
-MODEL_PATH = uma-s-1.pt
-DEVICE = cpu
-INFERENCE_MODE = default
-
-# Optimization Settings
-OPT_ALGO = FIRE
-FMAX = 0.05
-MAX_STEPS = 500
-CELL_OPT = .FALSE.
-FIX_SYMMETRY = .FALSE.
-
-# Output Control
-WRITE_FORCES = .TRUE.
-WRITE_STRESS = .TRUE.
-OUTPUT_FORMAT = VASP
-"""
-
-DEFAULT_MD_CONFIG = """
-# Molecular Dynamics
-CALC_TYPE = MD
-TASK = omat
-
-# Model Settings
-MODEL_TYPE = UMA
-MODEL_PATH = uma-s-1.pt
-DEVICE = cuda
-INFERENCE_MODE = turbo
-
-# MD Settings
-MD_ENSEMBLE = NVT
-TEMPERATURE = 300.0
-TIMESTEP = 1.0
-STEPS = 10000
-FRICTION = 0.001
-SAVE_INTERVAL = 10
-
-# Output Control
-WRITE_TRAJECTORY = .TRUE.
-OUTPUT_FORMAT = VASP
-"""
-
-
-def get_default_config(calc_type: str) -> IncarConfig:
-    """Get default configuration for a calculation type.
-
-    Args:
-        calc_type: Type of calculation (sp, opt, md)
-
-    Returns:
-        IncarConfig with default values
-    """
-    calc_type = calc_type.lower()
-
-    configs = {
-        "sp": DEFAULT_SP_CONFIG,
-        "opt": DEFAULT_OPT_CONFIG,
-        "md": DEFAULT_MD_CONFIG,
-    }
-
-    if calc_type not in configs:
-        raise ValueError(f"Unknown calculation type: {calc_type}")
-
-    return IncarConfig.from_string(configs[calc_type])

@@ -7,7 +7,11 @@ LICENSE file in the root directory of this source tree.
 
 from __future__ import annotations
 
-from mlipx.doctor import format_diagnostics, run_diagnostics
+from mlipx.doctor import (
+    _installed_dependency_conflicts,
+    format_diagnostics,
+    run_diagnostics,
+)
 
 
 def test_doctor_runs_without_crashing():
@@ -74,3 +78,23 @@ def test_doctor_no_gpu_cpu_guidance(monkeypatch):
     checks, _ = run_diagnostics()
     names = {c["name"]: c for c in checks}
     assert names["NVIDIA driver"]["status"] == "warn"
+
+
+def test_dependency_conflicts_detect_mace_e3nn_mismatch(monkeypatch):
+    def fake_requires(name):
+        return {
+            "mace-torch": ["e3nn==0.4.4", "torch>=1.12"],
+            "fairchem-core": ["e3nn>=0.5"],
+        }[name]
+
+    versions = {"e3nn": "0.6.0", "torch": "2.6.0"}
+    monkeypatch.setattr("mlipx.doctor.metadata.requires", fake_requires)
+    monkeypatch.setattr(
+        "mlipx.doctor.metadata.version", lambda name: versions[name]
+    )
+
+    conflicts = _installed_dependency_conflicts(("mace-torch", "fairchem-core"))
+
+    assert conflicts == [
+        "mace-torch requires e3nn==0.4.4, but 0.6.0 is installed"
+    ]
