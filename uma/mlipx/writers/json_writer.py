@@ -147,7 +147,9 @@ class JsonWriter:
         output_results = {
             "energy": results.get("energy"),
             "energy_per_atom": (
-                results.get("energy") / len(atoms) if results.get("energy") else None
+                results.get("energy") / len(atoms)
+                if results.get("energy") is not None
+                else None
             ),
             "forces": results.get("forces").tolist()
             if results.get("forces") is not None

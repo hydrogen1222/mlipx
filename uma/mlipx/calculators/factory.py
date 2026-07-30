@@ -48,7 +48,7 @@ _CALC_KEYS: dict[str, set[str]] = {
     "uma": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
-    "dpa": set(),
+    "dpa": {"head"},
     "grace": set(),
 }
 _ALL_CALC_KEYS: set[str] = set().union(*_CALC_KEYS.values())
@@ -125,7 +125,7 @@ class CalculatorFactory:
             **kwargs: Engine-specific options. UMA accepts ``inference_mode``,
                 ``torch_num_threads`` and ``activation_checkpointing``; MACE
                 accepts ``default_dtype`` (factory fallback ``float32``) and
-                ``head``.
+                ``head``; DPA accepts ``head`` for multi-task branches.
 
         Returns:
             A ``BaseMLIPCalculator`` subclass instance.
@@ -151,15 +151,15 @@ class CalculatorFactory:
         elif m_type == "mace":
             from mlipx.calculators.mace_calc import MACECalculatorWrapper  # noqa: PLC0415
 
-            # Dtype fallback for *direct* factory construction is float64 (the
-            # safe high-precision default). The engine overrides this with a
-            # calc-type-aware default (float32 for MD, float64 for sp/opt) when
-            # nothing in the config layer already set default_dtype.
+            # Dtype fallback for *direct* factory construction is float32, the
+            # documented MACE default (matches BUILTIN_DEFAULTS["calculator.mace"]).
+            # The engine applies the same float32 default when nothing in the
+            # config layer already set default_dtype; --dtype float64 overrides it.
             return MACECalculatorWrapper(
                 model_path=model_path,
                 device=device,
                 task=task,
-                default_dtype=kwargs.get("default_dtype", "float64"),
+                default_dtype=kwargs.get("default_dtype", "float32"),
                 head=kwargs.get("head"),
             )
         elif m_type == "dpa":
@@ -169,6 +169,7 @@ class CalculatorFactory:
                 model_path=model_path,
                 device=device,
                 task=task,
+                head=kwargs.get("head"),
             )
         elif m_type == "grace":
             from mlipx.calculators.grace_calc import GRACECalculatorWrapper  # noqa: PLC0415

@@ -74,7 +74,7 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 | TUI 模式 | 交互式终端界面，实时进度显示 |
 | Python API | 面向脚本和工作流的编程接口 |
 | 后台任务 | 提交、分离、重连、终止长时间计算 |
-| 批量处理 | 并行处理大量结构 |
+| 批量处理 | 模型只加载一次，顺序处理多个结构 |
 | CPU & CUDA | 支持 CPU 和 GPU，自动检测 |
 | VASP 输出 | OUTCAR、CONTCAR、XDATCAR、OSZICAR 格式 |
 | 跨平台 | Windows、Linux、macOS |
@@ -83,16 +83,139 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 
 ## 2. 安装
 
-### 2.1 环境要求
+### 2.1 小白先看：四个引擎要用四个环境
+
+不要把四个后端装进同一个 Python 环境。最稳妥、也是本项目实际验证过的布局是：
+
+| 你要使用的引擎 | 运行命令前缀 | 独立环境 | 主要原因 |
+|---|---|---|---|
+| UMA | `uv run mlipx` | `.venv` | 项目默认环境，包含 fairchem-core |
+| MACE | `.venv-mace/bin/mlipx` | `.venv-mace` | MACE 与 UMA 需要不同版本的 e3nn |
+| DPA | `.venv-dpa/bin/mlipx` | `.venv-dpa` | DeepMD 需要 PyTorch 2.10 和 CXX11 ABI |
+| GRACE | `.venv-grace/bin/mlipx` | `.venv-grace` | TensorFlow 的 CUDA/cuDNN 不能覆盖 PyTorch 环境 |
+
+这里的“环境”只是四个互不干扰的 Python 软件目录，不是四份源代码。四套环境
+共用当前仓库、结构文件和模型文件。请在仓库根目录依次执行下面的命令；只使用
+某一个引擎时，只安装对应的一段即可。
+
+#### 第 0 步：安装 uv 并进入仓库
+
+如果终端里执行 `uv --version` 已有输出，可以跳过安装 uv：
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
+```
+
+#### 第 1 套：UMA（默认，建议先装）
+
+```bash
+uv sync
+uv run mlipx doctor
+```
+
+以后运行 UMA 时始终使用 `uv run mlipx`：
+
+```bash
+uv run mlipx sp structure.vasp \
+  --model models/uma/uma-s-1.pt --model-type uma \
+  --task omat --device cuda:0
+```
+
+#### 第 2 套：MACE
+
+```bash
+uv venv --python 3.12 .venv-mace
+uv pip install --no-config --python .venv-mace/bin/python \
+  "torch==2.6.0" --index-url https://download.pytorch.org/whl/cu124
+uv pip install --no-config --python .venv-mace/bin/python \
+  -e ./uma "e3nn==0.4.4" "mace-torch==0.3.16"
+.venv-mace/bin/mlipx doctor
+```
+
+运行示例：
+
+```bash
+.venv-mace/bin/mlipx sp structure.vasp \
+  --model models/mace/mace-mpa-0-medium.model --model-type mace \
+  --task bulk --head default --device cuda:0
+```
+
+#### 第 3 套：DPA / DeepMD（GPU 推荐）
+
+```bash
+uv venv --python 3.12 .venv-dpa
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-dpa/bin/python \
+  -e ./uma "deepmd-kit[torch]==3.1.3"
+.venv-dpa/bin/mlipx doctor
+```
+
+运行 LGPS 等固态电解质时，不要省略正确的模型分支：
+
+```bash
+.venv-dpa/bin/mlipx sp structure.vasp \
+  --model models/dma/DPA-3.2-5M.pt --model-type dpa \
+  --task bulk --head Domains_SSE_PBE --device cuda:0
+```
+
+没有 NVIDIA GPU 时，只有第一条 Torch 安装命令不同；其余命令保持不变：
+
+```bash
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0" --index-url https://download.pytorch.org/whl/cpu
+```
+
+#### 第 4 套：GRACE（GPU）
+
+```bash
+uv venv --python 3.12 .venv-grace
+uv pip install --no-config --python .venv-grace/bin/python \
+  -e ./uma "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
+
+# V100/Volta 使用已验证的 cuDNN 版本
+uv pip install --no-config --python .venv-grace/bin/python \
+  "nvidia-cudnn-cu12==9.3.0.75"
+.venv-grace/bin/python -c \
+  "import tensorflow as tf; print(tf.__version__, tf.config.list_physical_devices('GPU'))"
+```
+
+GRACE 的 `--model` 必须指向整个 SavedModel 目录：
+
+```bash
+.venv-grace/bin/mlipx sp structure.vasp \
+  --model models/grace/GRACE-2L-SMAX-large --model-type grace \
+  --task bulk --device cuda:0
+```
+
+#### 安装完成后怎么判断自己用对了环境？
+
+看命令开头即可：
+
+```text
+UMA    -> uv run mlipx ...
+MACE   -> .venv-mace/bin/mlipx ...
+DPA    -> .venv-dpa/bin/mlipx ...
+GRACE  -> .venv-grace/bin/mlipx ...
+```
+
+TUI 也遵循同一规则。例如 MACE 必须运行
+`.venv-mace/bin/mlipx tui`；TUI 内切换 `MODEL_TYPE` 不会自动切换 Python
+环境。模型不会随环境自动下载，需要自行放到 `models/` 或其他已知路径。
+
+### 2.2 环境要求
 
 | 需求 | 最低配置 | 推荐配置 |
 |------|----------|----------|
 | Python | 3.10–3.12 | 3.12 |
 | 内存 | 8 GB | 32 GB |
-| 磁盘 | 15 GB（环境与小模型） | 30+ GB（多个模型） |
+| 磁盘 | 15 GB（单个环境与小模型） | 60+ GB（四个环境与多个模型） |
 | GPU（可选） | CUDA 11.8+ | CUDA 12.x，8+ GB 显存 |
 
-### 2.2 使用 uv 安装（推荐）
+### 2.3 UMA 环境说明
 
 > **注意：** `fairchem-core` 未发布到 PyPI，它作为本仓库的 workspace 成员位于 `packages/fairchem-core/`，`uv sync` 会自动安装。
 
@@ -113,7 +236,7 @@ uv run mlipx setup
 > `.venv`；该环境仍然是 UMA 专用环境。推荐先显式执行 `uv sync`，以免误以为
 > doctor 创建的是可同时安装所有引擎的通用环境。
 
-### 2.3 CUDA GPU 与 CPU 安装
+### 2.4 CUDA GPU 与 CPU
 
 根 workspace 通过 `uv.lock` 安装并固定 PyTorch；不要再用裸
 `uv pip install torch` 覆盖它。
@@ -133,7 +256,7 @@ uv run python -c "import torch; print('CUDA 可用' if torch.cuda.is_available()
 - 运行 `uv run mlipx setup` 查看 GPU 架构建议
 - 确认安装的是文档推荐的 CUDA wheel，而不是 CPU wheel
 
-### 2.3.1 已验证配置
+### 2.4.1 已验证配置
 
 以下配置已经过测试确认可用：
 
@@ -143,15 +266,19 @@ uv run python -c "import torch; print('CUDA 可用' if torch.cuda.is_available()
 | **架构** | Volta，计算能力 7.0（sm_70）|
 | **显存** | 16 GB |
 | **驱动** | 580.173.02 |
-| **CUDA** | 12.4 |
-| **PyTorch** | 2.6.0+cu124 |
+| **UMA** | PyTorch 2.6.0+cu124 |
+| **MACE** | mace-torch 0.3.16，PyTorch 2.6.0+cu124 |
+| **DPA** | deepmd-kit 3.1.3，PyTorch 2.10.0+cu126 |
+| **GRACE** | TensorFlow 2.20.0，cuDNN 9.3.0.75 |
 | **Python** | 3.12.13 |
 | **操作系统** | Linux |
 | **安装说明** | 模型不会由 `uv sync` 自动下载 |
 
-*这不是最低配置要求——它只是一个已知可用的参考点。更低规格的 GPU（如 GTX 10 系列 Pascal，sm_61）和纯 CPU 环境同样支持。*
+*这不是最低配置要求，而是一套已知可用的 Linux/NVIDIA GPU 参考配置。更低规格
+的 GPU（如 GTX 10 系列 Pascal，sm_61）和纯 CPU 环境也可使用，但安装命令
+可能不同。*
 
-### 2.4 如何运行命令
+### 2.5 如何运行命令
 
 两种等价方式：
 
@@ -168,7 +295,7 @@ mlipx --help
 mlipx tui
 ```
 
-### 2.5 模型检查点
+### 2.6 模型检查点
 
 **UMA（默认引擎）：** 从 FAIRChem 下载检查点：
 
@@ -179,14 +306,15 @@ mlipx tui
 ```
 
 **其他引擎（可选）：** MACE / DPA / GRACE 的模型由各项目单独发布。
-MACE 必须使用独立环境，不能直接运行裸的 `pip install mace-torch` 或
-`uv pip install mace-torch`：这两条命令会污染刚由 `uv run` 创建的 UMA `.venv`。
+为避免 e3nn、PyTorch ABI 和 CUDA/cuDNN 的二进制依赖互相覆盖，推荐四个后端
+各用一个环境：UMA `.venv`、MACE `.venv-mace`、DPA `.venv-dpa`、GRACE
+`.venv-grace`。不要把其他后端直接装进 UMA `.venv`。
 
 | 引擎 | 后端安装 | 模型格式 |
 |------|----------|----------|
-| MACE | 使用下方“各引擎后端安装与环境隔离”的 `.venv-mace` 完整命令 | `.model` / `.pt` |
-| DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` / `.pt`（PyTorch 后端） |
-| GRACE | `pip install tensorpotential` | SavedModel 目录 / YAML |
+| MACE | 使用 §2.1 的 `.venv-mace` 命令 | `.model` / `.pt` |
+| DPA | 使用 §2.1 的 `.venv-dpa` 命令 | 冻结/导出的 `.pt` / `.pth` |
+| GRACE | 使用 §2.1 的 `.venv-grace` 命令 | TensorFlow SavedModel 目录 |
 
 > **不要执行 `uv pip install mace-torch`。** `uv pip` 默认目标就是项目的
 > `.venv`；此时 doctor 虽能看到两个引擎，却会报告
@@ -194,7 +322,7 @@ MACE 必须使用独立环境，不能直接运行裸的 `pip install mace-torch
 
 模型路径通过 `--model`（CLI）、TUI 配置界面或 INCAR 文件中的 `MODEL_PATH` 键指定。
 
-### 2.6 验证安装
+### 2.7 验证安装
 
 ```bash
 uv run mlipx doctor
@@ -205,6 +333,7 @@ uv run mlipx doctor
 查看完整命令列表：
 ```bash
 uv run mlipx --help
+```
 
 ---
 
@@ -411,8 +540,8 @@ result = run_single_point(
 | 引擎 | 安装命令 | 模型格式 |
 |------|----------|----------|
 | MACE | 仅安装到 `.venv-mace`（见紧接着的完整命令） | `.model` / `.pt` |
-| DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth`（PyTorch 后端） |
-| GRACE | `pip install tensorpotential` | SavedModel 目录 / YAML |
+| DPA | 按下方命令安装到 `.venv-dpa` | 冻结/导出的 `.pt` / `.pth` |
+| GRACE | 按下方命令安装到 `.venv-grace` | TensorFlow SavedModel 目录 |
 
 > ⚠️ **环境隔离警告**：`mace-torch` 锁定 `e3nn==0.4.4`，与 `fairchem-core`（`e3nn>=0.5`）**根本冲突**，二者不能装在同一 Python 环境中。
 >
@@ -434,6 +563,60 @@ result = run_single_point(
 > .venv-mace/bin/mlipx doctor
 > .venv-mace/bin/mlipx tui
 > ```
+
+根工作区为保留 Pascal GPU 所需的 `sm_60` 内核，显式将 UMA 的 PyTorch 固定为
+2.6.0+cu124；当前 fairchem-core 元数据则声明 `torch~=2.8.0`。因此
+`uv pip check --python .venv/bin/python` 会报告这一项已知覆盖。mlipx 的 UMA
+推理路径已用真实模型验证，但这不代表 fairchem-core 的所有其他功能都受该
+非上游版本组合支持。
+
+近期 DeePMD-kit wheel 使用 PyTorch 的 CXX11 ABI 编译，而 UMA 环境所需的
+PyTorch 2.6 使用旧 ABI。因此 DPA 也应隔离；ABI 不匹配时
+`import deepmd` 可能成功，但加载 PyTorch 模型时会立即失败：
+
+```bash
+uv venv --python 3.12 .venv-dpa
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-dpa/bin/python \
+  -e ./uma "deepmd-kit[torch]==3.1.3"
+
+.venv-dpa/bin/mlipx sp structure.vasp \
+  --model models/dma/DPA-3.2-5M.pt --model-type dpa --task bulk \
+  --head Domains_SSE_PBE --device cuda:0
+```
+
+若选择其他版本，必须确保 DeePMD-kit 声明的 PyTorch 版本和 CXX11 ABI
+一致。无 NVIDIA GPU 时，按 §2.1 把 Torch 安装命令替换为 CPU wheel，并把
+运行参数改为 `--device cpu`。DPA 需要冻结/导出的推理模型，不能直接使用
+原始训练 checkpoint。
+
+`DPA-3.2-5M.pt` 是多任务模型：`head` 决定实际使用的势能面，而 mlipx 的
+`task=bulk|molecule` 只控制 PBC。LGPS 应选择明确覆盖
+Li–Si/Ge/Sn–P–S 固态电解质的 `--head Domains_SSE_PBE`；一般分子可用
+`--head OMol25`。用 `dp show MODEL model-branch` 查看分支，不能因为默认
+分支“能算完”就认为势能面选择正确。
+
+GRACE 使用 TensorFlow。CPU 推理技术上可以留在 UMA 环境，但为保证 CPU/GPU
+命令一致并避免 TensorFlow 覆盖 UMA/PyTorch 的 CUDA 库，推荐始终使用独立
+`.venv-grace`：
+
+```bash
+uv venv --python 3.12 .venv-grace
+uv pip install --no-config --python .venv-grace/bin/python \
+  -e ./uma "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
+
+# V100/Volta 实测需要此固定；过新的 cuDNN 9.24 会在卷积算法探测时报错
+uv pip install --no-config --python .venv-grace/bin/python \
+  "nvidia-cudnn-cu12==9.3.0.75"
+
+.venv-grace/bin/mlipx sp structure.vasp \
+  --model models/grace/GRACE-2L-SMAX-large --model-type grace \
+  --task bulk --device cuda:0
+```
+
+仅 `import tensorflow` 或列出 GPU 不能证明 GPU 计算图可执行。安装后应先做
+真实 TensorFlow GPU 算子测试和单结构 GRACE SP 冒烟测试，再开始 GRACE MD。
 
 如果已经误执行了 `uv pip install mace-torch`，无需删除仓库，按下面恢复：
 
@@ -490,14 +673,14 @@ mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --
 # ── MACE ── 周期性体系单点能
 .venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
 
-# ── MACE 多 head 模型（如 mace-mpa）选择分子 head
-.venv-mace/bin/mlipx sp molecule.xyz --model mace-mpa-0-medium.model --model-type mace --task molecule --head omol
+# ── MACE head：只能选择模型实际列出的 head
+.venv-mace/bin/mlipx sp bulk.cif --model mace-mpa-0-medium.model --model-type mace --task bulk --head default
 
-# ── MACE dtype（默认按计算类型：MD=float32 提速，sp/opt=float64 高精度）
+# ── MACE dtype（所有计算类型均默认 float32）
 .venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float64
 
-# ── DPA (DeepMD) ── 分子优化
-mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
+# ── DPA (DeepMD) ── 在隔离环境中进行周期结构优化
+.venv-dpa/bin/mlipx opt bulk.vasp --model dpa.pt --model-type dpa --task bulk --fmax 0.01 --optimizer LBFGS
 
 # ── GRACE ── 高通量筛选（批量）
 mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --calc-type sp --output results/
@@ -507,10 +690,15 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 
 | 选项 | 说明 |
 |------|------|
-| `--head HEAD` | 选择 MACE 基础模型的 head（如 `omol`、`default`）。多 head 模型（mace-mpa）必须指定；单 head 模型（mace-mp-0）可省略。 |
-| `--dtype float32\|float64` | 计算精度。默认按计算类型自动选择：**MD 用 `float32`**（提速，适合长时模拟），**sp/opt 用 `float64`**（高精度，适合能量差）。可用此参数显式覆盖。 |
+| `--head HEAD` | 选择模型中实际存在的 head；单 head 模型应省略。head 名称取决于具体模型及版本。 |
+| `--dtype float32\|float64` | 计算精度。**SP、优化和 MD 均默认 `float32`**；仅在模型兼容且确需高精度能量差时显式选择 `float64`。 |
 
-> ⚠️ `--head` 接受单个 head 名称（字符串）。MACE 的 `MACECalculator` 通过 `head=` 关键字选择 head；错误的 head 名会回退到模型的最后一个 head 并告警。
+> ⚠️ `--head` 接受单个字符串。虽然 mace-torch 对未知名称可能只告警并
+> 回退，但 mlipx 会直接拒绝，因为静默换 head 等于更换势能面。当前随仓库
+> 提供的 `models/mace/mace-mpa-0-medium.model` 只有 `default`。
+> 该本地文件以 float64 保存；使用默认 `float32` 时 mace-torch 会在加载时
+> 转换并给出提示。若保留原始精度比显存和吞吐更重要，请显式使用
+> `--dtype float64`。
 
 ### 引擎故障排除
 
@@ -613,11 +801,18 @@ mlipx opt structure.cif \
 | NVT | Langevin | 恒粒子数、体积、温度（正则系综） |
 | NVE | Velocity Verlet | 恒粒子数、体积、能量（微正则系综） |
 
-**预弛豫：** 在开始 MD 之前，mlipx 可自动执行快速的 FIRE 优化（默认：50 步，fmax=0.1 eV/Å）以消除内应力，防止"原子爆炸"--由高初始力导致原子飞散的常见失败模式。预弛豫的默认开关与系综相关：
+**预弛豫：** 在开始 MD 前，mlipx 可执行短程、仅优化原子位置的 FIRE
+优化（默认 50 步，fmax=0.1 eV/Å），用于降低过大的初始原子力。它不优化
+晶胞，也不保证达到局部极小值，因此通常不能称为“消除晶胞应力”。默认开关
+与系综相关：
 - **NVT**：默认**启用**（避免初始高力导致爆炸）。
-- **NVE**：默认**关闭**--NVE 是能量守恒系综，预弛豫会先把结构移到 0 K 极小值、改变守恒能量基准，使得轨迹不再对应输入结构。若输入结构内应力较大，可用 `--pre-relax` 显式开启。
+- **NVE**：默认**关闭**——预先改变原子位置会改变守恒能量基准，使轨迹
+  不再对应输入结构；只有明确接受这种初态变化时才显式开启。
 
 可用 `--pre-relax` / `--no-pre-relax`（CLI）或 `PRE_RELAX = .TRUE./.FALSE.`（INCAR）显式覆盖默认值。
+若重启结构已经保存动量，请使用 `--no-pre-relax` 并选择
+`--velocity-policy auto` 或 `preserve`；一边改变位置、一边保留旧速度并不是
+严格的相空间重启，程序会明确拒绝这种组合。
 
 **CLI 用法：**
 
@@ -651,6 +846,8 @@ mlipx md CONTCAR \
 | `--steps` | 1000 | MD 步数 |
 | `--friction` | 0.001 | 摩擦系数（仅 NVT，fs⁻¹） |
 | `--save-interval` | 10 | 每隔 N 步保存轨迹 |
+| `--seed` | 自动生成并记录 | 复现初始速度与 NVT 随机力的随机种子 |
+| `--velocity-policy` | auto | `auto`、`initialize` 或 `preserve` 已有动量 |
 | `--pre-relax` | NVT 开 / NVE 关 | MD 前预弛豫（`--no-pre-relax` 关闭） |
 | `--pre-relax-steps` | 50 | 预弛豫最大步数 |
 | `--pre-relax-fmax` | 0.1 | 预弛豫力收敛阈值 (eV/Å) |
@@ -710,8 +907,8 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --model-type TYPE     MLIP 引擎：uma|mace|dpa|grace [默认: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc；其他: bulk|molecule [默认: omat]
   --device DEVICE       cpu|cuda [默认: cpu]
-  --dtype DTYPE         MACE 精度 float32|float64 [默认: sp/opt=float64, md=float32]
-  --head HEAD           MACE 基础模型 head 名称（多 head 模型）
+  --dtype DTYPE         MACE 精度 float32|float64 [默认: float32]
+  --head HEAD           MACE head 或 DeepMD/DPA 多任务分支
   --output DIR, -o DIR  输出目录 [默认: .]
   --name NAME, -n NAME  任务名称（输出至 DIR/NAME）
 ```
@@ -741,6 +938,8 @@ mlipx md STRUCTURE --model MODEL [选项]
   --steps N             MD 步数 [默认: 1000]
   --friction FRICTION   摩擦系数（NVT）[默认: 0.001]
   --save-interval N     轨迹保存间隔 [默认: 10]
+  --seed N              可复现 MD 随机种子 [默认: 自动生成并记录]
+  --velocity-policy P   auto|initialize|preserve [默认: auto]
   --pre-relax           MD 前预弛豫 [默认: NVT 开 / NVE 关]
   --pre-relax-steps N   预弛豫最大步数 [默认: 50]
   --pre-relax-fmax F    预弛豫力收敛阈值 eV/Å [默认: 0.1]
@@ -752,7 +951,7 @@ mlipx md STRUCTURE --model MODEL [选项]
 mlipx batch INPUT_DIR --model MODEL [选项]
 
   --calc-type TYPE      计算类型：sp|opt [默认: sp]
-  --pattern PATTERN     文件匹配模式 [默认: *.cif]
+  --pattern PATTERN     显式文件通配符；省略时发现 CIF/XYZ/VASP/POSCAR*
   --output DIR          输出目录 [默认: batch_results]
 ```
 
@@ -941,10 +1140,10 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `MODEL_PATH` | 字符串 | `uma-s-1.pt` | 模型检查点路径（.pt 文件） |
 | `MODEL_TYPE` | 字符串 | `uma` | MLIP 引擎：`uma`、`mace`、`dpa`、`grace`（`uma` 也可写 `fairchem`） |
 | `TASK` | 字符串 | `omat` | 任务类型。UMA：`omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`；其他引擎：`bulk`/`molecule` |
-| `DEVICE` | 字符串 | `cpu` | 计算设备：`cpu`、`cuda` |
+| `DEVICE` | 字符串 | `cpu` | 计算设备：`cpu`、`cuda`、`gpu` 或 `cuda:N` |
 | `INFERENCE_MODE` | 字符串 | `default` | 推理模式：`default`、`turbo` |
-| `DEFAULT_DTYPE` | 字符串 | 按计算类型 | MACE 精度：`float32`（MD）/ `float64`（sp/opt）。仅 MACE。 |
-| `HEAD` | 字符串 | - | MACE 基础模型 head 名称（多 head 模型如 mace-mpa）。仅 MACE。 |
+| `DEFAULT_DTYPE` | 字符串 | `float32` | 所有计算类型的 MACE 精度默认值。仅 MACE。 |
+| `HEAD` | 字符串 | - | MACE head 或 DeepMD/DPA 多任务分支。 |
 
 #### 输出控制
 
@@ -1246,7 +1445,7 @@ uv run mlipx doctor     # 显示 GPU 的 CC 以及 PyTorch 是否支持
 #### MD 原子爆炸
 
 **解决方案：**
-1. NVT 默认启用预弛豫；NVE 默认关闭，可用 `--pre-relax` 开启
+1. NVT 默认启用仅位置预弛豫；NVE 默认关闭，只有接受改变输入初始位置时才用 `--pre-relax` 开启
 2. 先运行几何优化：`mlipx opt ...` 再 `mlipx md CONTCAR ...`
 3. 降低初始温度
 4. 若出现 NaN/inf 能量或力，运行会自动中止（不会写出 NaN 结果）--检查输入结构是否有原子过近或超出训练分布

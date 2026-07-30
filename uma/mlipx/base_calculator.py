@@ -52,8 +52,8 @@ class BaseMLIPCalculator(ABC):
 
         For UMA this is one of ``omat/omol/oc20/oc25/odac/omc``. For the
         generic engines (MACE/DPA/GRACE) it collapses to ``bulk`` (periodic)
-        or ``molecule`` (non-periodic), which only controls PBC setup - the
-        underlying model does not consume it.
+        or ``molecule`` (non-periodic), which controls PBC setup. Model-specific
+        MACE heads or DPA branches are selected separately with ``head``.
         """
 
     @property

@@ -23,31 +23,33 @@ Both manuals are wiki-level references covering: installation, quick start, arch
 
 ## 🚀 Quick Start
 
-### Install
+### Install: four engines, four isolated environments
 
 ```bash
 # Clone the repository
 git clone https://github.com/hydrogen1222/mlipx.git
 cd mlipx
 
-# Create the UMA environment and install its dependencies
+# Environment 1: UMA
 uv sync
-
-# Always run the copy belonging to this repository
 uv run mlipx doctor
 ```
 
-GPU users: see the [installation section](uma/docs/README_EN.md#2-installation) of the manual for CUDA/PyTorch matching by GPU architecture.
+Each optional engine needs its own Python environment. These directories share
+the repository, structures, and models; they only isolate incompatible Python
+and CUDA dependencies.
 
-The repository environment created by `uv sync` is **UMA-only**. Choose the
-executable by engine:
+| Engine | Environment | Always run it as |
+|--------|-------------|------------------|
+| UMA | `.venv` | `uv run mlipx ...` |
+| MACE | `.venv-mace` | `.venv-mace/bin/mlipx ...` |
+| DPA | `.venv-dpa` | `.venv-dpa/bin/mlipx ...` |
+| GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
 
-| Engine | Install location | Command prefix |
-|--------|------------------|----------------|
-| UMA | repository `.venv` from `uv sync` | `uv run mlipx ...` |
-| MACE | dedicated `.venv-mace` (instructions below) | `.venv-mace/bin/mlipx ...` |
-
-Never run bare `uv pip install mace-torch`; it targets the UMA `.venv`.
+Copy-ready installation commands for all four environments are at the very
+start of the [English installation guide](uma/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
+and [中文安装教程](uma/docs/README_CN.md#21-小白先看四个引擎要用四个环境).
+Do not install MACE, DPA, or GRACE into the UMA `.venv`.
 
 ### Run a calculation
 
@@ -65,14 +67,18 @@ uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --ste
 ### Use a different MLIP engine
 
 ```bash
-# MACE must run from its isolated environment; see below
-.venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk
+# MACE
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model \
+  --model-type mace --task bulk --head default --device cuda:0
 
-# DPA / DeepMD (pip install 'deepmd-kit>=3.0.0')
-mlipx opt bulk.cif --model dpa2.pth --model-type dpa --task bulk --fmax 0.05
+# DPA / DeepMD
+.venv-dpa/bin/mlipx opt bulk.cif --model dpa.pt \
+  --model-type dpa --task bulk --head Domains_SSE_PBE \
+  --device cuda:0 --fmax 0.05
 
-# GRACE (pip install tensorpotential)
-mlipx sp bulk.cif --model grace_model/ --model-type grace --task bulk
+# GRACE: --model points to the complete SavedModel directory
+.venv-grace/bin/mlipx sp bulk.cif --model grace_model/ \
+  --model-type grace --task bulk --device cuda:0
 ```
 
 ### Or use a VASP-style INCAR file
@@ -116,8 +122,8 @@ Each input gets its own output subdirectory and the root output directory gets
 
 | Interface | Command | Best for |
 |-----------|---------|----------|
-| **CLI** | `uv run mlipx ...` (UMA) / `.venv-mace/bin/mlipx ...` (MACE) | Scripts, HPC jobs, automation |
-| **TUI** | `uv run mlipx tui` (UMA) / `.venv-mace/bin/mlipx tui` (MACE) | Interactive SP/OPT/MD, live progress |
+| **CLI** | Use the command prefix for the selected engine in the table above | Scripts, HPC jobs, automation |
+| **TUI** | `<engine-command-prefix> tui` | Interactive SP/OPT/MD, live progress |
 | **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
 | **INCAR** | `mlipx run -i INCAR` | VASP-style batch configuration |
 
@@ -134,29 +140,13 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 | `dpa` | DPA — DeepMD-kit | `deepmd-kit` | `bulk` / `molecule` |
 | `grace` | GRACE | `tensorpotential` | `bulk` / `molecule` |
 
-> ⚠️ **MACE isolation is mandatory:** `mace-torch==0.3.16` pins
-> `e3nn==0.4.4`, while `fairchem-core` requires `e3nn>=0.5`. Installing MACE
-> into the UMA `.venv` can pass an import-only check and still fail while
-> loading a model with `ValueError: too many values to unpack (expected 2)`.
-> Create a dedicated MACE environment:
->
-> ```bash
-> uv venv --python 3.12 .venv-mace
-> uv pip install --python .venv-mace/bin/python \
->   torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-> uv pip install --python .venv-mace/bin/python -e ./uma
-> uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
->
-> .venv-mace/bin/mlipx tui
-> # or:
-> .venv-mace/bin/mlipx md structure.cif --model mace.model \
->   --model-type mace --task bulk --device cuda --steps 10
-> ```
->
-> Use `uv run mlipx ...` for UMA and `.venv-mace/bin/mlipx ...` for MACE.
-> Do not activate both environments or run a globally installed `mlipx`.
-> See the [English](uma/docs/README_EN.md#backend-installation--environment-isolation)
-> or [Chinese](uma/docs/README_CN.md#各引擎后端安装与环境隔离) guide.
+> ⚠️ **Environment isolation is required.** MACE conflicts with UMA's e3nn;
+> DPA requires a different PyTorch ABI/version; GRACE uses TensorFlow and a
+> separate cuDNN runtime. Use the four command prefixes shown above rather than
+> a globally installed `mlipx`. See the copy-ready
+> [English](uma/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
+> or [Chinese](uma/docs/README_CN.md#21-小白先看四个引擎要用四个环境)
+> installation guide.
 
 ---
 

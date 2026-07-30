@@ -196,6 +196,18 @@ def test_config_init_force() -> None:
             os.chdir(old)
 
 
+def test_generated_settings_validates() -> None:
+    """`config init` must never generate a file rejected by `config validate`."""
+    with tempfile.TemporaryDirectory() as d:
+        old = os.getcwd()
+        try:
+            os.chdir(d)
+            assert main(["config", "init", "--project"]) == 0
+            assert main(["config", "validate", "settings.ini"]) == 0
+        finally:
+            os.chdir(old)
+
+
 # ---------------------------------------------------------------------------
 # CLI backward compat: calc_type → temperature alias mapping
 # ---------------------------------------------------------------------------

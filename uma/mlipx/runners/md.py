@@ -16,6 +16,7 @@ Outputs trajectories in multiple formats.
 
 from __future__ import annotations
 
+import csv
 import threading
 import time
 from pathlib import Path
@@ -23,12 +24,14 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import units
+from ase.constraints import FixCom
 from ase.io.trajectory import TrajectoryWriter as AseTrajectoryWriter
 from ase.md.langevin import Langevin
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
 from ase.md.verlet import VelocityVerlet
 from ase.optimize import FIRE
 
+from mlipx.config.defaults import BUILTIN_DEFAULTS
 from mlipx.protocols import CancellationRequested
 from mlipx.runners.base import BaseRunner
 from mlipx.writers.outcar import OutcarWriter
@@ -47,7 +50,8 @@ class MDRunner(BaseRunner):
     """Run molecular dynamics simulations.
 
     Supports NVT (Langevin) and NVE (Velocity Verlet) ensembles.
-    Includes pre-relaxation step to eliminate internal stress before MD.
+    Can optionally reduce large initial atomic forces with a positions-only
+    pre-relaxation before MD.
 
     Example:
         >>> runner = MDRunner(
@@ -74,6 +78,8 @@ class MDRunner(BaseRunner):
         save_interval: int = 10,
         output_dir: Path | str = ".",
         write_outcar: bool = True,
+        write_forces: bool = True,
+        write_stress: bool = True,
         write_xdatcar: bool = True,
         write_trajectory: bool = True,
         write_json: bool = True,
@@ -83,6 +89,15 @@ class MDRunner(BaseRunner):
         pre_relax: bool = True,
         pre_relax_steps: int = 50,
         pre_relax_fmax: float = 0.1,
+        # Reproducibility / velocity policy (plan section 5.2 / 5.3).
+        seed: int | None = None,
+        velocity_policy: str = "auto",
+        equil_steps: int = 0,
+        pre_relax_mode: str = "none",
+        # Explosion-guard threshold for finite (but suspiciously large) forces.
+        # Sourced from the safety defaults so it is not a magic literal
+        # (plan section 5.7). Warnings never abort the run.
+        fmax_abort: float = BUILTIN_DEFAULTS["safety"]["fmax_abort"],
         log_fn: Any | None = None,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
@@ -99,6 +114,8 @@ class MDRunner(BaseRunner):
             save_interval: Interval for saving trajectory frames
             output_dir: Directory for output files
             write_outcar: Whether to write OUTCAR file
+            write_forces: Whether OUTCAR includes the final force table
+            write_stress: Whether OUTCAR includes the final stress tensor
             write_xdatcar: Whether to write XDATCAR file
             write_trajectory: Whether to write ASE trajectory
             write_json: Whether to write JSON results
@@ -126,6 +143,8 @@ class MDRunner(BaseRunner):
         self.friction = friction / units.fs  # Convert to ASE units
         self.save_interval = save_interval
         self.write_outcar = write_outcar
+        self.write_forces = write_forces
+        self.write_stress = write_stress
         self.write_xdatcar = write_xdatcar
         self.write_trajectory = write_trajectory
         self.write_json = write_json
@@ -134,6 +153,51 @@ class MDRunner(BaseRunner):
         self.pre_relax = pre_relax
         self.pre_relax_steps = pre_relax_steps
         self.pre_relax_fmax = pre_relax_fmax
+
+        # Reproducibility / velocity policy (plan section 5.2 / 5.3).
+        self.seed = seed
+        # One generator drives *both* the initial Maxwell-Boltzmann draw and
+        # every stochastic Langevin kick.  Seeding only the initial velocities
+        # does not make an NVT trajectory reproducible.
+        self.rng = np.random.default_rng(seed)
+        self.velocity_policy = str(velocity_policy).lower()
+        self.equil_steps = int(equil_steps)
+        self.pre_relax_mode = str(pre_relax_mode).lower()
+        self.fmax_abort = float(fmax_abort)
+
+        if self.velocity_policy not in {"auto", "initialize", "preserve"}:
+            raise ValueError(
+                f"Unknown velocity_policy {velocity_policy!r}. "
+                "Use one of: auto, initialize, preserve."
+            )
+        if self.temperature < 0:
+            raise ValueError("temperature must be >= 0 K")
+        if self.timestep <= 0:
+            raise ValueError("timestep must be > 0 fs")
+        if self.steps < 0:
+            raise ValueError("steps must be >= 0")
+        if self.save_interval <= 0:
+            raise ValueError("save_interval must be > 0")
+        if self.ensemble == "nvt" and self.friction <= 0:
+            raise ValueError(
+                "friction must be > 0 fs^-1 for NVT Langevin dynamics"
+            )
+        # pre_relax_mode / equil_steps are declared in the schema as Phase-3
+        # vocabulary. They must NOT be silently ignored (plan section 5.2): a
+        # non-default value raises an explicit, loud "not yet implemented"
+        # error instead of a silent no-op.
+        if self.pre_relax_mode != "none":
+            raise NotImplementedError(
+                f"pre_relax_mode={self.pre_relax_mode!r} is not yet implemented "
+                "(Phase 3). Use the legacy pre_relax=True/False (positions-only) "
+                "for now."
+            )
+        if self.equil_steps > 0:
+            raise NotImplementedError(
+                f"equil_steps={self.equil_steps} is not yet implemented "
+                "(Phase 3). Run equilibration as a separate short MD and restart "
+                "from it."
+            )
 
         # Validate ensemble
         if self.ensemble not in self.VALID_ENSEMBLES:
@@ -197,26 +261,68 @@ class MDRunner(BaseRunner):
     def _initialize_velocities(self, atoms: Atoms) -> None:
         """Initialize velocities at the requested MD temperature.
 
-        Freshly loaded structures have no momenta and therefore start at 0 K.
-        Both NVT and NVE runs need a thermal velocity distribution; the NVT
-        thermostat should maintain the requested temperature, not spend the
-        beginning of the trajectory heating an initially stationary system.
+        Honours ``velocity_policy`` (plan section 5.3):
+
+        * ``auto``       -- initialize only when the structure has no momenta;
+                            otherwise preserve existing velocities (restart).
+        * ``initialize`` -- always (re-)initialize a Maxwell-Boltzmann distribution.
+        * ``preserve``   -- keep existing velocities; raise if there are none.
+
+        When initializing, a seeded numpy Generator (``self.seed``) is forwarded
+        to ASE's ``MaxwellBoltzmannDistribution`` so the run is reproducible when
+        a seed is recorded (the resolver auto-generates one for MD).
         """
+        # Presence, not magnitude, defines a restart.  An explicitly stored
+        # all-zero momenta array is still a deliberate initial condition.
+        has_momenta = atoms.has("momenta")
+        policy = self.velocity_policy
+        if policy == "preserve":
+            if not has_momenta:
+                raise ValueError(
+                    "velocity_policy='preserve' requires existing velocities, but "
+                    "the structure has none. Use velocity_policy='initialize' or "
+                    "'auto'."
+                )
+            self.log("\nPreserving existing velocities (velocity_policy=preserve)")
+            return
+        if policy == "auto" and has_momenta:
+            self.log("\nPreserving existing velocities (velocity_policy=auto)")
+            return
+        # policy == "initialize", or auto with no velocities.
+        seed_msg = f" (seed={self.seed})" if self.seed is not None else ""
         self.log(
-            f"\nInitializing Maxwell-Boltzmann distribution at {self.temperature} K"
+            f"\nInitializing Maxwell-Boltzmann distribution at "
+            f"{self.temperature} K{seed_msg}"
         )
         MaxwellBoltzmannDistribution(
             atoms,
             temperature_K=self.temperature,
             force_temp=True,
+            rng=self.rng,
         )
         Stationary(atoms, preserve_temperature=True)
 
-    def _pre_relax_structure(self, atoms: Atoms) -> Atoms:
-        """Perform quick relaxation to eliminate internal stress.
+    @staticmethod
+    def _ensure_com_constraint(atoms: Atoms) -> None:
+        """Remove centre-of-mass translation with an explicit ASE constraint.
 
-        This prevents atom explosion during MD by ensuring the
-        structure is at a local minimum before adding thermal energy.
+        ASE's legacy ``Langevin(fixcm=True)`` does not strictly sample the
+        canonical distribution.  An explicit ``FixCom`` constraint together
+        with ``fixcm=False`` is the recommended formulation and also makes the
+        removed three degrees of freedom visible to ``Atoms.get_temperature``.
+        """
+        if len(atoms) <= 1 or any(isinstance(c, FixCom) for c in atoms.constraints):
+            return
+        atoms.set_constraint([*atoms.constraints, FixCom()])
+
+    def _pre_relax_structure(self, atoms: Atoms) -> Atoms:
+        """Perform a short positions-only relaxation to reduce large forces.
+
+        This does not optimize the cell and therefore does not in general
+        remove cell stress or guarantee a local minimum.
+
+        This can lower risky initial forces, but a short capped run does not
+        ensure that the structure reaches a local minimum.
 
         Args:
             atoms: ASE Atoms object
@@ -233,7 +339,7 @@ class MDRunner(BaseRunner):
         self.log("\n" + "=" * 60)
         self.log("PRE-RELAXATION PHASE")
         self.log("=" * 60)
-        self.log("Eliminating internal stress before MD...")
+        self.log("Reducing large initial atomic forces before MD...")
         self.log(f"Target fmax: {self.pre_relax_fmax} eV/Å")
         self.log(f"Max steps: {self.pre_relax_steps}")
 
@@ -255,7 +361,10 @@ class MDRunner(BaseRunner):
         e_init = atoms.get_potential_energy()
         self.log(f"Initial energy: {e_init:.6f} eV")
 
-        # Run optimization
+        # Run optimization.  A backend/neighbor-list failure here is not a
+        # recoverable "partially relaxed" result: continuing into MD would
+        # merely hide the original error and can launch from an unsafe state.
+        # Fail closed, matching safety.pre_relax_failure=abort.
         try:
             optimizer.run(fmax=self.pre_relax_fmax, steps=self.pre_relax_steps)
 
@@ -276,8 +385,11 @@ class MDRunner(BaseRunner):
             self.log("Pre-relaxation cancelled by user")
             raise  # Re-raise to stop the entire MD run
         except Exception as e:
-            self.log(f"! Pre-relaxation warning: {e}", level="warning")
-            self.log("! Continuing with original structure...")
+            raise RuntimeError(
+                "Pre-relaxation failed at step "
+                f"{optimizer.nsteps}; MD was not started because the structure "
+                "may be unsafe."
+            ) from e
 
         self.log("=" * 60)
 
@@ -292,6 +404,19 @@ class MDRunner(BaseRunner):
         Returns:
             Dictionary with results including final temperature and trajectory
         """
+        if (
+            self.pre_relax
+            and atoms.has("momenta")
+            and self.velocity_policy in {"auto", "preserve"}
+        ):
+            raise ValueError(
+                "Pre-relaxation changes positions and is incompatible with "
+                f"velocity_policy={self.velocity_policy!r} on a structure that "
+                "already contains momenta. For an exact phase-space restart use "
+                "pre_relax=False; to start a new trajectory use "
+                "velocity_policy='initialize'."
+            )
+
         self.print_header("MOLECULAR DYNAMICS")
         self._emit_progress("loading_model", "Loading model and preparing structure...")
 
@@ -321,6 +446,10 @@ class MDRunner(BaseRunner):
         if self.pre_relax:
             atoms = self._pre_relax_structure(atoms)
 
+        # Make COM removal explicit so temperature DOF and the Langevin
+        # invariant distribution use the same constraint-aware convention.
+        self._ensure_com_constraint(atoms)
+
         # Initialize a thermal velocity distribution for both NVT and NVE.
         self._initialize_velocities(atoms)
 
@@ -338,20 +467,32 @@ class MDRunner(BaseRunner):
                 timestep=self.timestep,
                 temperature_K=self.temperature,
                 friction=self.friction,
+                rng=self.rng,
+                fixcm=False,
             )
         else:  # nve
             self.log("Setting up NVE (Velocity Verlet)")
             dyn = VelocityVerlet(atoms, timestep=self.timestep)
 
-        # Setup trajectory tracking
-        trajectory = []
+        # Streaming trajectory outputs (plan section 5.5):
+        #   * full frames  -> trajectory.traj (binary, via traj_writer)
+        #   * full frames  -> XDATCAR (streamed frame-by-frame)
+        #   * scalars      -> md.csv (streamed row-by-row)
+        # Only the scalar summary is kept in memory, so RAM stays flat
+        # regardless of run length (no per-frame atoms.copy() list).
+        trajectory_summary: list[dict[str, Any]] = []
+        traj_path = self.output_dir / "trajectory.traj"
 
-        # Setup file writers
+        # File writers
         traj_writer = None
         if self.write_trajectory:
-            traj_path = self.output_dir / "trajectory.traj"
             traj_writer = AseTrajectoryWriter(traj_path, mode="w")
 
+        md_csv_file = None
+        md_csv_writer = None
+        xdatcar_writer = XdatcarWriter() if self.write_xdatcar else None
+        xdatcar_header_written = False
+        xdatcar_path = self.output_dir / "XDATCAR"
         # Run MD
         self.log("\nStarting MD simulation...")
         self._emit_progress(
@@ -364,6 +505,7 @@ class MDRunner(BaseRunner):
 
         def print_progress():
             """Print progress and save trajectory."""
+            nonlocal md_csv_file, md_csv_writer, xdatcar_header_written
             # Check for cooperative cancellation first
             if self._is_cancelled():
                 raise CancellationRequested("MD simulation cancelled by user")
@@ -389,38 +531,63 @@ class MDRunner(BaseRunner):
 
             # Explosion guard: warn on suspiciously large (but finite) forces.
             # _check_finite above already aborts on NaN/inf; this catches a run
-            # that is diverging while still producing finite numbers. The old
-            # threshold of 50 eV/Å is far too late -- by then atoms have already
-            # flown apart -- so use 20 eV/Å (matching the configured fmax_abort
-            # safety default). max_force is computed every step because
-            # forces_chk is already available (free), but the warning is only
-            # logged every 100 steps to avoid flooding the log.
+            # that is diverging while still producing finite numbers. The
+            # threshold comes from the safety default (fmax_abort, 20 eV/Å by
+            # default) -- configurable via the ``fmax_abort`` parameter (plan
+            # section 5.7) -- and never aborts, only warns. max_force is
+            # computed every step because forces_chk is already available
+            # (free), but the warning is only logged every 100 steps to avoid
+            # flooding the log.
             max_force = float(np.max(np.linalg.norm(forces_chk, axis=1)))
-            if max_force > 20.0 and (step > 0 and (step % 100 == 0 or step == self.steps)):
+            if max_force > self.fmax_abort and (
+                step > 0 and (step % 100 == 0 or step == self.steps)
+            ):
                 self.log(
                     f"⚠️ WARNING: Large forces detected ({max_force:.1f} eV/Å)",
                     level="warning",
                 )
                 self.log("   Structure may be unstable. Consider:")
                 self.log("   - Lowering temperature")
-                self.log("   - Increasing pre-relaxation steps")
+                self.log("   - Relaxing the positions more carefully before MD")
                 self.log("   - Checking initial structure")
 
-            # Save trajectory frame
+            # Save trajectory frame (streamed to disk; only scalars in RAM)
             if step % self.save_interval == 0:
                 frame_data = {
                     "step": step,
-                    "atoms": atoms.copy(),
                     "energy": pe,
                     "kinetic_energy": ke,
                     "total_energy": total_e,
                     "temperature": temp,
                 }
-                trajectory.append(frame_data)
+                trajectory_summary.append(frame_data)
+
+                # md.csv: create lazily on the first saved frame.
+                if md_csv_writer is None:
+                    md_csv_file = open(
+                        self.output_dir / "md.csv",
+                        "w",
+                        newline="",
+                        encoding="utf-8",
+                    )
+                    md_csv_writer = csv.writer(md_csv_file)
+                    md_csv_writer.writerow(
+                        ["step", "potential_energy_eV",
+                         "kinetic_energy_eV", "total_energy_eV",
+                         "temperature_K"]
+                    )
+                md_csv_writer.writerow([step, pe, ke, total_e, temp])
+                md_csv_file.flush()
+
+                # XDATCAR: header from the first frame, then stream frames.
+                if xdatcar_writer is not None:
+                    if not xdatcar_header_written:
+                        xdatcar_writer.write_header(atoms, xdatcar_path)
+                        xdatcar_header_written = True
+                    xdatcar_writer.append_frame(xdatcar_path, atoms, step=step)
 
                 if traj_writer is not None:
                     traj_writer.write(atoms)
-
             # Print progress every 100 steps
             if step % 100 == 0 or step == self.steps:
                 self._emit_progress(
@@ -448,19 +615,25 @@ class MDRunner(BaseRunner):
             # Save what we have before returning
             if traj_writer is not None:
                 traj_writer.close()
+            if md_csv_file is not None:
+                md_csv_file.close()
             raise  # Re-raise to propagate cancellation
         except Exception as e:
             self.log(f"\n❌ MD simulation failed: {e}", level="error")
             # Save what we have
             if traj_writer is not None:
                 traj_writer.close()
+            if md_csv_file is not None:
+                md_csv_file.close()
             raise
 
         md_time = time.time() - start_time
 
-        # Close trajectory writer
+        # Close trajectory writer + csv
         if traj_writer is not None:
             traj_writer.close()
+        if md_csv_file is not None:
+            md_csv_file.close()
 
         # Final temperature with proper calculation
         final_temp = self._calculate_temperature(atoms)
@@ -468,6 +641,9 @@ class MDRunner(BaseRunner):
         # Final energy
         final_energy = atoms.get_potential_energy()
         final_forces = atoms.get_forces()
+        self._check_finite(
+            atoms, final_energy, final_forces, context="MD final structure"
+        )
 
         self.log(f"\nMD simulation completed in {md_time:.2f} s")
         self.log(f"Final temperature: {final_temp:.1f} K")
@@ -481,13 +657,17 @@ class MDRunner(BaseRunner):
             "md_steps": self.steps,
             "ensemble": self.ensemble.upper(),
             "time": md_time,
-            "trajectory": trajectory,
+            "trajectory": trajectory_summary,
+            "trajectory_path": str(traj_path) if self.write_trajectory else None,
+            "md_csv_path": str(self.output_dir / "md.csv")
+            if md_csv_writer is not None
+            else None,
             "pre_relaxed": self.pre_relax,
         }
 
-        # Write outputs
+        # Write outputs (XDATCAR was already streamed during the run)
         self._emit_progress("writing_output", "Writing trajectory and output files...")
-        self._write_outputs(atoms, results, trajectory)
+        self._write_outputs(atoms, results)
 
         # Print summary
         self._write_summary(results, atoms)
@@ -503,14 +683,15 @@ class MDRunner(BaseRunner):
         self,
         atoms: Atoms,
         results: dict[str, Any],
-        trajectory: list,
     ) -> None:
         """Write output files.
+
+        XDATCAR and md.csv are streamed during the run (see :meth:`run`), so
+        this only writes OUTCAR and the JSON summary (plan section 5.5).
 
         Args:
             atoms: ASE Atoms object
             results: Results dictionary
-            trajectory: MD trajectory
         """
         metadata = self.calculator.info()
         metadata["pre_relaxed"] = self.pre_relax
@@ -519,9 +700,14 @@ class MDRunner(BaseRunner):
         if self.write_outcar:
             outcar_path = self.output_dir / "OUTCAR"
             writer = OutcarWriter()
+            outcar_results = dict(results)
+            if not self.write_forces:
+                outcar_results.pop("forces", None)
+            if not self.write_stress:
+                outcar_results.pop("stress", None)
             writer.write(
                 atoms,
-                results,
+                outcar_results,
                 outcar_path,
                 mode="md",
                 task_name=self.calculator.task,
@@ -529,16 +715,12 @@ class MDRunner(BaseRunner):
             )
             self.log(f"OUTCAR written to: {outcar_path}")
 
-        # Write XDATCAR
-        if self.write_xdatcar and trajectory:
-            xdatcar_path = self.output_dir / "XDATCAR"
-            writer = XdatcarWriter()
-            writer.write_from_md(
-                xdatcar_path,
-                trajectory,
-                step_interval=self.save_interval,
-            )
-            self.log(f"XDATCAR written to: {xdatcar_path}")
+        # XDATCAR + md.csv were streamed frame-by-frame during the run;
+        # log their paths if anything was written.
+        if self.write_xdatcar and (self.output_dir / "XDATCAR").exists():
+            self.log(f"XDATCAR written to: {self.output_dir / 'XDATCAR'}")
+        if (self.output_dir / "md.csv").exists():
+            self.log(f"md.csv written to: {self.output_dir / 'md.csv'}")
 
         # Write JSON
         if self.write_json:

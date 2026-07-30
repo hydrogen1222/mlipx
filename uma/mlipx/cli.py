@@ -86,13 +86,13 @@ Examples:
             type=str,
             default=None,
             choices=["float32", "float64"],
-            help="MACE model dtype (default: float32 for MD, float64 for sp/opt).",
+            help="MACE model dtype (default: float32 for every calculation type).",
         )
         p.add_argument(
             "--head",
             type=str,
             default=None,
-            help="MACE foundation-model head name.",
+            help="MACE head or DeepMD/DPA branch name.",
         )
         p.add_argument(
             "--model-alias",
@@ -361,6 +361,18 @@ Examples:
         help="Pre-relaxation force threshold in eV/Angstrom (default: 0.1).",
     )
     md_parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducible MD (default: auto-generated and recorded).",
+    )
+    md_parser.add_argument(
+        "--velocity-policy",
+        choices=["auto", "initialize", "preserve"],
+        default=None,
+        help="Velocity initialization policy (default: auto).",
+    )
+    md_parser.add_argument(
         "--output",
         "-o",
         type=str,
@@ -423,7 +435,10 @@ Examples:
         "--pattern",
         type=str,
         default=None,
-        help="File pattern to match (default: *.cif).",
+        help=(
+            "File glob to match. If omitted, discovers *.cif, *.xyz, *.vasp "
+            "and POSCAR*."
+        ),
     )
     batch_parser.add_argument(
         "--output",
@@ -627,6 +642,8 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
             "pre_relax",
             "pre_relax_steps",
             "pre_relax_fmax",
+            "seed",
+            "velocity_policy",
         ):
             value = getattr(args, key, None)
             if value is not None:
@@ -882,16 +899,32 @@ def cmd_batch(args: argparse.Namespace) -> int:
         return 1
 
     config, resolved, _settings = _resolve_engine_config(args, "batch")
-    pattern = resolved.run_options.get("pattern", "*.cif")
+    pattern = resolved.run_options.get("pattern")
 
     print_header()
 
     try:
         _emit_resolved_config(resolved, config.output_dir / (config.job_name or "") if config.job_name else config.output_dir)
         engine = CalculationEngine.from_config(config)
-        files = list(input_dir.glob(pattern))
+        if "pattern" in resolved.run_options:
+            files = sorted(input_dir.glob(pattern))
+        else:
+            # Match the formats supported by BatchRunner/read(), not only CIF.
+            # The old CLI duplicated discovery but forgot XYZ/VASP/POSCAR, so
+            # valid directories were reported as empty.
+            files = sorted(
+                {
+                    *input_dir.glob("*.cif"),
+                    *input_dir.glob("*.xyz"),
+                    *input_dir.glob("*.vasp"),
+                    *input_dir.glob("POSCAR*"),
+                }
+            )
         if not files:
-            print(f"No files matching '{pattern}' found in {input_dir}")
+            if "pattern" in resolved.run_options:
+                print(f"No files matching '{pattern}' found in {input_dir}")
+            else:
+                print(f"No supported structure files found in {input_dir}")
             return 1
         print(f"Found {len(files)} structure files")
         summary = engine.run_batch(

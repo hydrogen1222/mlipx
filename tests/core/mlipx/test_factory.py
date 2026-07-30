@@ -7,9 +7,11 @@ LICENSE file in the root directory of this source tree.
 
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import ClassVar
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 from mlipx.base_calculator import BaseMLIPCalculator
@@ -111,7 +113,7 @@ class TestGenericWrappers:
 
     def test_grace_wrapper_construction(self, tmp_path):
         model = tmp_path / "grace"
-        model.write_text("x")
+        model.mkdir()
         w = GRACECalculatorWrapper(model, task="bulk")
         assert isinstance(w, BaseMLIPCalculator)
         assert w.task == "bulk"
@@ -132,6 +134,24 @@ class TestGenericWrappers:
         assert info["has_stress"] is True
         assert info["implemented_properties"] == ["energy", "forces", "stress"]
 
+    def test_mace_unknown_head_fails_closed(self, tmp_path, monkeypatch):
+        """Never accept mace-torch's silent fallback to a different PES head."""
+        model = tmp_path / "mace.model"
+        model.write_text("x")
+        fake = MagicMock()
+        fake.available_heads = ["default"]
+        fake_cls = MagicMock(return_value=fake)
+        module = MagicMock(MACECalculator=fake_cls)
+        monkeypatch.setitem(sys.modules, "mace", MagicMock())
+        monkeypatch.setitem(sys.modules, "mace.calculators", module)
+        monkeypatch.setattr(
+            "mlipx.doctor._installed_dependency_conflicts", lambda _: []
+        )
+
+        wrapper = MACECalculatorWrapper(model, head="omol")
+        with pytest.raises(ValueError, match="Available heads"):
+            wrapper.get_calculator()
+
     def test_factory_creates_mace_wrapper(self, tmp_path):
         model = tmp_path / "mace.model"
         model.write_text("x")
@@ -140,6 +160,112 @@ class TestGenericWrappers:
         )
         assert isinstance(w, MACECalculatorWrapper)
         assert w._default_dtype == "float32"
+
+    def test_factory_forwards_dpa_head(self, tmp_path):
+        """A DPA multi-task branch is a calculator option, not a PBC task."""
+        model = tmp_path / "dpa.pt"
+        model.write_text("x")
+        w = CalculatorFactory.create(
+            "dpa", model, task="bulk", head="Domains_SSE_PBE"
+        )
+        assert isinstance(w, DPACalculatorWrapper)
+        assert w._head == "Domains_SSE_PBE"
+
+    def test_factory_mace_default_dtype_is_float32(self, tmp_path):
+        """Direct factory construction with no dtype defaults to float32 (docs)."""
+        model = tmp_path / "mace.model"
+        model.write_text("x")
+        w = CalculatorFactory.create("mace", model, task="bulk")
+        assert isinstance(w, MACECalculatorWrapper)
+        assert w._default_dtype == "float32"
+
+
+class TestDpaGraceDevice:
+    """Plan section 6.2 / 7.5: DPA/GRACE device must take effect (via env) and
+    info() must distinguish requested vs actual device (never guess)."""
+
+    def test_dpa_honours_cuda_index(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+
+        class _FakeDPCalc:
+            implemented_properties: ClassVar = ["energy", "forces", "stress"]
+
+        fake_dp_cls = MagicMock(return_value=_FakeDPCalc())
+        mod = MagicMock()
+        mod.DP = fake_dp_cls
+        monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
+        monkeypatch.setitem(sys.modules, "deepmd.calculator", mod)
+
+        model = tmp_path / "dpa.pth"
+        model.write_text("x")
+        w = DPACalculatorWrapper(model, device="cuda:1", task="bulk")
+        w.get_calculator()
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == "1"
+        info = w.info()
+        assert info["requested_device"] == "cuda:1"
+        assert info["device"] == "cuda:1"  # backward-compat alias
+        assert info["actual_device"] == "unknown"
+        fake_dp_cls.assert_called_once_with(model=str(model), type_dict=None)
+
+    def test_dpa_cpu_hides_gpus(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        fake_dp_cls = MagicMock(return_value=MagicMock())
+        mod = MagicMock()
+        mod.DP = fake_dp_cls
+        monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
+        monkeypatch.setitem(sys.modules, "deepmd.calculator", mod)
+        model = tmp_path / "dpa.pth"
+        model.write_text("x")
+        w = DPACalculatorWrapper(model, device="cpu", task="bulk")
+        w.get_calculator()
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == ""
+
+    def test_dpa_explicit_device_overrides_inherited_env(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
+        fake_dp_cls = MagicMock(return_value=MagicMock())
+        mod = MagicMock()
+        mod.DP = fake_dp_cls
+        monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
+        monkeypatch.setitem(sys.modules, "deepmd.calculator", mod)
+        model = tmp_path / "dpa.pth"
+        model.write_text("x")
+        w = DPACalculatorWrapper(model, device="cuda:1", task="bulk")
+        w.get_calculator()
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == "1"
+
+    def test_grace_honours_cuda_index(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+
+        class _FakeTPCalc:
+            implemented_properties: ClassVar = ["energy", "forces", "stress"]
+
+        fake_tp_cls = MagicMock(return_value=_FakeTPCalc())
+        mod = MagicMock()
+        mod.TPCalculator = fake_tp_cls
+        monkeypatch.setitem(sys.modules, "tensorpotential", MagicMock())
+        monkeypatch.setitem(sys.modules, "tensorpotential.calculator", mod)
+        model = tmp_path / "grace_model"
+        model.mkdir()
+        w = GRACECalculatorWrapper(model, device="cuda:1", task="bulk")
+        w.get_calculator()
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == "1"
+        info = w.info()
+        assert info["requested_device"] == "cuda:1"
+        assert info["actual_device"] == "unknown"
+        fake_tp_cls.assert_called_once_with(model=str(model))
+
+    def test_grace_cpu_hides_gpus(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        fake_tp_cls = MagicMock(return_value=MagicMock())
+        mod = MagicMock()
+        mod.TPCalculator = fake_tp_cls
+        monkeypatch.setitem(sys.modules, "tensorpotential", MagicMock())
+        monkeypatch.setitem(sys.modules, "tensorpotential.calculator", mod)
+        model = tmp_path / "grace_model"
+        model.mkdir()
+        w = GRACECalculatorWrapper(model, device="cpu", task="bulk")
+        w.get_calculator()
+        assert os.environ.get("CUDA_VISIBLE_DEVICES") == ""
 
 
 class TestEngineModelType:

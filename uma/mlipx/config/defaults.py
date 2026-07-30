@@ -5,13 +5,9 @@ that defines built-in default values. Every other interface (CLI argparse
 defaults, the INCAR ``template`` generator, the Python API, the engine fallbacks)
 must read from here rather than re-hard-coding its own copy.
 
-The values below deliberately match the historical mlipx behaviour so that
-existing CLI/API/INCAR flows keep producing the same result. New vocabulary
-introduced by the plan (``production_steps``, ``pre_relax_mode``,
-``trajectory_interval`` ...) is registered in :mod:`mlipx.config.schema` as
-recognised aliases, but is *not* wired to change scientific defaults until the
-MD rewrite (Phase 3). This honours the rule "do not change scientific defaults
-without recording it".
+Only settings which are currently consumed are exposed here.  Future queue,
+restart and output-policy ideas must not masquerade as working configuration:
+advertising an ignored safety or restart switch is worse than rejecting it.
 """
 
 from __future__ import annotations
@@ -36,56 +32,22 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
     "general": {
-        "output_root": "./results",
-        "log_level": "INFO",
         # Backward compatible: unknown keys warn (existing behaviour). Users opt
         # into hard errors via settings.ini ``strict_config = true``.
         "strict_config": False,
         "write_resolved_config": True,
-        "write_manifest": True,
-        # error = refuse to overwrite an existing output directory (safest).
-        "output_collision": "error",
         # None = generate a seed and record it (see resolver).
         "default_seed": None,
     },
-    "resources": {
-        "max_gpu_jobs": 1,
-        "max_cpu_jobs": 1,
-        "gpu_devices": "0",
-        "cpu_threads": 1,
-        "device_lock_dir": "./.mlipx/locks",
-    },
-    "batch": {
-        "mode": "serial",
-        "continue_on_error": True,
-        "resume": True,
-        "retry_failed": 0,
-        "state_flush_interval": 1,
-        "preflight_all_jobs": True,
-        "stop_when_disk_free_gb_below": 5,
-        "stop_when_gpu_memory_free_mb_below": 1000,
-    },
-    "output": {
-        "trajectory_interval": 20,
-        "log_interval": 20,
-        "checkpoint_interval": 1000,
-        "write_xdatcar": True,
-        "write_traj": True,
-        "write_json": True,
-        "compress_finished_trajectory": False,
-    },
+    # Keep the scopes present for stable schema/introspection, but do not put
+    # ignored queue/output switches in resolved_config.json.
+    "resources": {},
+    "batch": {},
+    "output": {},
     "safety": {
-        "abort_on_nan": True,
-        "guard_interval": 10,
-        "fmax_warn": 5.0,
+        # MD currently checks non-finite values unconditionally and warns at
+        # this finite-force threshold.
         "fmax_abort": 20.0,
-        "minimum_distance_warn": 0.8,
-        "minimum_distance_abort": 0.5,
-        "temperature_factor_warn": 2.0,
-        "temperature_factor_abort": 3.0,
-        "temperature_violation_count": 5,
-        # Fail-closed pre-relaxation (plan section 2.4 / 13.2).
-        "pre_relax_failure": "abort",
     },
     "sp": {
         "device": "cpu",
@@ -125,11 +87,13 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "activation_checkpointing": None,
     },
     "calculator.mace": {
-        # MACE dtype default is calc-type aware (applied by the engine, not
-        # the resolver): float32 for MD (speed), float64 for sp/opt (accuracy
-        # for energy differences). Direct factory construction defaults to
-        # float64; users override via --default-dtype / DEFAULT_DTYPE.
-        "default_dtype": "float64",
+        # float32 is the documented performance-oriented default.  Some model
+        # files (including the bundled mace-mpa-0-medium.model) store float64
+        # weights and mace-torch will explicitly report their conversion.
+        # The engine applies one default for every calc type; users can preserve
+        # a float64 model / request higher-precision energy differences via
+        # --dtype float64 / DEFAULT_DTYPE.
+        "default_dtype": "float32",
         "head": None,
     },
     "calculator.dpa": {},

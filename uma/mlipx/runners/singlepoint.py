@@ -17,6 +17,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 import threading
 
+import numpy as np
+
 from mlipx.runners.base import BaseRunner
 from mlipx.writers.contcar import ContcarWriter
 from mlipx.writers.json_writer import JsonWriter
@@ -45,6 +47,8 @@ class SinglePointRunner(BaseRunner):
         calculator,
         output_dir: Path | str = ".",
         write_outcar: bool = True,
+        write_forces: bool = True,
+        write_stress: bool = True,
         write_json: bool = True,
         write_contcar: bool = True,
         verbose: bool = True,
@@ -59,6 +63,8 @@ class SinglePointRunner(BaseRunner):
             calculator: UMA calculator wrapper
             output_dir: Directory for output files
             write_outcar: Whether to write OUTCAR file
+            write_forces: Whether OUTCAR includes the force table
+            write_stress: Whether OUTCAR includes the stress tensor
             write_json: Whether to write JSON results
             write_contcar: Whether to write CONTCAR file
             verbose: Whether to print progress messages
@@ -76,6 +82,8 @@ class SinglePointRunner(BaseRunner):
             cancel_event=cancel_event,
         )
         self.write_outcar = write_outcar
+        self.write_forces = write_forces
+        self.write_stress = write_stress
         self.write_json = write_json
         self.write_contcar = write_contcar
 
@@ -160,6 +168,11 @@ class SinglePointRunner(BaseRunner):
             )
             self.log("Calculating stress...")
             stress = atoms.get_stress()
+            if not np.all(np.isfinite(stress)):
+                raise RuntimeError(
+                    "Non-finite stress during single point; aborting before "
+                    "NaN is written to outputs."
+                )
 
         calc_time = time.time() - start_time
 
@@ -204,9 +217,14 @@ class SinglePointRunner(BaseRunner):
         if self.write_outcar:
             outcar_path = self.output_dir / "OUTCAR"
             writer = OutcarWriter()
+            outcar_results = dict(results)
+            if not self.write_forces:
+                outcar_results.pop("forces", None)
+            if not self.write_stress:
+                outcar_results.pop("stress", None)
             writer.write(
                 atoms,
-                results,
+                outcar_results,
                 outcar_path,
                 mode="single_point",
                 task_name=self.calculator.task,

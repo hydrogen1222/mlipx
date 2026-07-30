@@ -111,7 +111,7 @@ _CALCULATOR_KEYS_BY_ENGINE: dict[str, set[str]] = {
     "uma": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
-    "dpa": set(),
+    "dpa": {"head"},
     "grace": set(),
 }
 
@@ -121,17 +121,20 @@ def _is_calculator_key(key: str, model_type: str) -> bool:
     return key in _CALCULATOR_KEYS_BY_ENGINE.get(engine, set())
 
 
-def _settings_layer(settings: MlipxSettings | None) -> dict[str, Any]:
+def _settings_layer(
+    settings: MlipxSettings | None, calc_type: str | None = None
+) -> dict[str, Any]:
     """Flatten the relevant settings.ini sections into a single dict."""
     if settings is None:
         return {}
     layer: dict[str, Any] = {}
-    # General/resources/batch/output/safety feed the ``settings`` bag.
-    for section_name in ("general", "resources", "batch", "output", "safety"):
+    # Global sections feed the settings bag. Calculation sections are scoped:
+    # loading [opt] into an MD run (and vice versa) previously leaked irrelevant
+    # keys into run_options and produced misleading resolved configurations.
+    for section_name in ("general", "resources", "output", "safety"):
         layer.update(settings.section(section_name))
-    # md/opt sections provide run-option defaults (canonicalised below).
-    layer.update(settings.section("md"))
-    layer.update(settings.section("opt"))
+    if calc_type in {"md", "opt", "batch"}:
+        layer.update(settings.section(calc_type))
     return layer
 
 
@@ -204,29 +207,51 @@ def resolve_config(
     defaults_layer.update(BUILTIN_DEFAULTS.get("general", {}))
     defaults_layer.update(BUILTIN_DEFAULTS.get(calc_type, {}))
     defaults_layer.update(BUILTIN_DEFAULTS.get("calculator", {}))
+    if calc_type == "md":
+        # Implemented MD guards are resolved like user [safety] overrides, so
+        # EngineConfig.from_resolved can route them to MDRunner.
+        defaults_layer.update(BUILTIN_DEFAULTS.get("safety", {}))
     defaults_layer["device"] = DEFAULT_DEVICE_BY_CALC_TYPE.get(calc_type, "cpu")
     _merge_layer(sources, _canonicalize_layer(defaults_layer, schema), "built-in defaults")
 
-    # Layer 2: settings.ini (md/opt sections + engine defaults).
-    settings_layer = _canonicalize_layer(_settings_layer(settings), schema)
-    # Apply engine-specific calculator defaults from [engine:<name>].
+    # Canonicalise the higher layers once. Besides avoiding repeated parsing,
+    # this lets us select the right [engine:<name>] section even when the
+    # engine is chosen by a CLI flag, profile, INCAR or model alias.
+    alias_layer = _canonicalize_layer(
+        resolve_model_alias(model_alias_name, model_aliases), schema
+    )
+    profile_layer = _canonicalize_layer(
+        resolve_profile(profile_name, profiles), schema
+    )
+    profile_layer.pop("calc_type", None)
+    incar_layer = _canonicalize_layer(incar or {}, schema)
+    incar_layer.pop("calc_type", None)
+    cli_layer = _canonicalize_layer(cli or {}, schema)
+    cli_layer.pop("calc_type", None)
+
+    # Layer 2: settings.ini (calculation section + selected engine defaults).
+    settings_layer = _canonicalize_layer(
+        _settings_layer(settings, calc_type), schema
+    )
     if settings is not None:
-        engine_name = settings_layer.get("model_type", sources.get("model_type").value if "model_type" in sources else "uma")
+        engine_name = "uma"
+        for candidate in (
+            settings_layer,
+            alias_layer,
+            profile_layer,
+            incar_layer,
+            cli_layer,
+        ):
+            if "model_type" in candidate:
+                engine_name = str(candidate["model_type"]).lower()
         engine_defaults = settings.engine_section(str(engine_name))
-        # ``default_dtype`` lives under [engine:mace] as default_dtype.
         settings_layer.update(_canonicalize_layer(engine_defaults, schema))
     _merge_layer(sources, settings_layer, "settings.ini")
 
     # Layer 3: model alias.
-    alias_layer = _canonicalize_layer(
-        resolve_model_alias(model_alias_name, model_aliases), schema
-    )
     _merge_layer(sources, alias_layer, f"model alias {model_alias_name!r}")
 
     # Layer 4: profile.
-    profile_layer = _canonicalize_layer(
-        resolve_profile(profile_name, profiles), schema
-    )
     # ``calc_type`` is authoritative from the caller (CLI subcommand / API);
     # a profile's calc_type is declarative only and is not allowed to override
     # it. (Plan section 4.3: CLI > profile.)
@@ -234,13 +259,9 @@ def resolve_config(
     _merge_layer(sources, profile_layer, f"profile {profile_name!r}")
 
     # Layer 5: INCAR / job.
-    incar_layer = _canonicalize_layer(incar or {}, schema)
-    incar_layer.pop("calc_type", None)
     _merge_layer(sources, incar_layer, "INCAR/job")
 
     # Layer 6: CLI / kwargs (highest priority).
-    cli_layer = _canonicalize_layer(cli or {}, schema)
-    cli_layer.pop("calc_type", None)
     _merge_layer(sources, cli_layer, "CLI")
 
     # ---- Finalise model-level fields. ----
@@ -299,7 +320,7 @@ def resolve_config(
         run_options["seed"] = seed
 
     strict = bool(settings_bag.get("strict_config", False)) if settings_bag else bool(
-        _settings_layer(settings).get("strict_config", False)
+        _settings_layer(settings, calc_type).get("strict_config", False)
     )
 
     resolved = ResolvedConfig(
@@ -323,6 +344,13 @@ def resolve_config(
 
 def _validate_resolved(resolved: ResolvedConfig, schema: Schema) -> None:
     """Run schema validation; warn or raise depending on ``strict``."""
+    output_format = resolved.settings.get("output_format")
+    if output_format is not None and str(output_format).lower() != "vasp":
+        raise ValueError(
+            f"Unsupported OUTPUT_FORMAT {output_format!r}; only VASP is "
+            "currently implemented."
+        )
+
     all_opts: dict[str, Any] = {}
     all_opts.update(resolved.calculator_options)
     all_opts.update(resolved.run_options)

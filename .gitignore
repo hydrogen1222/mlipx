@@ -156,6 +156,7 @@ _build
 # UMA model checkpoints and local test structures (do not commit — large / user-specific)
 uma/uma-s-1.pt
 uma/Si.cif
+models/
 # Editor/process temp backups
 *.tmp.*
 # Calculation output artifacts

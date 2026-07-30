@@ -42,7 +42,7 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
         Initialize GRACE calculator wrapper.
 
         Args:
-            model_path: Path to a GRACE SavedModel directory or YAML config.
+            model_path: Path to an exported GRACE SavedModel directory.
             device: Device for calculation (``cpu`` or ``cuda``).
             task: PBC hint (``bulk`` or ``molecule``); not consumed by GRACE.
         """
@@ -53,10 +53,23 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
 
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path}")
+        if not self.model_path.is_dir():
+            raise ValueError(
+                "GRACE model_path must be an exported SavedModel directory, "
+                f"got: {self.model_path}"
+            )
+        dev = str(device).lower()
+        if dev not in {"cpu", "cuda", "gpu"} and not (
+            dev.startswith("cuda:") and dev[5:].isdigit()
+        ):
+            raise ValueError(
+                f"Invalid GRACE device {device!r}. Use cpu, cuda, gpu, or cuda:N."
+            )
 
     def get_calculator(self) -> Calculator:
         """Return the cached GRACE ASE calculator (lazy import)."""
         if self._calculator is None:
+            self._apply_device_env()
             try:
                 from tensorpotential.calculator import TPCalculator  # noqa: PLC0415
             except ImportError as e:  # pragma: no cover
@@ -66,6 +79,41 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
                 ) from e
             self._calculator = TPCalculator(model=str(self.model_path))
         return self._calculator
+
+    def _apply_device_env(self) -> None:
+        """Honour a requested device for GRACE/TensorFlow (plan section 7.5).
+
+        ``TPCalculator`` has no ``device`` parameter; TensorFlow device
+        placement is governed by ``CUDA_VISIBLE_DEVICES``, which must be set
+        *before* TensorFlow is imported. mlipx imports tensorpotential lazily
+        here, so setting the env var just above makes a ``cuda:N`` / ``cpu``
+        request actually take effect. An explicit mlipx device selection takes
+        precedence over an inherited environment value.
+        """
+        import os  # noqa: PLC0415
+
+        dev = str(self._device).lower()
+        if dev.startswith("cuda:") and dev != "cuda:":
+            idx = dev.split(":", 1)[1]
+            os.environ["CUDA_VISIBLE_DEVICES"] = idx
+        elif dev == "cpu":
+            # Hide GPUs so TensorFlow runs on CPU.
+            os.environ["CUDA_VISIBLE_DEVICES"] = ""
+
+    def _actual_device(self) -> str:
+        """Best-effort actual device, else 'unknown' (plan section 7.5).
+
+        TensorFlow device placement is not reliably queryable from the ASE
+        calculator, so we report ``'unknown'`` rather than guessing.
+        """
+        calc = self._calculator
+        if calc is None:
+            return "unknown"
+        for attr in ("device", "_device"):
+            d = getattr(calc, attr, None)
+            if d:
+                return str(d)
+        return "unknown"
 
     @property
     def task(self) -> str:
@@ -78,10 +126,17 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
         return "stress" in self.implemented_properties
 
     def info(self) -> dict:
-        """Return model metadata."""
+        """Return model metadata.
+
+        Distinguishes ``requested_device`` from ``actual_device`` (``'unknown'``
+        when TensorFlow placement cannot be read). The legacy ``device`` key is
+        kept (== requested) for backward-compatible output writers (plan 7.5).
+        """
         return {
             "model_type": "grace",
             "model_path": str(self.model_path),
+            "requested_device": self._device,
+            "actual_device": self._actual_device(),
             "device": self._device,
             "task": self._task,
             "implemented_properties": self.implemented_properties,

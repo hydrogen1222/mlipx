@@ -36,6 +36,7 @@ class XdatcarWriter:
     def __init__(self):
         """Initialize XDATCAR writer."""
         self.header_written = False
+        self.configuration_index = 0
 
     def write_header(self, atoms: Atoms, output_path: Path | str) -> None:
         """Write XDATCAR header.
@@ -46,11 +47,17 @@ class XdatcarWriter:
         """
         output_path = Path(output_path)
 
-        # Get chemical formula and counts
+        # VASP associates each count with a contiguous block of coordinates.
+        # Preserve the actual atom order and therefore repeated symbol blocks;
+        # Counter-based grouping corrupts interleaved structures.
         symbols = atoms.get_chemical_symbols()
-        from collections import Counter
-
-        symbol_counts = Counter(symbols)
+        symbol_counts: list[tuple[str, int]] = []
+        for symbol in symbols:
+            if symbol_counts and symbol_counts[-1][0] == symbol:
+                previous, count = symbol_counts[-1]
+                symbol_counts[-1] = (previous, count + 1)
+            else:
+                symbol_counts.append((symbol, 1))
 
         # Build header
         lines = [
@@ -66,20 +73,18 @@ class XdatcarWriter:
             )
 
         # Element symbols
-        element_line = "  ".join(symbol_counts.keys())
+        element_line = "  ".join(symbol for symbol, _ in symbol_counts)
         lines.append(element_line)
 
         # Atom counts
-        count_line = "  ".join(str(c) for c in symbol_counts.values())
+        count_line = "  ".join(str(count) for _, count in symbol_counts)
         lines.append(count_line)
-
-        # Direct coordinates marker
-        lines.append("Direct")
 
         with open(output_path, "w", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
 
         self.header_written = True
+        self.configuration_index = 0
 
     def append_frame(
         self,
@@ -99,9 +104,14 @@ class XdatcarWriter:
         # Get scaled positions
         scaled_pos = atoms.get_scaled_positions()
 
-        lines = []
-        if step is not None:
-            lines.append(f"\n# Step: {step}")
+        if not self.header_written:
+            raise RuntimeError("write_header() must be called before append_frame()")
+
+        self.configuration_index += 1
+        # This exact marker is the VASP/ASE XDATCAR grammar.  The previous
+        # custom "# Step:" comment made the streamed file unreadable as a
+        # multi-frame XDATCAR.
+        lines = [f"Direct configuration={self.configuration_index:6d}"]
 
         for pos in scaled_pos:
             lines.append(f"  {pos[0]:20.16f}  {pos[1]:20.16f}  {pos[2]:20.16f}")

@@ -6,6 +6,7 @@ import json
 import tempfile
 from pathlib import Path
 
+import pytest
 from mlipx.config.resolver import ResolvedValue, resolve_config
 from mlipx.config.settings import load_settings
 
@@ -69,6 +70,44 @@ def test_source_tracking_cli_beats_settings() -> None:
         rc = resolve_config(calc_type="sp", settings=s, cli={"device": "cpu"})
         assert rc.device == "cpu"
         assert rc.sources["device"] == ResolvedValue("cpu", "CLI")
+
+
+def test_only_current_calculation_section_is_loaded() -> None:
+    """[opt] must not leak into MD, and [md] must not leak into OPT."""
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[md]\ntemperature = 650\n"
+            "[opt]\nmax_steps = 17\n"
+        )
+        settings = load_settings(explicit=str(ini))
+        md = resolve_config(calc_type="md", settings=settings)
+        opt = resolve_config(calc_type="opt", settings=settings)
+        assert md.run_options["temperature"] == 650
+        assert "max_steps" not in md.run_options
+        assert opt.run_options["max_steps"] == 17
+        assert "temperature" not in opt.run_options
+
+
+def test_cli_selected_engine_uses_matching_engine_defaults() -> None:
+    """CLI model_type is known before the settings-level engine block is read."""
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[engine:mace]\n"
+            "task = bulk\n"
+            "device = cuda:1\n"
+            "default_dtype = float64\n"
+        )
+        settings = load_settings(explicit=str(ini))
+        rc = resolve_config(
+            calc_type="sp",
+            settings=settings,
+            cli={"model_type": "mace", "model_path": "m.model"},
+        )
+        assert rc.task == "bulk"
+        assert rc.device == "cuda:1"
+        assert rc.calculator_options["default_dtype"] == "float64"
 
 
 # ---------------------------------------------------------------------------
@@ -154,6 +193,11 @@ def test_output_keys_land_in_settings() -> None:
     rc = resolve_config(calc_type="sp", incar={"WRITE_FORCES": True})
     assert "write_forces" not in rc.run_options
     assert rc.settings.get("write_forces") is True
+
+
+def test_unsupported_output_format_fails_closed() -> None:
+    with pytest.raises(ValueError, match="only VASP"):
+        resolve_config(calc_type="sp", incar={"OUTPUT_FORMAT": "xyz"})
 
 
 # ---------------------------------------------------------------------------

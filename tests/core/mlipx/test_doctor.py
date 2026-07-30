@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from mlipx.doctor import (
     _installed_dependency_conflicts,
+    _should_warn_torch_mismatch,
     format_diagnostics,
     run_diagnostics,
 )
@@ -98,3 +99,17 @@ def test_dependency_conflicts_detect_mace_e3nn_mismatch(monkeypatch):
     assert conflicts == [
         "mace-torch requires e3nn==0.4.4, but 0.6.0 is installed"
     ]
+
+
+def test_torch_recommendation_is_uma_specific():
+    """DPA's ABI-matched Torch must not be replaced with UMA's recommendation."""
+    assert _should_warn_torch_mismatch(
+        uma_installed=True,
+        installed_torch="2.10.0+cu126",
+        recommended_torch="2.6.0+cu124",
+    )
+    assert not _should_warn_torch_mismatch(
+        uma_installed=False,
+        installed_torch="2.10.0+cu126",
+        recommended_torch="2.6.0+cu124",
+    )

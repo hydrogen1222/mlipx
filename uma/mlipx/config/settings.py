@@ -43,60 +43,19 @@ DEFAULT_SETTINGS_INI = """\
 ; ============================================================
 
 [general]
-output_root = ./results
-log_level = INFO
 strict_config = false
 write_resolved_config = true
-write_manifest = true
-output_collision = error
 default_seed =
 
-[resources]
-max_gpu_jobs = 1
-max_cpu_jobs = 1
-gpu_devices = 0
-cpu_threads = 1
-device_lock_dir = ./.mlipx/locks
-
-[batch]
-mode = serial
-continue_on_error = true
-resume = true
-retry_failed = 0
-state_flush_interval = 1
-preflight_all_jobs = true
-stop_when_disk_free_gb_below = 5
-stop_when_gpu_memory_free_mb_below = 1000
-
-[output]
-trajectory_interval = 20
-log_interval = 20
-checkpoint_interval = 1000
-write_xdatcar = true
-write_traj = true
-write_json = true
-compress_finished_trajectory = false
-
 [safety]
-abort_on_nan = true
-guard_interval = 10
-fmax_warn = 5.0
 fmax_abort = 20.0
-minimum_distance_warn = 0.8
-minimum_distance_abort = 0.5
-temperature_factor_warn = 2.0
-temperature_factor_abort = 3.0
-temperature_violation_count = 5
-pre_relax_failure = abort
 
 [md]
 ensemble = NVT
 temperature = 300
 timestep_fs = 1.0
-equil_steps = 0
 production_steps = 1000
 friction_per_fs = 0.001
-pre_relax_mode = none
 velocity_policy = auto
 
 [opt]
@@ -107,21 +66,19 @@ cell_opt = false
 fix_symmetry = false
 
 ; ------------------------------------------------------------
-; Per-backend Python environments (Job Queue, Phase 5).
-; Each backend may live in its own venv; `executable` points at
-; the mlipx command inside that venv.
+; Per-backend calculation defaults. Environment executables and
+; queue/restart/checkpoint policies are not implemented configuration
+; options yet and are therefore intentionally absent.
 ; ------------------------------------------------------------
 
 ; [engine:mace]
-; executable = /home/storm/others/mlipx/.venv-mace/bin/mlipx
-; default_task = bulk
-; default_device = cuda:0
+; task = bulk
+; device = cuda:0
 ; default_dtype = float32
 
 ; [engine:uma]
-; executable = /home/storm/others/mlipx/.venv-uma/bin/mlipx
-; default_task = omat
-; default_device = cuda:0
+; task = omat
+; device = cuda:0
 ; inference_mode = turbo
 
 ; ------------------------------------------------------------

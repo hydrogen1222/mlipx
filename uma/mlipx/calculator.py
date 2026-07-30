@@ -25,7 +25,7 @@ from mlipx.base_calculator import BaseMLIPCalculator
 from mlipx.gpu_compat import arch_supports_device
 
 if TYPE_CHECKING:
-    from typing import ClassVar, Literal
+    from typing import ClassVar
 
     from fairchem.core.units.mlip_unit import MLIPPredictUnit
 
@@ -50,7 +50,7 @@ class UMACalculator(BaseMLIPCalculator):
         self,
         model_path: str | Path,
         task: str = "omat",
-        device: Literal["cpu", "cuda"] | None = None,
+        device: str | None = None,
         inference_mode: str = "default",
         torch_num_threads: int | None = None,
         activation_checkpointing: bool | None = None,
@@ -109,6 +109,49 @@ class UMACalculator(BaseMLIPCalculator):
                 f"Invalid inference mode '{self.inference_mode}'. "
                 f"Must be one of: {', '.join(self.VALID_INFERENCE_MODES)}"
             )
+        dev = str(self.device).lower()
+        if (
+            dev not in self.VALID_DEVICES
+            and not (dev.startswith("cuda:") and dev[5:].isdigit())
+        ):
+            raise ValueError(
+                f"Invalid device {self.device!r}. Use cpu, cuda, gpu, or cuda:N."
+            )
+
+    def _gpu_index(self) -> int:
+        """Logical GPU index requested via ``self.device`` (plan section 3.2).
+
+        ``cuda`` / ``gpu`` / ``cuda:0`` -> 0; ``cuda:N`` -> N. Uses the same
+        logical-index convention as ``load_predict_unit(device=...)`` so the
+        compatibility probe inspects the GPU the model will actually run on,
+        not always physical device 0.
+        """
+        dev = str(self.device).lower()
+        if dev.startswith("cuda:") and dev[5:].isdigit():
+            return int(dev[5:])
+        return 0
+
+    def _backend_device(self) -> str:
+        """Translate mlipx's indexed device syntax to FAIRChem's API.
+
+        ``load_predict_unit`` currently accepts only ``"cpu"`` or ``"cuda"``.
+        For ``cuda:N`` select N as PyTorch's current device first, then pass
+        the supported ``"cuda"`` token.  Passing ``cuda:N`` through directly
+        reaches an assertion inside FAIRChem before model loading.
+        """
+        dev = str(self.device).lower()
+        if dev == "cpu":
+            return "cpu"
+        if dev == "gpu":
+            dev = "cuda"
+        if dev.startswith("cuda"):
+            import torch  # noqa: PLC0415
+
+            torch.cuda.set_device(self._gpu_index())
+            return "cuda"
+        # _validate() makes this unreachable; keep a defensive error for
+        # instances constructed under a mocked validation method.
+        raise ValueError(f"Unsupported UMA device: {self.device!r}")
 
     def _check_gpu_compatibility(self) -> None:
         """Check if this PyTorch build includes CUDA kernels for this GPU.
@@ -130,7 +173,8 @@ class UMACalculator(BaseMLIPCalculator):
             if not torch.cuda.is_available():
                 return
 
-            major, minor = torch.cuda.get_device_capability(0)
+            idx = self._gpu_index()
+            major, minor = torch.cuda.get_device_capability(idx)
             gpu_cc = f"sm_{major}{minor}"
 
             # Check if this PyTorch build actually includes kernels for this GPU.
@@ -138,7 +182,7 @@ class UMACalculator(BaseMLIPCalculator):
             # so arch_supports_device accepts sm_60 for an sm_61 device.
             arch_list = torch.cuda.get_arch_list()
             if not arch_supports_device(gpu_cc, arch_list):
-                gpu_name = torch.cuda.get_device_name(0)
+                gpu_name = torch.cuda.get_device_name(idx)
 
                 raise RuntimeError(
                     f"\n{'=' * 68}\n"
@@ -206,14 +250,13 @@ class UMACalculator(BaseMLIPCalculator):
                 settings.compile = False
             self._predictor = load_predict_unit(
                 path=self.model_path,
-                device=self.device,
+                device=self._backend_device(),
                 inference_settings=settings,
             )
 
         return self._predictor
 
-    @staticmethod
-    def _compile_supported() -> bool:
+    def _compile_supported(self) -> bool:
         """Whether torch.compile (triton/inductor) can run on the current GPU.
 
         Triton requires CUDA Capability >= 7.0. Returns True when there is no
@@ -226,7 +269,7 @@ class UMACalculator(BaseMLIPCalculator):
 
             if not torch.cuda.is_available():
                 return True
-            major, _ = torch.cuda.get_device_capability(0)
+            major, _ = torch.cuda.get_device_capability(self._gpu_index())
             return major >= 7
         except Exception:
             return True

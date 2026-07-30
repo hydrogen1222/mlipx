@@ -46,7 +46,7 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
         self,
         model_path: str | Path,
         device: str = "cpu",
-        default_dtype: str = "float64",
+        default_dtype: str = "float32",
         task: str = "bulk",
         head: str | None = None,
     ):
@@ -56,7 +56,9 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
         Args:
             model_path: Path to a MACE model file (``.model`` / ``.pt``).
             device: Device for calculation (``cpu``, ``cuda`` or ``cuda:N``).
-            default_dtype: Model dtype (``float32`` or ``float64``).
+            default_dtype: Model dtype (``float32`` or ``float64``). Defaults to
+            ``float32`` (the documented MACE default); use ``float64`` for
+            high-precision sp/opt energy differences.
             task: PBC hint (``bulk`` or ``molecule``); not consumed by MACE.
             head: Optional MACE foundation-model head name. Forwarded to
                 ``MACECalculator`` as ``head=`` (a single string) when not
@@ -73,7 +75,15 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
             )
 
         self.model_path = Path(model_path)
-        self._device = device
+        dev = str(device).lower()
+        if dev not in {"cpu", "cuda", "gpu"} and not (
+            dev.startswith("cuda:") and dev[5:].isdigit()
+        ):
+            raise ValueError(
+                f"Invalid MACE device {device!r}. Use cpu, cuda, gpu, or cuda:N."
+            )
+        # torch/mace use "cuda"; accept mlipx's legacy "gpu" synonym.
+        self._device = "cuda" if dev == "gpu" else dev
         self._default_dtype = str(default_dtype).lower()
         self._task = task
         self._head = head
@@ -122,7 +132,30 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
             # ``--head`` choice would be ignored (or fall back / error).
             if self._head is not None:
                 kwargs["head"] = self._head
-            self._calculator = MACECalculator(**kwargs)
+            calculator = MACECalculator(**kwargs)
+            raw_heads = getattr(calculator, "available_heads", None)
+            if isinstance(raw_heads, str):
+                available_heads = [raw_heads]
+            elif isinstance(raw_heads, (list, tuple, set)):
+                available_heads = list(raw_heads)
+            else:
+                # Older/custom calculators may not expose concrete head
+                # metadata. Do not treat an arbitrary proxy object as an
+                # iterable; the backend still receives the requested head.
+                available_heads = []
+            if (
+                self._head is not None
+                and available_heads
+                and self._head not in available_heads
+            ):
+                # mace-torch currently warns and silently falls back to the
+                # last head.  Silent head substitution changes the potential
+                # energy surface, so mlipx fails closed instead.
+                raise ValueError(
+                    f"MACE head {self._head!r} is not available in this model. "
+                    f"Available heads: {available_heads}"
+                )
+            self._calculator = calculator
         return self._calculator
 
     @property

@@ -104,6 +104,23 @@ def _coerce_bool(value: Any) -> bool:
 # common CLI short forms so the same schema validates every interface.
 # ---------------------------------------------------------------------------
 _SPECS: list[OptionSpec] = [
+    # --- global configuration ---
+    OptionSpec(
+        "strict_config", bool, frozenset({"general"}),
+        aliases={"STRICT_CONFIG"},
+        description="Treat unknown configuration keys as errors.",
+    ),
+    OptionSpec(
+        "write_resolved_config", bool, frozenset({"general"}),
+        aliases={"WRITE_RESOLVED_CONFIG"},
+        description="Write resolved_config.json before a calculation.",
+    ),
+    OptionSpec(
+        "fmax_abort", float, frozenset({"safety"}),
+        aliases={"FMAX_ABORT"},
+        minimum=0.0,
+        description="MD large-force warning threshold in eV/Angstrom.",
+    ),
     # --- model / device (calculator scope) ---
     OptionSpec(
         "model_type", str, frozenset({"calculator"}),
@@ -140,9 +157,9 @@ _SPECS: list[OptionSpec] = [
         description="MACE model dtype (float32 recommended for long MD).",
     ),
     OptionSpec(
-        "head", str, frozenset({"calculator.mace"}),
+        "head", str, frozenset({"calculator.mace", "calculator.dpa"}),
         aliases={"HEAD"},
-        description="MACE model head (foundation multi-head models).",
+        description="MACE or DeepMD model head/branch (multi-task models).",
     ),
     OptionSpec(
         "torch_num_threads", int, frozenset({"calculator"}),
@@ -159,7 +176,7 @@ _SPECS: list[OptionSpec] = [
     OptionSpec(
         "optimizer", str, frozenset({"opt"}),
         aliases={"OPT_ALGO", "opt_algo"},
-        choices=("FIRE", "BFGS", "LBFGS", "GPMin", "MDMin"),
+        choices=("FIRE", "BFGS", "LBFGS"),
         description="Geometry optimization algorithm.",
     ),
     OptionSpec(
@@ -285,17 +302,6 @@ _SPECS: list[OptionSpec] = [
         "pattern", str, frozenset({"batch"}),
         aliases={"PATTERN"},
         description="Glob pattern for batch structure discovery.",
-    ),
-    OptionSpec(
-        "parallel", bool, frozenset({"batch"}),
-        aliases={"PARALLEL"},
-        description="Enable parallel batch processing.",
-    ),
-    OptionSpec(
-        "max_workers", int, frozenset({"batch"}),
-        aliases={"MAX_WORKERS", "workers"},
-        minimum=1,
-        description="Number of parallel workers.",
     ),
     # --- INCAR output / meta keys (recognised so INCAR flows don't warn).
     # These are consumed by writers, not runners; they land in the settings bag.

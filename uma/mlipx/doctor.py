@@ -70,6 +70,34 @@ def _installed_dependency_conflicts(
     return conflicts
 
 
+def _distribution_installed(distribution_name: str) -> bool:
+    """Return whether an installed distribution is visible to this interpreter."""
+    try:
+        metadata.version(distribution_name)
+    except metadata.PackageNotFoundError:
+        return False
+    return True
+
+
+def _should_warn_torch_mismatch(
+    *,
+    uma_installed: bool,
+    installed_torch: str | None,
+    recommended_torch: str,
+) -> bool:
+    """Apply the workspace Torch recommendation only to an UMA environment.
+
+    MACE and DPA intentionally use their own Torch builds. Recommending UMA's
+    Torch 2.6 inside a DPA environment would break DeepMD's Torch 2.10 ABI
+    requirement even when the installed CUDA kernel already supports the GPU.
+    """
+    return bool(
+        uma_installed
+        and installed_torch
+        and recommended_torch not in installed_torch
+    )
+
+
 def _recommendation_detail(rec, *, installed_torch: str | None = None) -> str:
     """Build a detail string for a GPU from a TorchRecommendation."""
     lines = [rec.rationale]
@@ -115,6 +143,7 @@ def run_diagnostics(
 
     # Detect hardware GPUs via nvidia-smi (works without PyTorch).
     hw_gpus = detect_gpus()
+    uma_installed = _distribution_installed("fairchem-core")
 
     # 1. Python version
     py_ver = (
@@ -249,7 +278,11 @@ def run_diagnostics(
             if arch_ok:
                 # Kernel works. Still note if the installed torch differs from
                 # the recommended one for this GPU.
-                if rec.supported and torch_ver and rec.version not in torch_ver:
+                if rec.supported and _should_warn_torch_mismatch(
+                    uma_installed=uma_installed,
+                    installed_torch=torch_ver,
+                    recommended_torch=rec.version,
+                ):
                     detail = (
                         f"Kernel OK, but installed torch {torch_ver} differs "
                         f"from recommended {rec.version} for this GPU.\n  "
@@ -350,7 +383,7 @@ def run_diagnostics(
             {
                 "name": "UMA engine (fairchem-core)",
                 "value": "not installed",
-                "status": "warn",
+                "status": "skip",
                 "detail": (
                     "Optional in a dedicated non-UMA environment. "
                     "For UMA, run `uv sync` from the repository root."
@@ -385,7 +418,7 @@ def run_diagnostics(
                 {
                     "name": engine_name,
                     "value": "not installed (optional)",
-                    "status": "warn",
+                    "status": "skip",
                     "detail": f"Optional. Install with: {install_cmd}",
                 }
             )

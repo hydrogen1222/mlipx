@@ -73,6 +73,8 @@ class OptimizationRunner(BaseRunner):
         fix_symmetry: bool = False,
         output_dir: Path | str = ".",
         write_outcar: bool = True,
+        write_forces: bool = True,
+        write_stress: bool = True,
         write_oszicar: bool = True,
         write_json: bool = True,
         trajectory_interval: int = 1,
@@ -93,6 +95,8 @@ class OptimizationRunner(BaseRunner):
             fix_symmetry: Whether to preserve symmetry
             output_dir: Directory for output files
             write_outcar: Whether to write OUTCAR file
+            write_forces: Whether OUTCAR includes the final force table
+            write_stress: Whether OUTCAR includes the final stress tensor
             write_oszicar: Whether to write OSZICAR file
             write_json: Whether to write JSON results
             trajectory_interval: Interval for saving trajectory frames
@@ -116,6 +120,8 @@ class OptimizationRunner(BaseRunner):
         self.cell_opt = cell_opt
         self.fix_symmetry = fix_symmetry
         self.write_outcar = write_outcar
+        self.write_forces = write_forces
+        self.write_stress = write_stress
         self.write_oszicar = write_oszicar
         self.write_json = write_json
         self.trajectory_interval = trajectory_interval
@@ -128,7 +134,14 @@ class OptimizationRunner(BaseRunner):
             )
 
         # Check cell_opt requirements
-        if cell_opt and not calculator.has_stress:
+        if cell_opt and calculator.task in {"omol", "molecule"}:
+            self.log(
+                "Cell optimization is not physically defined for an isolated "
+                "molecule; cell optimization disabled.",
+                level="warning",
+            )
+            self.cell_opt = False
+        elif cell_opt and not calculator.has_stress:
             self.log(
                 "Warning: Stress not supported for this task, "
                 "cell optimization disabled",
@@ -161,7 +174,9 @@ class OptimizationRunner(BaseRunner):
         # Apply symmetry constraint
         if self.fix_symmetry:
             self.log("Applying symmetry constraint")
-            atoms.set_constraint(FixSymmetry(atoms))
+            constraints = list(atoms.constraints)
+            constraints.append(FixSymmetry(atoms))
+            atoms.set_constraint(constraints)
 
         # Setup calculator
         calc = self._get_calculator()
@@ -256,6 +271,11 @@ class OptimizationRunner(BaseRunner):
         stress = None
         if self.calculator.has_stress and atoms.pbc.any():
             stress = atoms.get_stress()
+            if not np.all(np.isfinite(stress)):
+                raise RuntimeError(
+                    "Non-finite stress during optimization final; aborting "
+                    "before NaN is written to outputs."
+                )
 
         self.log(f"\nOptimization finished in {opt.nsteps} steps")
         self.log(f"Converged: {'Yes' if converged else 'No'}")
@@ -309,9 +329,14 @@ class OptimizationRunner(BaseRunner):
         if self.write_outcar:
             outcar_path = self.output_dir / "OUTCAR"
             writer = OutcarWriter()
+            outcar_results = dict(results)
+            if not self.write_forces:
+                outcar_results.pop("forces", None)
+            if not self.write_stress:
+                outcar_results.pop("stress", None)
             writer.write(
                 atoms,
-                results,
+                outcar_results,
                 outcar_path,
                 mode="optimization",
                 task_name=self.calculator.task,

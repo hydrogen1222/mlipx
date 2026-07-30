@@ -7,7 +7,7 @@ Covers:
 * B1 - MACE ``info()`` reads the correct MACE attributes.
 * B2 - runners abort on NaN/inf energy/forces instead of writing "successful" NaN.
 * B3 - NVE defaults to no pre-relaxation; NVT keeps it; explicit override wins.
-* B4 - MACE dtype default is calc-type aware (sp/opt float64, md float32).
+* B4 - MACE dtype default is float32 for all calc types (P0-1).
 * B5 - stress is skipped for non-periodic systems even when ``has_stress`` is True.
 """
 
@@ -93,13 +93,13 @@ def test_mace_info_reads_correct_attributes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# B4: MACE dtype default is calc-type aware (engine level)
+# B4: MACE dtype default is float32 for all calc types (engine level, P0-1)
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "calc_type, expected_dtype",
-    [("sp", "float64"), ("opt", "float64"), ("md", "float32")],
+    [("sp", "float32"), ("opt", "float32"), ("md", "float32")],
 )
-def test_mace_dtype_default_is_calc_type_aware(calc_type, expected_dtype):
+def test_mace_dtype_default_is_float32_all_calc_types(calc_type, expected_dtype):
     from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
 
     config = EngineConfig(

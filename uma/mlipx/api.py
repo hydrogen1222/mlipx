@@ -176,7 +176,7 @@ def run_single_point(
         settings_path: Explicit path to settings.ini.
         model_alias: Named model alias from settings.ini [model:NAME].
         default_dtype: MACE dtype override (float32 or float64).
-        head: MACE foundation-model head name.
+        head: MACE head or DeepMD/DPA multi-task branch name.
         profile: Reusable profile from settings.ini [profile:NAME].
         strict_config: Override strict-config behaviour.
         **kwargs: Additional calc/run options forwarded to the resolver.
@@ -259,7 +259,7 @@ def run_optimization(
         settings_path: Explicit path to settings.ini.
         model_alias: Named model alias from settings.ini.
         default_dtype: MACE dtype override.
-        head: MACE foundation-model head name.
+        head: MACE head or DeepMD/DPA multi-task branch name.
         profile: Reusable profile from settings.ini.
         strict_config: Override strict-config behaviour.
         **kwargs: Additional options forwarded to the resolver.
@@ -335,8 +335,9 @@ def run_md(
     """Run molecular dynamics simulation.
 
     Runs MD simulation using NVT (Langevin) or NVE (Velocity Verlet) ensemble.
-    Includes pre-relaxation step to eliminate internal stress.  All defaults
-    are drawn from ``resolve_config()``.
+    Optional pre-relaxation reduces large initial atomic forces by optimizing
+    positions only; it does not relax the cell or generally eliminate stress.
+    All defaults are drawn from ``resolve_config()``.
 
     Args:
         structure: ASE Atoms object or path to structure file.
@@ -358,7 +359,7 @@ def run_md(
         settings_path: Explicit path to settings.ini.
         model_alias: Named model alias from settings.ini.
         default_dtype: MACE dtype override.
-        head: MACE foundation-model head name.
+        head: MACE head or DeepMD/DPA multi-task branch name.
         profile: Reusable profile from settings.ini.
         strict_config: Override strict-config behaviour.
         **kwargs: Additional options forwarded to the resolver.
@@ -445,7 +446,7 @@ def calculate_energy(
         settings_path: Explicit path to settings.ini.
         model_alias: Named model alias from settings.ini.
         default_dtype: MACE dtype override.
-        head: MACE foundation-model head name.
+        head: MACE head or DeepMD/DPA multi-task branch name.
         profile: Reusable profile from settings.ini.
         strict_config: Override strict-config behaviour.
         **kwargs: Additional options.
@@ -540,7 +541,7 @@ def calculate_adsorption_energy(
         settings_path: Explicit path to settings.ini.
         model_alias: Named model alias from settings.ini.
         default_dtype: MACE dtype override.
-        head: MACE foundation-model head name.
+        head: MACE head or DeepMD/DPA multi-task branch name.
         profile: Reusable profile from settings.ini.
         strict_config: Override strict-config behaviour.
         **kwargs: Additional options passed to calculate_energy.

@@ -60,6 +60,14 @@ class TestEngineConfig:
         )
         assert config.detach is True
 
+    def test_from_resolved_routes_md_safety_threshold(self):
+        from mlipx.config.resolver import resolve_config  # noqa: PLC0415
+        from mlipx.engine import EngineConfig  # noqa: PLC0415
+
+        resolved = resolve_config(calc_type="md")
+        config = EngineConfig.from_resolved(resolved)
+        assert config.run_options["fmax_abort"] == 20.0
+
 
 class TestCalculationEngineSetup:
     """Tests for CalculationEngine construction and config validation."""
@@ -143,3 +151,60 @@ def test_engine_creates_live_log_and_tail_hint(tmp_path):
     assert any("Follow live output:" in message for message in messages)
     runner.execute.assert_called_once()
     assert runner.execute.call_args.kwargs["started_at"] == 123.0
+
+
+class TestMaceDtypeDefaults:
+    """Plan section 4.1 / 12: MACE default dtype is float32 for every calc type,
+    and an explicit --dtype float64 is never silently overridden by the task default."""
+
+    @pytest.mark.parametrize("calc_type", ["sp", "opt", "md"])
+    def test_mace_default_dtype_is_float32_for_all_calc_types(self, calc_type):
+        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+
+        config = EngineConfig(
+            calc_type=calc_type,
+            model_path=Path("mace.model"),
+            model_type="mace",
+            task="bulk",
+            device="cpu",
+            output_dir=Path("./results"),
+        )
+        engine = CalculationEngine.from_config(config)
+        captured: dict = {}
+
+        def fake_create(model_type, model_path, device, task, strict=False, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        with patch(
+            "mlipx.calculators.factory.CalculatorFactory.create",
+            side_effect=fake_create,
+        ):
+            engine._create_calculator()
+        assert captured.get("default_dtype") == "float32"
+
+    def test_mace_explicit_dtype_float64_not_overridden(self):
+        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+
+        config = EngineConfig(
+            calc_type="sp",
+            model_path=Path("mace.model"),
+            model_type="mace",
+            task="bulk",
+            device="cpu",
+            output_dir=Path("./results"),
+            calculator_options={"default_dtype": "float64"},
+        )
+        engine = CalculationEngine.from_config(config)
+        captured: dict = {}
+
+        def fake_create(model_type, model_path, device, task, strict=False, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+        with patch(
+            "mlipx.calculators.factory.CalculatorFactory.create",
+            side_effect=fake_create,
+        ):
+            engine._create_calculator()
+        assert captured.get("default_dtype") == "float64"

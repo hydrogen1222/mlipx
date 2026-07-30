@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 from mlipx.base_calculator import BaseMLIPCalculator
+from mlipx.config.defaults import BUILTIN_DEFAULTS
 from mlipx.logger import LiveRunLogger, follow_log_command
 from mlipx.protocols import CancellationRequested, ProgressCallback, ProgressEvent
 from mlipx.timing import RunTiming, append_timing_to_outputs, timing_log_lines
@@ -50,6 +51,7 @@ class EngineConfig:
             ASE calculator (e.g. MACE ``default_dtype``/``head``, UMA
             ``inference_mode``/``torch_num_threads``). Plan section 11.1.
         run_options: Calc-type-specific parameters (fmax, temperature, ...).
+        settings: Resolved output/global settings consumed by the engine.
         options: *Deprecated* untyped bag. Kept for backward compatibility;
             routed into run/calculator options on first use with a
             DeprecationWarning. New code should use the two fields above.
@@ -71,6 +73,7 @@ class EngineConfig:
     job_name: str | None = None
     calculator_options: dict = field(default_factory=dict)
     run_options: dict = field(default_factory=dict)
+    settings: dict = field(default_factory=dict)
     # Deprecated; kept for backward compatibility (plan section 11).
     options: dict = field(default_factory=dict)
     torch_num_threads: int | None = None
@@ -86,6 +89,15 @@ class EngineConfig:
         execution engine: CLI/API build a resolved config and hand it here so
         the engine receives cleanly split calculator/run options.
         """
+        run_options = dict(resolved.run_options)
+        # Safety options live in ResolvedConfig.settings so they do not get
+        # mistaken for arbitrary runner kwargs.  Copy the one guard currently
+        # implemented by MDRunner into its typed option bag.  Without this
+        # bridge, [safety] fmax_abort was recorded in resolved_config.json but
+        # silently had no effect on an actual MD run.
+        if resolved.calc_type == "md" and "fmax_abort" in resolved.settings:
+            run_options.setdefault("fmax_abort", resolved.settings["fmax_abort"])
+
         return cls(
             calc_type=resolved.calc_type,
             model_path=Path(resolved.model_path) if resolved.model_path else Path(""),
@@ -94,7 +106,8 @@ class EngineConfig:
             device=resolved.device,
             inference_mode=resolved.inference_mode,
             calculator_options=dict(resolved.calculator_options),
-            run_options=dict(resolved.run_options),
+            run_options=run_options,
+            settings=dict(resolved.settings),
             strict_config=resolved.strict,
         )
 
@@ -206,15 +219,13 @@ class CalculationEngine:
                 calc_opts.setdefault(
                     "activation_checkpointing", self.config.activation_checkpointing
                 )
-        # MACE dtype default is calc-type aware: float32 is recommended for long
-        # MD, but float64 is the safer default for high-accuracy single-point /
-        # optimization energy differences. Only applies when nothing higher in
-        # the config layer (settings/INCAR/CLI) already set default_dtype.
+        # MACE dtype default is float32 (the documented MACE default, matching
+        # BUILTIN_DEFAULTS["calculator.mace"]). Applied for every calc type only
+        # when nothing higher in the config layer (settings/INCAR/CLI) already set
+        # default_dtype -- so an explicit --dtype float64 is never silently
+        # overridden by the task default (plan section 4.1 / 12).
         if self.config.model_type.lower() == "mace":
-            calc_opts.setdefault(
-                "default_dtype",
-                "float32" if self.config.calc_type == "md" else "float64",
-            )
+            calc_opts.setdefault("default_dtype", "float32")
         return CalculatorFactory.create(
             model_type=self.config.model_type,
             model_path=self.config.model_path,
@@ -247,6 +258,9 @@ class CalculationEngine:
         common = dict(
             calculator=calculator,
             output_dir=self.config.output_dir,
+            write_forces=self.config.settings.get("write_forces", True),
+            write_stress=self.config.settings.get("write_stress", True),
+            write_json=self.config.settings.get("write_json", True),
             verbose=False,
             job_name=self.config.job_name,
             log_fn=log_fn,
@@ -283,6 +297,16 @@ class CalculationEngine:
                 ),
                 pre_relax_steps=opts.get("pre_relax_steps", 50),
                 pre_relax_fmax=opts.get("pre_relax_fmax", 0.1),
+                seed=opts.get("seed"),
+                velocity_policy=opts.get("velocity_policy", "auto"),
+                equil_steps=opts.get("equil_steps", 0),
+                pre_relax_mode=opts.get("pre_relax_mode", "none"),
+                fmax_abort=opts.get(
+                    "fmax_abort", BUILTIN_DEFAULTS["safety"]["fmax_abort"]
+                ),
+                write_trajectory=self.config.settings.get(
+                    "write_trajectory", True
+                ),
                 **common,
             )
         else:
@@ -477,6 +501,9 @@ class CalculationEngine:
                 max_workers=opts.get("max_workers", 1),
                 verbose=False,
                 job_name=self.config.job_name,
+                write_forces=self.config.settings.get("write_forces", True),
+                write_stress=self.config.settings.get("write_stress", True),
+                write_json=self.config.settings.get("write_json", True),
                 progress_callback=progress_callback,
                 log_fn=run_logger,
             )

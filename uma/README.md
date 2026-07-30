@@ -26,39 +26,38 @@ Running `uv run ...` before `uv sync` also triggers a project sync implicitly,
 but explicit `uv sync` is recommended so it is clear that this creates the
 UMA-only `.venv`.
 
-> **Important:** `uv run` always selects the repository UMA `.venv`. It must
-> not be used for MACE. UMA commands use `uv run mlipx ...`; MACE commands use
-> `.venv-mace/bin/mlipx ...`. See the complete MACE installation below.
+> **Important:** four engines use four environments. `uv run` always selects
+> UMA; it must not be used to launch another engine.
 
-### MACE 独立安装 / Isolated MACE installation
+| 引擎 / Engine | 环境 / Environment | 命令前缀 / Command prefix |
+|---|---|---|
+| UMA | `.venv` | `uv run mlipx ...` |
+| MACE | `.venv-mace` | `.venv-mace/bin/mlipx ...` |
+| DPA | `.venv-dpa` | `.venv-dpa/bin/mlipx ...` |
+| GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
 
-```bash
-uv venv --python 3.12 .venv-mace
-uv pip install --python .venv-mace/bin/python \
-  torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-uv pip install --python .venv-mace/bin/python -e ./uma
-uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
-
-.venv-mace/bin/mlipx doctor
-```
-
-不要执行 `uv pip install mace-torch`，它会把 MACE 装进 UMA `.venv`。
+四套环境的完整复制安装命令见
+[中文教程](docs/README_CN.md#21-小白先看四个引擎要用四个环境) /
+[English guide](docs/README_EN.md#21-start-here-four-engines-need-four-environments)。
+不要把 MACE、DPA 或 GRACE 安装进 UMA `.venv`。
 
 ### CUDA vs CPU Installation
 
-| Machine | engine install | mlipx usage |
-|---------|----------------------|--------------|
-| **CUDA GPU** | Install engine (e.g. fairchem-core) with CUDA PyTorch | `--device cuda` (auto-detected) |
-| **CPU only** | engine uses CPU PyTorch by default | `--device cpu` (default) |
+Each isolated environment brings the runtime required by its backend. Do not
+replace one environment's Torch, TensorFlow, CUDA, or cuDNN packages with
+versions copied from another environment. Verify a PyTorch backend with its own
+interpreter, for example DPA:
 
-mlipx itself does not ship PyTorch - it inherits whatever PyTorch the engine backend provides. Verify CUDA availability:
 ```bash
-uv run python -c "import torch; print('CUDA OK' if torch.cuda.is_available() else 'CPU only')"
+.venv-dpa/bin/python -c \
+  "import torch; print(torch.__version__, torch.version.cuda, torch.cuda.is_available())"
 ```
 
-> **GPU install guidance (supports GTX 900 series and newer):** The right PyTorch build depends on your GPU's compute capability. Run this **before** installing torch - it uses `nvidia-smi` and works even with no PyTorch installed yet:
+> **UMA GPU guidance (supports GTX 900 series and newer):** The table below is
+> for the UMA `.venv`. MACE, DPA, and GRACE use the exact versions in the
+> four-environment installation guide.
 > ```bash
-> uv run mlipx setup      # detect GPU + print the exact torch install command
+> uv run mlipx setup      # inspect UMA/GPU compatibility
 > uv run mlipx doctor     # verify after install
 > ```
 > Supported floor is **Maxwell (GTX 900 series, e.g. GTX 960)**; Kepler (GTX 700/600) is not supported (no prebuilt PyTorch wheel). The recommendation table:
@@ -105,14 +104,18 @@ uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --ste
 ### 2. 使用其他引擎（MACE / DPA / GRACE）
 
 ```bash
-# MACE 必须从独立环境启动（参见 docs/README_CN.md）
-.venv-mace/bin/mlipx sp structure.cif --model mace.model --model-type mace --task bulk --device cpu
+# MACE
+.venv-mace/bin/mlipx sp structure.cif --model mace.model \
+  --model-type mace --task bulk --head default --device cuda:0
 
-# DPA 几何优化（需先 pip install 'deepmd-kit>=3.0.0'）
-mlipx opt structure.cif --model dpa2.pth --model-type dpa --task bulk --fmax 0.05
+# DPA
+.venv-dpa/bin/mlipx opt structure.cif --model dpa.pt \
+  --model-type dpa --task bulk --head Domains_SSE_PBE \
+  --device cuda:0 --fmax 0.05
 
-# GRACE 单点能（需先 pip install tensorpotential）
-mlipx sp structure.cif --model grace_model/ --model-type grace --task bulk
+# GRACE（模型路径是整个 SavedModel 目录）
+.venv-grace/bin/mlipx sp structure.cif --model grace_model/ \
+  --model-type grace --task bulk --device cuda:0
 ```
 
 ### 3. 通过 INCAR 文件运行（VASP 风格）
@@ -138,6 +141,11 @@ uv run mlipx doctor                  # UMA 环境
 uv run mlipx tui                     # UMA TUI
 .venv-mace/bin/mlipx doctor          # MACE 环境
 .venv-mace/bin/mlipx tui             # MACE TUI
+.venv-dpa/bin/mlipx doctor           # DPA 环境
+.venv-dpa/bin/mlipx tui              # DPA TUI
+.venv-grace/bin/python -c \
+  "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+.venv-grace/bin/mlipx tui            # GRACE TUI
 ```
 
 ### 5. 批量运行
@@ -164,8 +172,8 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 
 | Interface | How to use | Best for |
 |-----------|-----------|----------|
-| **CLI** | `uv run mlipx ...` (UMA) / `.venv-mace/bin/mlipx ...` (MACE) | Scripts, HPC jobs, automation |
-| **TUI** | `uv run mlipx tui` (UMA) / `.venv-mace/bin/mlipx tui` (MACE) | Interactive SP/OPT/MD |
+| **CLI** | 使用上表中对应引擎的命令前缀 | Scripts, HPC jobs, automation |
+| **TUI** | 在对应引擎命令前缀后加 `tui` | Interactive SP/OPT/MD |
 | **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
 
 ## Documentation

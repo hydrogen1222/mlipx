@@ -74,7 +74,7 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 | TUI mode | Interactive terminal UI with live progress |
 | Python API | Programmatic access for scripting and workflows |
 | Background jobs | Submit, detach, re-attach, and kill long-running calculations |
-| Batch processing | Process many structures in parallel |
+| Batch processing | Process many structures sequentially with one model load |
 | CPU & CUDA | Runs on CPU or GPU, auto-detected |
 | VASP output | OUTCAR, CONTCAR, XDATCAR, OSZICAR formats |
 | Cross-platform | Windows, Linux, macOS |
@@ -83,16 +83,143 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 
 ## 2. Installation
 
-### 2.1 Prerequisites
+### 2.1 Start here: four engines need four environments
+
+Do not install all four backends into one Python environment. The reliable,
+tested layout is:
+
+| Engine | Command prefix | Environment | Why it is separate |
+|---|---|---|---|
+| UMA | `uv run mlipx` | `.venv` | Default project environment with fairchem-core |
+| MACE | `.venv-mace/bin/mlipx` | `.venv-mace` | MACE and UMA require different e3nn versions |
+| DPA | `.venv-dpa/bin/mlipx` | `.venv-dpa` | DeepMD requires PyTorch 2.10 with the CXX11 ABI |
+| GRACE | `.venv-grace/bin/mlipx` | `.venv-grace` | TensorFlow CUDA/cuDNN must not replace PyTorch libraries |
+
+An “environment” is only an isolated directory of Python packages, not another
+copy of the source code. All four share this repository, structures, and model
+files. Run the commands below from the repository root. If you need only one
+optional engine, install only its section.
+
+#### Step 0: install uv and enter the repository
+
+Skip the uv installation if `uv --version` already works:
+
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
+```
+
+#### Environment 1: UMA (default; recommended first)
+
+```bash
+uv sync
+uv run mlipx doctor
+```
+
+Always use the `uv run mlipx` prefix for UMA:
+
+```bash
+uv run mlipx sp structure.vasp \
+  --model models/uma/uma-s-1.pt --model-type uma \
+  --task omat --device cuda:0
+```
+
+#### Environment 2: MACE
+
+```bash
+uv venv --python 3.12 .venv-mace
+uv pip install --no-config --python .venv-mace/bin/python \
+  "torch==2.6.0" --index-url https://download.pytorch.org/whl/cu124
+uv pip install --no-config --python .venv-mace/bin/python \
+  -e ./uma "e3nn==0.4.4" "mace-torch==0.3.16"
+.venv-mace/bin/mlipx doctor
+```
+
+Example:
+
+```bash
+.venv-mace/bin/mlipx sp structure.vasp \
+  --model models/mace/mace-mpa-0-medium.model --model-type mace \
+  --task bulk --head default --device cuda:0
+```
+
+#### Environment 3: DPA / DeepMD (GPU recommended)
+
+```bash
+uv venv --python 3.12 .venv-dpa
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-dpa/bin/python \
+  -e ./uma "deepmd-kit[torch]==3.1.3"
+.venv-dpa/bin/mlipx doctor
+```
+
+Do not omit the appropriate model branch for LGPS and related solid
+electrolytes:
+
+```bash
+.venv-dpa/bin/mlipx sp structure.vasp \
+  --model models/dma/DPA-3.2-5M.pt --model-type dpa \
+  --task bulk --head Domains_SSE_PBE --device cuda:0
+```
+
+On a machine without an NVIDIA GPU, only the first Torch command changes:
+
+```bash
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0" --index-url https://download.pytorch.org/whl/cpu
+```
+
+#### Environment 4: GRACE (GPU)
+
+```bash
+uv venv --python 3.12 .venv-grace
+uv pip install --no-config --python .venv-grace/bin/python \
+  -e ./uma "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
+
+# Use the validated cuDNN version on V100/Volta
+uv pip install --no-config --python .venv-grace/bin/python \
+  "nvidia-cudnn-cu12==9.3.0.75"
+.venv-grace/bin/python -c \
+  "import tensorflow as tf; print(tf.__version__, tf.config.list_physical_devices('GPU'))"
+```
+
+For GRACE, `--model` must point to the complete SavedModel directory:
+
+```bash
+.venv-grace/bin/mlipx sp structure.vasp \
+  --model models/grace/GRACE-2L-SMAX-large --model-type grace \
+  --task bulk --device cuda:0
+```
+
+#### How do I know that I selected the right environment?
+
+Check the beginning of the command:
+
+```text
+UMA    -> uv run mlipx ...
+MACE   -> .venv-mace/bin/mlipx ...
+DPA    -> .venv-dpa/bin/mlipx ...
+GRACE  -> .venv-grace/bin/mlipx ...
+```
+
+The TUI follows the same rule. For example, launch MACE with
+`.venv-mace/bin/mlipx tui`; changing `MODEL_TYPE` inside the TUI does not
+switch Python environments. Models are not downloaded with the environments;
+place them under `models/` or another known path yourself.
+
+### 2.2 Prerequisites
 
 | Requirement | Minimum | Recommended |
 |-------------|---------|-------------|
 | Python | 3.10–3.12 | 3.12 |
 | RAM | 8 GB | 32 GB |
-| Disk | 15 GB (environment plus a small model) | 30+ GB (multiple models) |
+| Disk | 15 GB (one environment and a small model) | 60+ GB (all four environments and several models) |
 | GPU (optional) | CUDA 11.8+ | CUDA 12.x, 8+ GB VRAM |
 
-### 2.2 Installing with uv (recommended)
+### 2.3 UMA environment details
 
 > **Note:** `fairchem-core` is not published on PyPI. It is a workspace member in this repository under `packages/fairchem-core/` and will be installed automatically by `uv sync`.
 
@@ -114,7 +241,7 @@ uv run mlipx setup
 > implicit sync and creates `.venv`. That environment is still UMA-only.
 > Running `uv sync` explicitly first makes this boundary clearer.
 
-### 2.3 CUDA GPU vs CPU Installation
+### 2.4 CUDA GPU vs CPU
 
 The root workspace installs and pins PyTorch through `uv.lock`. Do not replace
 it with a bare `uv pip install torch`.
@@ -134,7 +261,7 @@ uv run python -c "import torch; print('CUDA available' if torch.cuda.is_availabl
 - Run `uv run mlipx setup` for the GPU architecture recommendation
 - Verify that the recommended CUDA wheel, rather than a CPU wheel, is installed
 
-### 2.3.1 Verified Setups
+### 2.4.1 Verified Setups
 
 The following configuration has been tested and confirmed working:
 
@@ -144,15 +271,19 @@ The following configuration has been tested and confirmed working:
 | **Architecture** | Volta, Compute Capability 7.0 (sm_70) |
 | **VRAM** | 16 GB |
 | **Driver** | 580.173.02 |
-| **CUDA** | 12.4 |
-| **PyTorch** | 2.6.0+cu124 |
+| **UMA** | PyTorch 2.6.0+cu124 |
+| **MACE** | mace-torch 0.3.16, PyTorch 2.6.0+cu124 |
+| **DPA** | deepmd-kit 3.1.3, PyTorch 2.10.0+cu126 |
+| **GRACE** | TensorFlow 2.20.0, cuDNN 9.3.0.75 |
 | **Python** | 3.12.13 |
 | **OS** | Linux |
 | **Install note** | Models are not downloaded automatically by `uv sync` |
 
-*This is not a minimum requirement — it is one known-good reference point. Lower-spec GPUs (e.g., GTX 10-series Pascal, sm_61) and CPU-only setups are also supported.*
+*This is a known-good Linux/NVIDIA GPU reference rather than a minimum
+requirement. Lower-spec GPUs (for example GTX 10-series Pascal, sm_61) and
+CPU-only systems can also work, but their installation commands may differ.*
 
-### 2.4 How to Run Commands
+### 2.5 How to Run Commands
 
 Two equivalent methods:
 
@@ -169,7 +300,7 @@ mlipx --help
 mlipx tui
 ```
 
-### 2.5 Model Checkpoint
+### 2.6 Model Checkpoint
 
 **UMA (default engine):** Download the checkpoint from FAIRChem:
 
@@ -180,15 +311,16 @@ mlipx tui
 ```
 
 **Other engines (optional):** MACE / DPA / GRACE models are released by each
-project. MACE requires a separate environment. Do not run bare
-`pip install mace-torch` or `uv pip install mace-torch`: either command can
-pollute the UMA `.venv` just created by `uv run`.
+project. To prevent e3nn, PyTorch ABI, and CUDA/cuDNN binaries from overwriting
+one another, use one environment per backend: UMA `.venv`, MACE `.venv-mace`,
+DPA `.venv-dpa`, and GRACE `.venv-grace`. Do not install the other backends
+into the UMA `.venv`.
 
 | Engine | Backend install | Model format |
 |--------|-----------------|--------------|
-| MACE | Use the complete `.venv-mace` procedure under “Backend Installation & Environment Isolation” | `.model` / `.pt` |
-| DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` / `.pt` (PyTorch backend) |
-| GRACE | `pip install tensorpotential` | SavedModel dir / YAML |
+| MACE | Use the `.venv-mace` commands in Section 2.1 | `.model` / `.pt` |
+| DPA | Use the `.venv-dpa` commands in Section 2.1 | frozen `.pt` / `.pth` |
+| GRACE | Use the `.venv-grace` commands in Section 2.1 | TensorFlow SavedModel directory |
 
 > **Do not run `uv pip install mace-torch`.** The default target of `uv pip` is
 > the project `.venv`. Doctor may then find both engines but will report
@@ -196,7 +328,7 @@ pollute the UMA `.venv` just created by `uv run`.
 
 The model path is specified with `--model` (CLI), in the TUI config screen, or via the `MODEL_PATH` key in INCAR files.
 
-### 2.6 Verify Installation
+### 2.7 Verify Installation
 
 ```bash
 uv run mlipx doctor
@@ -207,6 +339,7 @@ This runs a comprehensive diagnostic: Python, PyTorch, CUDA, GPU compatibility, 
 For a full command list:
 ```bash
 uv run mlipx --help
+```
 
 ---
 
@@ -414,8 +547,8 @@ result = run_single_point(
 | Engine | Install command | Model format |
 |--------|-----------------|--------------|
 | MACE | Install only into `.venv-mace` using the complete commands below | `.model` / `.pt` |
-| DPA | `pip install 'deepmd-kit>=3.0.0'` | `.pth` (PyTorch backend) |
-| GRACE | `pip install tensorpotential` | SavedModel dir / YAML |
+| DPA | Install into `.venv-dpa` using the commands below | frozen `.pt` / `.pth` |
+| GRACE | Install into `.venv-grace` with the commands below | TensorFlow SavedModel directory |
 
 > ⚠️ **Environment isolation warning:** `mace-torch` pins `e3nn==0.4.4`, which **fundamentally conflicts** with `fairchem-core` (`e3nn>=0.5`) - they cannot coexist in one Python environment.
 >
@@ -438,6 +571,66 @@ result = run_single_point(
 > .venv-mace/bin/mlipx doctor
 > .venv-mace/bin/mlipx tui
 > ```
+
+The root workspace deliberately pins UMA to PyTorch 2.6.0+cu124 to retain the
+`sm_60` kernels required by Pascal GPUs, while current fairchem-core metadata
+declares `torch~=2.8.0`. Consequently,
+`uv pip check --python .venv/bin/python` reports this known override. The mlipx
+UMA inference path is validated with real checkpoints; this does not imply
+support for every other fairchem-core feature under the non-upstream version
+combination.
+
+Recent DeePMD-kit wheels are compiled against PyTorch's CXX11 ABI, while the
+PyTorch 2.6 build required by the UMA environment uses the older ABI. Keep DPA
+isolated as well; an ABI mismatch may allow `import deepmd` but fails as soon as
+a PyTorch model is loaded:
+
+```bash
+uv venv --python 3.12 .venv-dpa
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-dpa/bin/python \
+  -e ./uma "deepmd-kit[torch]==3.1.3"
+
+.venv-dpa/bin/mlipx sp structure.vasp \
+  --model models/dma/DPA-3.2-5M.pt --model-type dpa --task bulk \
+  --head Domains_SSE_PBE --device cuda:0
+```
+
+Use a DeePMD-kit/PyTorch pair whose declared versions and CXX11 ABI match if
+you choose other releases. On a machine without an NVIDIA GPU, use the CPU
+Torch command in Section 2.1 and run with `--device cpu`. DPA accepts an
+exported/frozen inference model, not a raw training checkpoint.
+
+`DPA-3.2-5M.pt` is a multi-task model. Its `head` selects the learned
+potential-energy surface, while mlipx `task=bulk|molecule` only controls PBC.
+For LGPS use `--head Domains_SSE_PBE` (the branch explicitly trained on
+Li–Si/Ge/Sn–P–S solid electrolytes); for general molecules use
+`--head OMol25`. Run `dp show MODEL model-branch` to list branches. Never rely
+on the default branch merely because a calculation completes.
+
+GRACE uses TensorFlow. CPU inference can technically run in the UMA
+environment, but use a dedicated `.venv-grace` for consistent CPU/GPU commands
+and to prevent TensorFlow from replacing UMA/PyTorch CUDA libraries:
+
+```bash
+uv venv --python 3.12 .venv-grace
+uv pip install --no-config --python .venv-grace/bin/python \
+  -e ./uma "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
+
+# Required by the tested V100/Volta setup; newer cuDNN 9.24 fails its
+# convolution-algorithm probe on this GPU.
+uv pip install --no-config --python .venv-grace/bin/python \
+  "nvidia-cudnn-cu12==9.3.0.75"
+
+.venv-grace/bin/mlipx sp structure.vasp \
+  --model models/grace/GRACE-2L-SMAX-large --model-type grace \
+  --task bulk --device cuda:0
+```
+
+A successful TensorFlow import or a listed GPU does not validate GPU graph
+execution. Run a real TensorFlow GPU operation and a one-structure GRACE SP
+smoke test before GRACE MD.
 
 If you already ran `uv pip install mace-torch`, you do not need to delete the
 repository. Restore the UMA environment and then create `.venv-mace`:
@@ -496,14 +689,14 @@ mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --
 # -- MACE -- periodic single point
 .venv-mace/bin/mlipx sp bulk.cif --model mace.model --model-type mace --task bulk --device cuda
 
-# -- MACE multi-head model (e.g. mace-mpa): select the molecule head
-.venv-mace/bin/mlipx sp molecule.xyz --model mace-mpa-0-medium.model --model-type mace --task molecule --head omol
+# -- MACE head selection: use a head actually listed by the loaded model
+.venv-mace/bin/mlipx sp bulk.cif --model mace-mpa-0-medium.model --model-type mace --task bulk --head default
 
-# -- MACE dtype (default is calc-type aware: float32 for MD speed, float64 for sp/opt accuracy)
+# -- MACE dtype (float32 by default for every calculation type)
 .venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float64
 
-# -- DPA (DeepMD) -- molecule optimization
-mlipx opt drug.xyz --model dpa2.pth --model-type dpa --task molecule --fmax 0.01 --optimizer LBFGS
+# -- DPA (DeepMD) -- periodic optimization in its isolated environment
+.venv-dpa/bin/mlipx opt bulk.vasp --model dpa.pt --model-type dpa --task bulk --fmax 0.01 --optimizer LBFGS
 
 # -- GRACE -- high-throughput screening (batch)
 mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --calc-type sp --output results/
@@ -513,10 +706,17 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 
 | Option | Description |
 |--------|-------------|
-| `--head HEAD` | Select a MACE foundation-model head (e.g. `omol`, `default`). Required for multi-head models (mace-mpa); optional for single-head models (mace-mp-0). |
-| `--dtype float32\|float64` | Compute precision. Default is calc-type aware: **`float32` for MD** (faster, suited to long runs), **`float64` for sp/opt** (high accuracy for energy differences). Override explicitly with this flag. |
+| `--head HEAD` | Select a head that is actually present in the model. Omit it for a single-head model. Head names are model/version-specific. |
+| `--dtype float32\|float64` | Compute precision. The default is **`float32` for SP, optimization, and MD**. Opt into `float64` when a compatible model and high-precision energy differences require it. |
 
-> ⚠️ `--head` takes a single head name (string). MACE's `MACECalculator` selects the head via the `head=` keyword; an unknown head falls back to the model's last head with a warning.
+> ⚠️ `--head` takes one string. Although mace-torch itself may warn and fall
+> back for an unknown name, mlipx rejects that case: silently changing heads
+> changes the potential-energy surface. The bundled
+> `models/mace/mace-mpa-0-medium.model` currently exposes only `default`.
+> That local file stores float64 weights; the default `float32` setting makes
+> mace-torch convert it at load time (and emit a warning). Use
+> `--dtype float64` when preserving the stored precision matters more than
+> memory and throughput.
 
 ### Engine Troubleshooting
 
@@ -619,11 +819,21 @@ Simulates the time evolution of atoms at a given temperature. Supports two ensem
 | NVT | Langevin | Constant particle number, volume, temperature (canonical) |
 | NVE | Velocity Verlet | Constant particle number, volume, energy (microcanonical) |
 
-**Pre-relaxation:** Before starting MD, mlipx can perform a quick FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to eliminate internal stress and prevent "atom explosion" - a common failure mode where high initial forces cause atoms to fly apart. The default depends on the ensemble:
+**Pre-relaxation:** Before starting MD, mlipx can perform a short,
+positions-only FIRE optimization (default: 50 steps, fmax=0.1 eV/Å) to reduce
+large atomic forces. It does not relax the cell or guarantee a local minimum,
+and therefore does not in general eliminate cell stress. The default depends
+on the ensemble:
 - **NVT**: pre-relaxation is **on** by default (avoids explosions from high initial forces).
-- **NVE**: pre-relaxation is **off** by default -- NVE is energy-conserving, and pre-relaxing first moves the structure to a 0 K minimum, changing the conserved-energy baseline so the trajectory no longer corresponds to the input structure. If the input has large internal stress, enable it explicitly with `--pre-relax`.
+- **NVE**: pre-relaxation is **off** by default -- changing positions first
+  changes the conserved-energy baseline, so the trajectory no longer
+  corresponds to the input structure. Enable it explicitly only when that
+  change of initial condition is intended.
 
 Override the default with `--pre-relax` / `--no-pre-relax` (CLI) or `PRE_RELAX = .TRUE./.FALSE.` (INCAR).
+For a restart structure that already stores momenta, use `--no-pre-relax` with
+`--velocity-policy auto` or `preserve`: changing positions while preserving
+velocities is not an exact phase-space restart and is rejected.
 
 **CLI usage:**
 
@@ -657,6 +867,8 @@ mlipx md CONTCAR \
 | `--steps` | 1000 | Number of MD steps |
 | `--friction` | 0.001 | Friction coefficient (NVT only, fs⁻¹) |
 | `--save-interval` | 10 | Save trajectory every N steps |
+| `--seed` | generated and recorded | Random seed for reproducible velocity initialization and NVT noise |
+| `--velocity-policy` | auto | `auto`, `initialize`, or `preserve` stored momenta |
 | `--pre-relax` | NVT on / NVE off | Pre-relax before MD (`--no-pre-relax` to disable) |
 | `--pre-relax-steps` | 50 | Max pre-relaxation steps |
 | `--pre-relax-fmax` | 0.1 | Pre-relaxation force threshold (eV/Å) |
@@ -717,8 +929,8 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --model-type TYPE     MLIP engine: uma|mace|dpa|grace [default: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc; others: bulk|molecule [default: omat]
   --device DEVICE       cpu|cuda [default: cpu]
-  --dtype DTYPE         MACE dtype float32|float64 [default: float64 for sp/opt, float32 for md]
-  --head HEAD           MACE foundation-model head name (multi-head models)
+  --dtype DTYPE         MACE dtype float32|float64 [default: float32]
+  --head HEAD           MACE head or DeepMD/DPA multi-task branch
   --output DIR, -o DIR  Output directory [default: .]
   --name NAME, -n NAME  Job name (output goes to DIR/NAME)
 ```
@@ -748,6 +960,8 @@ mlipx md STRUCTURE --model MODEL [options]
   --steps N             Number of MD steps [default: 1000]
   --friction FRICTION   Friction coefficient for NVT [default: 0.001]
   --save-interval N     Save trajectory every N steps [default: 10]
+  --seed N              Reproducible MD seed [default: generated and recorded]
+  --velocity-policy P   auto|initialize|preserve [default: auto]
   --pre-relax           Pre-relax before MD [default: on for NVT, off for NVE]
   --pre-relax-steps N   Max pre-relaxation steps [default: 50]
   --pre-relax-fmax F    Pre-relaxation force threshold eV/Å [default: 0.1]
@@ -759,7 +973,7 @@ mlipx md STRUCTURE --model MODEL [options]
 mlipx batch INPUT_DIR --model MODEL [options]
 
   --calc-type TYPE      sp|opt [default: sp]
-  --pattern PATTERN     File glob pattern [default: *.cif]
+  --pattern PATTERN     Explicit file glob; omitted: CIF/XYZ/VASP/POSCAR*
   --output DIR          Output directory [default: batch_results]
 ```
 
@@ -949,10 +1163,10 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `MODEL_PATH` | string | `uma-s-1.pt` | Path to model checkpoint (.pt file) |
 | `MODEL_TYPE` | string | `uma` | MLIP engine: `uma`, `mace`, `dpa`, `grace` (`fairchem` = `uma`) |
 | `TASK` | string | `omat` | Task type. UMA: `omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`; others: `bulk`/`molecule` |
-| `DEVICE` | string | `cpu` | Compute device: `cpu`, `cuda` |
+| `DEVICE` | string | `cpu` | Compute device: `cpu`, `cuda`, `gpu`, or `cuda:N` |
 | `INFERENCE_MODE` | string | `default` | Inference mode: `default`, `turbo` |
-| `DEFAULT_DTYPE` | string | calc-type aware | MACE dtype: `float32` (MD) / `float64` (sp/opt). MACE only. |
-| `HEAD` | string | - | MACE foundation-model head name (multi-head models like mace-mpa). MACE only. |
+| `DEFAULT_DTYPE` | string | `float32` | MACE dtype for every calculation type. MACE only. |
+| `HEAD` | string | - | MACE head or DeepMD/DPA multi-task branch. |
 
 #### Output Control
 
@@ -1441,7 +1655,7 @@ uv pip install textual
 **Cause:** High initial forces cause atoms to fly apart in early MD steps.
 
 **Solution:**
-- Pre-relaxation is on by default for NVT (50 FIRE steps before MD); for NVE it is off by default, enable with `--pre-relax` if the input has large internal stress
+- Pre-relaxation is on by default for NVT (up to 50 positions-only FIRE steps before MD); for NVE it is off by default. Enable it only when changing the input positions to reduce large forces is intended.
 - If it still fails, run a full geometry optimization first:
   ```bash
   mlipx opt POSCAR --model uma-s-1.pt --fmax 0.02
@@ -1504,7 +1718,7 @@ MD: ~1000 steps/minute for a 28-atom system on GPU.
 1. **GPU for large systems, CPU for small ones:** GPU has overhead; for < 20 atoms, CPU may be faster
 2. **turbo mode for MD/production:** `--inference-mode turbo` (auto for MD via CLI)
 3. **Batch for throughput:** Process many structures in one invocation to avoid model reloading overhead
-4. **Pre-relax before MD:** On by default for NVT (saves wasted MD steps on high-force structures); for NVE enable explicitly with `--pre-relax` if needed
+4. **Pre-relax before MD:** On by default for NVT (positions only); for NVE enable explicitly only if changing the initial structure is intended
 
 ### 13.3 Memory Scaling
 

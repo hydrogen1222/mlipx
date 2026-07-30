@@ -6,7 +6,7 @@
 """
 Batch calculation runner.
 
-Processes multiple structures in batch mode with parallel execution support.
+Processes multiple structures sequentially while reusing one loaded model.
 """
 
 from __future__ import annotations
@@ -32,7 +32,10 @@ if TYPE_CHECKING:
 class BatchRunner:
     """Run calculations on multiple structures in batch mode.
 
-    Processes a directory of structure files sequentially or in parallel.
+    Processes a directory of structure files sequentially. A single calculator
+    instance is deliberately not shared across worker threads: ASE/backend
+    calculators mutate cached results during evaluation and are not generally
+    thread-safe.
 
     Example:
         >>> runner = BatchRunner(
@@ -61,8 +64,8 @@ class BatchRunner:
             calculator: UMA calculator wrapper
             calc_type: Type of calculation (sp, opt, md)
             output_dir: Directory for output files
-            parallel: Whether to use parallel processing
-            max_workers: Number of parallel workers
+            parallel: Reserved; parallel model execution is not yet supported.
+            max_workers: Reserved worker count (must currently be one).
             verbose: Whether to print progress messages
             job_name: Optional job name for organizing results
             **calc_kwargs: Additional arguments for calculation runner
@@ -92,17 +95,25 @@ class BatchRunner:
                 f"Unknown calculation type: {calc_type}. "
                 f"Use one of: {', '.join(valid_types)}"
             )
+        if self.max_workers < 1:
+            raise ValueError("max_workers must be at least 1")
+        if self.parallel and self.max_workers > 1:
+            raise NotImplementedError(
+                "Parallel BatchRunner execution is not safe with a shared ASE "
+                "calculator. Use serial mode (parallel=False, max_workers=1)."
+            )
 
     def run_from_directory(
         self,
         input_dir: Path | str,
-        pattern: str = "*.cif",
+        pattern: str | None = None,
     ) -> dict[str, Any]:
         """Run calculations on all matching files in directory.
 
         Args:
             input_dir: Input directory containing structure files
-            pattern: Glob pattern for matching files
+            pattern: Explicit glob pattern. If omitted, discover CIF, XYZ,
+                VASP and POSCAR files.
 
         Returns:
             Dictionary with batch results summary
@@ -111,12 +122,15 @@ class BatchRunner:
 
         if not input_dir.exists():
             raise FileNotFoundError(f"Input directory not found: {input_dir}")
+        if not input_dir.is_dir():
+            raise NotADirectoryError(f"Batch input is not a directory: {input_dir}")
 
-        # Find all matching files
-        files = list(input_dir.glob(pattern))
-        files.extend(input_dir.glob("*.xyz"))
-        files.extend(input_dir.glob("*.vasp"))
-        files.extend(input_dir.glob("POSCAR*"))
+        if pattern is not None:
+            files = list(input_dir.glob(pattern))
+        else:
+            files = []
+            for supported_pattern in ("*.cif", "*.xyz", "*.vasp", "POSCAR*"):
+                files.extend(input_dir.glob(supported_pattern))
 
         # Remove duplicates and sort
         files = sorted(set(files))
@@ -138,96 +152,54 @@ class BatchRunner:
         Returns:
             Dictionary with batch results summary
         """
+        paths = [Path(filepath) for filepath in files]
+        stem_counts: dict[str, int] = {}
+        for filepath in paths:
+            stem_counts[filepath.stem] = stem_counts.get(filepath.stem, 0) + 1
+
         results_list = []
         success_count = 0
         failed_count = 0
 
-        if self.parallel and self.max_workers > 1:
-            from concurrent.futures import (  # noqa: PLC0415
-                ThreadPoolExecutor,
-                as_completed,
-            )
-
-            def process_one(filepath):
-                filepath = Path(filepath)
+        iterator = tqdm(paths, desc="Processing structures") if self.verbose else paths
+        for filepath in iterator:
+            try:
                 atoms = read(filepath)
-                sub_dir = self.output_dir / filepath.stem
+                output_name = (
+                    filepath.stem
+                    if stem_counts[filepath.stem] == 1
+                    else filepath.name.replace(".", "_")
+                )
+                sub_dir = self.output_dir / output_name
                 sub_dir.mkdir(exist_ok=True)
                 result = self._run_single(atoms, sub_dir, filepath.stem)
-                return {
-                    "filename": filepath.name,
-                    "formula": atoms.get_chemical_formula(),
-                    "natoms": len(atoms),
-                    "success": True,
-                    **result,
-                }
-
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {executor.submit(process_one, f): f for f in files}
-                for future in as_completed(futures):
-                    filepath = futures[future]
-                    try:
-                        result = future.result()
-                        results_list.append(result)
-                        success_count += 1
-                    except Exception as e:
-                        results_list.append(
-                            {
-                                "filename": Path(filepath).name,
-                                "success": False,
-                                "error": f"{type(e).__name__}: {e!s}",
-                            }
-                        )
-                        failed_count += 1
-        else:
-            # Progress bar
-            iterator = (
-                tqdm(files, desc="Processing structures") if self.verbose else files
-            )
-
-            for fp in iterator:
-                filepath = Path(fp)
-
-                try:
-                    # Read structure
-                    atoms = read(filepath)
-
-                    # Create sub-directory for this calculation
-                    sub_dir = self.output_dir / filepath.stem
-                    sub_dir.mkdir(exist_ok=True)
-
-                    # Run calculation
-                    result = self._run_single(atoms, sub_dir, filepath.stem)
-
-                    results_list.append(
-                        {
-                            "filename": filepath.name,
-                            "formula": atoms.get_chemical_formula(),
-                            "natoms": len(atoms),
-                            "success": True,
-                            **result,
-                        }
-                    )
-                    success_count += 1
-
-                except Exception as e:
-                    error_msg = f"{type(e).__name__}: {e!s}"
-                    results_list.append(
-                        {
-                            "filename": filepath.name,
-                            "success": False,
-                            "error": error_msg,
-                            "traceback": traceback.format_exc(),
-                        }
-                    )
-                    failed_count += 1
-
-                    if self.verbose:
-                        print(f"\nError processing {filepath.name}: {error_msg}")
+                results_list.append(
+                    {
+                        "filename": filepath.name,
+                        "formula": atoms.get_chemical_formula(),
+                        "natoms": len(atoms),
+                        "success": True,
+                        **result,
+                    }
+                )
+                success_count += 1
+            except Exception as e:
+                error_msg = f"{type(e).__name__}: {e!s}"
+                results_list.append(
+                    {
+                        "filename": filepath.name,
+                        "success": False,
+                        "error": error_msg,
+                        "traceback": traceback.format_exc(),
+                    }
+                )
+                failed_count += 1
+                if self.verbose:
+                    print(f"\nError processing {filepath.name}: {error_msg}")
 
         # Write summary
         summary = {
-            "total": len(files),
+            "total": len(paths),
             "success": success_count,
             "failed": failed_count,
             "results": results_list,
@@ -295,6 +267,9 @@ class BatchRunner:
         Args:
             summary: Summary dictionary
         """
+        if not self.calc_kwargs.get("write_json", True):
+            return
+
         # Write JSON summary
         json_path = self.output_dir / "batch_summary.json"
         writer = JsonWriter()
