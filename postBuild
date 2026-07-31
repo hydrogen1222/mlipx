@@ -1,6 +1,13 @@
-pip install \
+#!/usr/bin/env bash
+set -euo pipefail
+
+# The repository is managed with uv.  This build hook is kept for hosted
+# documentation environments, but deliberately does not use pip or a legacy
+# requirements.txt snapshot.
+uv sync
+uv pip install \
     packages/fairchem-core[docs,adsorbml,extras] \
     packages/fairchem-data-oc[dev] \
     packages/fairchem-applications-cattsunami \
     packages/fairchem-data-omat \
-    -r tests/requirements.txt
+    jupytext

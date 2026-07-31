@@ -8,7 +8,8 @@ Meta FAIR as part of the FAIRChem project.
 
 ```bash
 # 1. Create the UMA venv (Python 3.12) and install the lockfile.
-#    uv auto-creates .venv. Do NOT use `pip install -r requirements.txt`
+#    uv auto-creates .venv. The repository is managed through `pyproject.toml`
+#    and `uv.lock`; do not install a legacy requirements snapshot.
 #    (that is a CI snapshot pinned to different torch versions).
 uv sync
 
