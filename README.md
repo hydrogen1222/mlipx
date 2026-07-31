@@ -158,7 +158,8 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 - **Background jobs:** submit, detach, re-attach, kill long-running calculations
 - **INCAR files:** VASP-style `KEY = VALUE` configuration
 - **Cross-platform:** Windows, Linux, macOS | CPU & CUDA
-- **Resource control:** CPU threads, GPU memory (activation checkpointing), inference mode (default/turbo)
+- **Resource control in TUI and CLI:** indexed GPU selection, backend CPU
+  threads, and UMA activation checkpointing/inference mode
 - **Live progress:** structured progress events, indeterminate spinner for SP, step counter for OPT/MD
 
 ---

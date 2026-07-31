@@ -163,9 +163,9 @@ _SPECS: list[OptionSpec] = [
     ),
     OptionSpec(
         "torch_num_threads", int, frozenset({"calculator"}),
-        aliases={"TORCH_NUM_THREADS"},
+        aliases={"TORCH_NUM_THREADS", "CPU_THREADS", "cpu_threads"},
         minimum=1,
-        description="CPU thread count for torch.",
+        description="Backend CPU intra-op threads (legacy canonical field name).",
     ),
     OptionSpec(
         "activation_checkpointing", bool, frozenset({"calculator"}),

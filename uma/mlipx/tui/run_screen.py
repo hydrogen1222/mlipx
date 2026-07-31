@@ -110,6 +110,7 @@ class RunScreen(Screen):
 
     def _build_command(self) -> list[str]:
         calc_type = self.app.get_config("calc_type", "sp")
+        model_type = self.app.get_config("model_type", "uma")
         command = [
             sys.executable,
             "-m",
@@ -119,7 +120,7 @@ class RunScreen(Screen):
             "--model",
             self.app.get_config("model_file"),
             "--model-type",
-            self.app.get_config("model_type", "uma"),
+            model_type,
             "--task",
             self.app.get_config("task", "omat"),
             "--device",
@@ -129,6 +130,32 @@ class RunScreen(Screen):
             "--name",
             self._job_id,
         ]
+        if model_type == "uma":
+            command.extend(
+                [
+                    "--inference-mode",
+                    self.app.get_config("inference_mode", "default"),
+                ]
+            )
+            checkpointing = self.app.get_config("activation_checkpointing")
+            if checkpointing is not None:
+                command.append(
+                    "--activation-checkpointing"
+                    if checkpointing
+                    else "--no-activation-checkpointing"
+                )
+        threads = self.app.get_config("torch_num_threads")
+        if threads is not None:
+            command.extend(["--cpu-threads", str(threads)])
+        if model_type == "mace":
+            command.extend(
+                ["--dtype", self.app.get_config("default_dtype", "float32")]
+            )
+        if model_type in {"mace", "dpa"}:
+            head = self.app.get_config("head")
+            if head:
+                command.extend(["--head", str(head)])
+
         if calc_type == "opt":
             command.extend(
                 [
@@ -163,6 +190,10 @@ class RunScreen(Screen):
                     str(self.app.get_config("pre_relax_steps", 50)),
                     "--pre-relax-fmax",
                     str(self.app.get_config("pre_relax_fmax", 0.1)),
+                    "--velocity-policy",
+                    self.app.get_config("velocity_policy", "auto"),
+                    "--fmax-abort",
+                    str(self.app.get_config("fmax_abort", 20.0)),
                     (
                         "--pre-relax"
                         if self.app.get_config("pre_relax", True)
@@ -170,6 +201,9 @@ class RunScreen(Screen):
                     ),
                 ]
             )
+            seed = self.app.get_config("seed")
+            if seed is not None:
+                command.extend(["--seed", str(seed)])
         return command
 
     def _refresh_job(self) -> None:

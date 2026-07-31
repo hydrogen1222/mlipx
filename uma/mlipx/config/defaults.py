@@ -77,6 +77,8 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "pre_relax_fmax": 0.1,
     },
     "calculator": {
+        # Historical canonical name; the public CLI/TUI calls this CPU Threads.
+        # PyTorch consumes it for UMA/MACE/DPA and TensorFlow for GRACE.
         "torch_num_threads": None,
         "activation_checkpointing": None,
     },

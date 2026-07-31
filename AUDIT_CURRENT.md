@@ -421,3 +421,26 @@ uv run pytest -q tests/core/mlipx tests/uma/mlipx
 “需要真实 checkpoint”的 progress 测试，而真实 checkpoint 已由上面的独立
 小任务矩阵覆盖。源代码及相关测试同时通过 `ruff check` 与
 `git diff --check`。
+
+---
+
+## 14. TUI / CLI 资源控制复核（2026-07-30）
+
+用户复核文档时发现：手册列出了 CPU 线程、GPU 选择、UMA 推理模式和激活
+检查点等控制项，但旧 TUI 没有对应控件，CPU 线程在 CLI 中也只能借助
+`OMP_NUM_THREADS`。这属于界面能力与文档承诺不完整，而不是用户漏看。
+
+现已补齐以下链路：
+
+- TUI 的 Device 接受 `cpu`、`cuda`、`cuda:N`，不再只有 CPU/CUDA 二选一；
+- TUI 与 CLI 均可设置 CPU 线程数：UMA/MACE/DPA 映射到 PyTorch，
+  GRACE 映射到 TensorFlow intra-op 线程；
+- UMA 推理模式和激活检查点同时提供 TUI/CLI 入口；
+- MACE dtype、MACE/DPA head，以及 OPT 的保持对称性均进入 TUI；
+- MD 的 friction、预弛豫步数/阈值、seed、velocity policy 和大力告警阈值
+  均进入 TUI；
+- TUI 会按引擎禁用不适用控件；公开入口统一为 `--cpu-threads`，旧的
+  `--torch-num-threads` 仅作为兼容别名保留。
+
+中英文手册的命令参考、TUI 配置说明和资源控制章节已同步，明确环境变量只是
+可选替代方式，不再要求 TUI 用户猜测或手工设置。

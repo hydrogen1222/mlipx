@@ -49,7 +49,7 @@ _CALC_KEYS: dict[str, set[str]] = {
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
     "dpa": {"head"},
-    "grace": set(),
+    "grace": {"cpu_threads"},
 }
 _ALL_CALC_KEYS: set[str] = set().union(*_CALC_KEYS.values())
 
@@ -125,7 +125,8 @@ class CalculatorFactory:
             **kwargs: Engine-specific options. UMA accepts ``inference_mode``,
                 ``torch_num_threads`` and ``activation_checkpointing``; MACE
                 accepts ``default_dtype`` (factory fallback ``float32``) and
-                ``head``; DPA accepts ``head`` for multi-task branches.
+                ``head``; DPA accepts ``head`` for multi-task branches; GRACE
+                accepts ``cpu_threads`` for TensorFlow intra-op parallelism.
 
         Returns:
             A ``BaseMLIPCalculator`` subclass instance.
@@ -178,6 +179,7 @@ class CalculatorFactory:
                 model_path=model_path,
                 device=device,
                 task=task,
+                cpu_threads=kwargs.get("cpu_threads"),
             )
         else:
             raise ValueError(

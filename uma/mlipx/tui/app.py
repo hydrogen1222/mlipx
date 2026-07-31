@@ -176,6 +176,12 @@ class MlipxApp(App):
             "model_type": "uma",
             "task": "omat",
             "device": "cpu",
+            # Backend/resource options
+            "inference_mode": "default",
+            "torch_num_threads": None,
+            "activation_checkpointing": None,
+            "default_dtype": "float32",
+            "head": None,
             "output_dir": "./results",
             "job_name": None,
             # OPT options
@@ -194,6 +200,9 @@ class MlipxApp(App):
             "pre_relax": True,  # NEW: Pre-relaxation for MD
             "pre_relax_steps": 50,
             "pre_relax_fmax": 0.1,
+            "seed": None,
+            "velocity_policy": "auto",
+            "fmax_abort": 20.0,
             # Batch options
             "pattern": "*.cif",
         }

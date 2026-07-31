@@ -39,8 +39,18 @@ async def test_md_ensemble_and_options_persisted(tmp_path: Path) -> None:
 
         config_screen.query_one("#structure-input").value = str(structure)
         config_screen.query_one("#model-input").value = str(model)
+        config_screen.query_one("#device-input").value = "cuda:1"
+        config_screen.query_one("#inference-mode-select").value = "turbo"
+        config_screen.query_one("#torch-threads-input").value = "6"
+        config_screen.query_one("#activation-checkpointing-select").value = "off"
         config_screen.query_one("#timestep-input").value = "2.5"
         config_screen.query_one("#save-interval-input").value = "25"
+        config_screen.query_one("#friction-input").value = "0.004"
+        config_screen.query_one("#pre-relax-steps-input").value = "12"
+        config_screen.query_one("#pre-relax-fmax-input").value = "0.08"
+        config_screen.query_one("#seed-input").value = "42"
+        config_screen.query_one("#velocity-policy-select").value = "initialize"
+        config_screen.query_one("#fmax-abort-input").value = "15"
         config_screen.query_one("#nve").value = True
         await pilot.pause()
 
@@ -49,8 +59,18 @@ async def test_md_ensemble_and_options_persisted(tmp_path: Path) -> None:
         config_screen._save_and_run()
 
     assert app.get_config("ensemble") == "NVE"
+    assert app.get_config("device") == "cuda:1"
+    assert app.get_config("inference_mode") == "turbo"
+    assert app.get_config("torch_num_threads") == 6
+    assert app.get_config("activation_checkpointing") is False
     assert app.get_config("timestep") == 2.5
     assert app.get_config("save_interval") == 25
+    assert app.get_config("friction") == 0.004
+    assert app.get_config("pre_relax_steps") == 12
+    assert app.get_config("pre_relax_fmax") == 0.08
+    assert app.get_config("seed") == 42
+    assert app.get_config("velocity_policy") == "initialize"
+    assert app.get_config("fmax_abort") == 15.0
     assert isinstance(app.get_config("run_started_at"), float)
 
 
@@ -98,6 +118,91 @@ async def test_md_values_loaded_from_config() -> None:
         assert config_screen.query_one("#steps-input").value == "2000"
         assert config_screen.query_one("#save-interval-input").value == "5"
         assert config_screen.query_one("#pre-relax").value is False
+
+
+@pytest.mark.asyncio
+async def test_backend_resource_controls_follow_selected_engine() -> None:
+    """TUI exposes resource controls without forwarding invalid cross-engine options."""
+    app = MlipxApp()
+
+    async with app.run_test(size=(100, 100)) as pilot:
+        config_screen = ConfigScreen()
+        await app.push_screen(config_screen)
+        await pilot.pause()
+
+        assert config_screen.query_one("#device-input").value == "cpu"
+        assert config_screen.query_one("#inference-mode-select").disabled is False
+        assert config_screen.query_one("#activation-checkpointing-select").disabled is False
+        assert config_screen.query_one("#dtype-select").disabled is True
+        assert config_screen.query_one("#head-input").disabled is True
+
+        config_screen.query_one("#model-type-select").value = "dpa"
+        await pilot.pause()
+        assert config_screen.query_one("#inference-mode-select").disabled is True
+        assert config_screen.query_one("#activation-checkpointing-select").disabled is True
+        assert config_screen.query_one("#dtype-select").disabled is True
+        assert config_screen.query_one("#head-input").disabled is False
+        assert config_screen.query_one("#torch-threads-input").disabled is False
+
+        config_screen.query_one("#model-type-select").value = "grace"
+        await pilot.pause()
+        assert config_screen.query_one("#head-input").disabled is True
+        assert config_screen.query_one("#torch-threads-input").disabled is False
+
+
+@pytest.mark.asyncio
+async def test_run_command_contains_tui_resource_and_md_options() -> None:
+    """Every visible TUI option must reach the background CLI command."""
+    app = MlipxApp()
+    app.config.update(
+        {
+            "calc_type": "md",
+            "structure_file": "/tmp/structure.vasp",
+            "model_file": "/tmp/model.pt",
+            "model_type": "uma",
+            "task": "omat",
+            "device": "cuda:1",
+            "output_dir": "/tmp/out",
+            "inference_mode": "turbo",
+            "torch_num_threads": 6,
+            "activation_checkpointing": False,
+            "ensemble": "NVE",
+            "temperature": 500.0,
+            "timestep": 0.5,
+            "md_steps": 10,
+            "friction": 0.002,
+            "save_interval": 2,
+            "pre_relax": False,
+            "pre_relax_steps": 7,
+            "pre_relax_fmax": 0.07,
+            "seed": 42,
+            "velocity_policy": "initialize",
+            "fmax_abort": 12.0,
+        }
+    )
+
+    async with app.run_test(size=(80, 40)):
+        screen = RunScreen()
+        screen._job_id = "test-job"
+        command = screen._build_command()
+
+    for expected in (
+        "--device",
+        "cuda:1",
+        "--inference-mode",
+        "turbo",
+        "--cpu-threads",
+        "6",
+        "--no-activation-checkpointing",
+        "--velocity-policy",
+        "initialize",
+        "--fmax-abort",
+        "12.0",
+        "--seed",
+        "42",
+        "--no-pre-relax",
+    ):
+        assert expected in command
 
 
 @pytest.mark.asyncio

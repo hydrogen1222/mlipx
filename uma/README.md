@@ -190,7 +190,8 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 - **Background jobs:** Submit, detach, re-attach, kill long-running calculations
 - **INCAR files:** VASP-style `KEY = VALUE` configuration format
 - **Cross-platform:** Windows, Linux, macOS | CPU & CUDA
-- **Resource control:** CPU threads, GPU memory (activation checkpointing), inference mode (default/turbo)
+- **Resource control in TUI and CLI:** indexed GPU selection, backend CPU
+  threads, and UMA activation checkpointing/inference mode
 - **Live progress:** Structured progress events, indeterminate spinner for SP, step counter for OPT/MD
 
 ## Package Structure

@@ -80,6 +80,29 @@ Examples:
     def _add_resolver_args(p: argparse.ArgumentParser) -> None:
         """Add config-resolver args shared by sp/opt/md/batch."""
         p.add_argument(
+            "--inference-mode",
+            type=str,
+            default=None,
+            choices=["default", "turbo"],
+            help="UMA inference mode (default: task-specific; ignored by other engines).",
+        )
+        p.add_argument(
+            "--cpu-threads",
+            "--torch-num-threads",
+            dest="torch_num_threads",
+            type=int,
+            metavar="N",
+            default=None,
+            help="CPU intra-op threads (PyTorch for UMA/MACE/DPA, TensorFlow "
+            "for GRACE; default: backend/system).",
+        )
+        p.add_argument(
+            "--activation-checkpointing",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="UMA GPU memory-saving activation checkpointing.",
+        )
+        p.add_argument(
             "--dtype",
             "--default-dtype",
             dest="default_dtype",
@@ -373,6 +396,12 @@ Examples:
         help="Velocity initialization policy (default: auto).",
     )
     md_parser.add_argument(
+        "--fmax-abort",
+        type=float,
+        default=None,
+        help="Large-force warning threshold in eV/Angstrom (default: 20).",
+    )
+    md_parser.add_argument(
         "--output",
         "-o",
         type=str,
@@ -621,7 +650,16 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
     (plan section 17.6: argparse defaults -> None, resolved by ConfigResolver).
     """
     opts: dict = {}
-    for key in ("model_type", "task", "device", "default_dtype", "head"):
+    for key in (
+        "model_type",
+        "task",
+        "device",
+        "inference_mode",
+        "torch_num_threads",
+        "activation_checkpointing",
+        "default_dtype",
+        "head",
+    ):
         value = getattr(args, key, None)
         if value is not None:
             opts[key] = value
@@ -644,6 +682,7 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
             "pre_relax_fmax",
             "seed",
             "velocity_policy",
+            "fmax_abort",
         ):
             value = getattr(args, key, None)
             if value is not None:

@@ -900,13 +900,19 @@ CLI 通过 `mlipx <command> [选项]` 调用。不带参数运行 `mlipx` 默认
 
 ```
 mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
+                       [--cpu-threads N] [--inference-mode MODE]
+                       [--activation-checkpointing | --no-activation-checkpointing]
                        [--dtype DTYPE] [--head HEAD] [--output DIR] [--name NAME]
 
   STRUCTURE             输入结构文件（CIF, XYZ, POSCAR, VASP 等）
   --model MODEL         模型检查点路径 [必需]
   --model-type TYPE     MLIP 引擎：uma|mace|dpa|grace [默认: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc；其他: bulk|molecule [默认: omat]
-  --device DEVICE       cpu|cuda [默认: cpu]
+  --device DEVICE       cpu|gpu|cuda|cuda:N [默认: cpu]
+  --cpu-threads N       CPU intra-op 线程数（全部后端；省略则由后端决定）
+  --inference-mode MODE UMA 推理预设：default|turbo
+  --[no-]activation-checkpointing
+                        UMA 显存/速度覆盖；省略则跟随推理预设
   --dtype DTYPE         MACE 精度 float32|float64 [默认: float32]
   --head HEAD           MACE head 或 DeepMD/DPA 多任务分支
   --output DIR, -o DIR  输出目录 [默认: .]
@@ -943,6 +949,7 @@ mlipx md STRUCTURE --model MODEL [选项]
   --pre-relax           MD 前预弛豫 [默认: NVT 开 / NVE 关]
   --pre-relax-steps N   预弛豫最大步数 [默认: 50]
   --pre-relax-fmax F    预弛豫力收敛阈值 eV/Å [默认: 0.1]
+  --fmax-abort F        大力告警阈值 eV/Å [默认: 20.0]
 ```
 
 ##### `mlipx batch` — 批量处理
@@ -987,7 +994,6 @@ mlipx jobs
 
 ##### `mlipx kill` — 终止后台任务
 
-```
 mlipx kill JOB_ID
 ```
 
@@ -1033,7 +1039,18 @@ TUI 基于 [Textual](https://textual.textualize.io/) 构建，提供交互式、
 **主菜单**（Main Menu）— 选择 SP、OPT、MD、Jobs、Template 或 Exit。
 Batch 当前仅能通过 CLI 运行。
 
-**配置界面**（Configuration）— 填写路径、任务类型、设备和计算特定参数。路径支持实时验证和视觉反馈：
+**配置界面**（Configuration）— 填写路径、引擎/任务，以及设备字符串
+（`cpu`、`cuda` 或 `cuda:N`）。其中 **Backend & Resource Options**
+（后端与资源选项）直接提供：
+
+- 全部引擎的 CPU 线程数（UMA/MACE/DPA 为 PyTorch，GRACE 为 TensorFlow）
+- UMA 的推理模式和激活检查点
+- MACE 精度，以及 MACE/DPA 的模型 head 或分支
+
+选择某个引擎后，不适用的控件会被禁用，不会假装接受后再静默忽略。
+OPT 还可设置晶胞优化和保持晶体对称性；MD 可设置系综、温度、时间步、
+步数/保存间隔、NVT 摩擦系数、预弛豫、随机种子、速度策略和大力告警阈值。
+路径支持实时验证和视觉反馈：
 
 ```
 📁 Structure File: [structure.cif                ]
@@ -1369,25 +1386,60 @@ mlipx clean
 
 ## 11. 资源控制
 
+常用资源选项已经直接出现在 TUI 和 CLI 中；环境变量只是可选替代方式，
+不是使用 TUI 的前置要求。
+
+| 控制项 | TUI | CLI | 适用后端 |
+|---|---|---|---|
+| 设备 / GPU 编号 | **Device** | `--device cpu`、`cuda` 或 `cuda:N` | 全部 |
+| CPU 线程数 | **CPU Threads** | `--cpu-threads N` | 全部 |
+| 推理预设 | **UMA Inference Mode** | `--inference-mode default|turbo` | 仅 UMA |
+| 激活检查点 | **UMA Activation Checkpointing** | `--activation-checkpointing` / `--no-activation-checkpointing` | 仅 UMA |
+
 ### 11.1 CPU 线程
 
 ```bash
-export OMP_NUM_THREADS=4
-mlipx sp structure.cif --model uma-s-1.pt
+mlipx sp structure.cif --model uma-s-1.pt --cpu-threads 4
 ```
 
-### 11.2 GPU 选择
+TUI 中填写 **CPU Threads** 即可；留空表示让后端/系统自行决定。mlipx 会把
+该值映射到 UMA/MACE/DPA 的 PyTorch intra-op 线程或 GRACE 的 TensorFlow
+intra-op 线程。旧写法 `--torch-num-threads` 继续作为兼容别名；
+`OMP_NUM_THREADS=4` 仍可作为 PyTorch 后端的环境级替代。
+
+### 11.2 GPU 显存
+
+UMA 激活检查点会以部分速度换取更低的显存占用：
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 mlipx sp structure.cif --model uma-s-1.pt --device cuda
+mlipx sp structure.cif --model uma-s-1.pt --device cuda \
+    --activation-checkpointing
 ```
 
-### 11.3 推理模式
+省略该选项（TUI 选择 **Auto**）时跟随推理模式预设；若结构能够放入显存且
+更重视速度，可用 `--no-activation-checkpointing`。
+
+### 11.3 GPU 选择
+
+CLI 使用 `--device cuda:N`，TUI 在 **Device** 中填写相同值：
+
+```bash
+mlipx sp structure.cif --model uma-s-1.pt --device cuda:0
+```
+
+DPA 和 GRACE 会在创建计算器前把这个统一选择映射为 DeepMD/TensorFlow
+使用的环境机制。`CUDA_VISIBLE_DEVICES` 仍适合做进程级 GPU 隔离，但普通
+TUI/CLI 使用无需手工设置。
+
+### 11.4 推理模式
 
 | 模式 | 最适用于 |
 |------|----------|
 | `default` | 一般用途、SP、OPT |
 | `turbo` | MD、大体系、生产环境 |
+
+UMA 的 MD 默认使用 `turbo`，SP/OPT 默认使用 `default`；可以在 TUI 或用
+`--inference-mode` 显式覆盖。MACE、DPA 和 GRACE 不使用这个 UMA 专属选项。
 
 ---
 

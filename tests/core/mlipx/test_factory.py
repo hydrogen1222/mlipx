@@ -267,6 +267,38 @@ class TestDpaGraceDevice:
         w.get_calculator()
         assert os.environ.get("CUDA_VISIBLE_DEVICES") == ""
 
+    def test_grace_cpu_threads_configure_tensorflow_before_calculator(
+        self, tmp_path, monkeypatch
+    ):
+        set_threads = MagicMock()
+        fake_tf = MagicMock()
+        fake_tf.config.threading.set_intra_op_parallelism_threads = set_threads
+        fake_tp_cls = MagicMock(return_value=MagicMock())
+        tp_mod = MagicMock()
+        tp_mod.TPCalculator = fake_tp_cls
+        monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+        monkeypatch.setitem(sys.modules, "tensorpotential", MagicMock())
+        monkeypatch.setitem(sys.modules, "tensorpotential.calculator", tp_mod)
+        model = tmp_path / "grace_model"
+        model.mkdir()
+
+        wrapper = GRACECalculatorWrapper(
+            model,
+            device="cpu",
+            task="bulk",
+            cpu_threads=3,
+        )
+        wrapper.get_calculator()
+
+        set_threads.assert_called_once_with(3)
+        fake_tp_cls.assert_called_once_with(model=str(model))
+
+    def test_grace_rejects_invalid_cpu_threads(self, tmp_path):
+        model = tmp_path / "grace_model"
+        model.mkdir()
+        with pytest.raises(ValueError, match="positive integer"):
+            GRACECalculatorWrapper(model, cpu_threads=0)
+
 
 class TestEngineModelType:
     """Tests that EngineConfig model_type flows to the factory."""

@@ -29,6 +29,9 @@ def test_sp_parser_accepts_known_flags() -> None:
         "--model-type", "mace",
         "--task", "bulk",
         "--device", "cuda:0",
+        "--inference-mode", "turbo",
+        "--cpu-threads", "6",
+        "--no-activation-checkpointing",
         "--dtype", "float64",
         "--head", "some_head",
         "--model-alias", "mace_mpa0",
@@ -41,6 +44,9 @@ def test_sp_parser_accepts_known_flags() -> None:
     assert args.model_type == "mace"
     assert args.task == "bulk"
     assert args.device == "cuda:0"
+    assert args.inference_mode == "turbo"
+    assert args.torch_num_threads == 6
+    assert args.activation_checkpointing is False
     assert args.default_dtype == "float64"
     assert args.head == "some_head"
     assert args.model_alias == "mace_mpa0"
@@ -85,6 +91,9 @@ def test_md_parser_accepts_ensemble_flags() -> None:
         "--steps", "5000",
         "--friction", "0.005",
         "--save-interval", "25",
+        "--seed", "42",
+        "--velocity-policy", "initialize",
+        "--fmax-abort", "15",
         "--pre-relax",
         "--no-pre-relax",
     ])
@@ -94,6 +103,9 @@ def test_md_parser_accepts_ensemble_flags() -> None:
     assert args.steps == 5000
     assert args.friction == 0.005
     assert args.save_interval == 25
+    assert args.seed == 42
+    assert args.velocity_policy == "initialize"
+    assert args.fmax_abort == 15.0
 
 
 def test_batch_parser_accepts_pattern_and_workers() -> None:

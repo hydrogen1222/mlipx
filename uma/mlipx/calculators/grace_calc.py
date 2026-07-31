@@ -37,6 +37,7 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
         model_path: str | Path,
         device: str = "cpu",
         task: str = "bulk",
+        cpu_threads: int | None = None,
     ):
         """
         Initialize GRACE calculator wrapper.
@@ -45,10 +46,13 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
             model_path: Path to an exported GRACE SavedModel directory.
             device: Device for calculation (``cpu`` or ``cuda``).
             task: PBC hint (``bulk`` or ``molecule``); not consumed by GRACE.
+            cpu_threads: TensorFlow intra-op CPU thread count. ``None`` keeps
+                TensorFlow's default.
         """
         self.model_path = Path(model_path)
         self._device = device
         self._task = task
+        self._cpu_threads = cpu_threads
         self._calculator: Calculator | None = None
 
         if not self.model_path.exists():
@@ -65,6 +69,12 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
             raise ValueError(
                 f"Invalid GRACE device {device!r}. Use cpu, cuda, gpu, or cuda:N."
             )
+        if cpu_threads is not None and (
+            isinstance(cpu_threads, bool)
+            or not isinstance(cpu_threads, int)
+            or cpu_threads < 1
+        ):
+            raise ValueError("GRACE cpu_threads must be a positive integer.")
 
     def get_calculator(self) -> Calculator:
         """Return the cached GRACE ASE calculator (lazy import)."""
@@ -77,6 +87,27 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
                     "GRACE support requires the 'tensorpotential' package.\n"
                     "Install with: pip install tensorpotential"
                 ) from e
+            if self._cpu_threads is not None:
+                # Import tensorpotential first: its package initializer must set
+                # TF_USE_LEGACY_KERAS before TensorFlow is imported. Threading
+                # is still configured before TPCalculator builds/executes a
+                # TensorFlow graph.
+                try:
+                    import tensorflow as tf  # noqa: PLC0415
+                except ImportError as e:  # pragma: no cover
+                    raise ImportError(
+                        "GRACE support requires TensorFlow via tensorpotential."
+                    ) from e
+                try:
+                    tf.config.threading.set_intra_op_parallelism_threads(
+                        self._cpu_threads
+                    )
+                except RuntimeError as e:
+                    raise RuntimeError(
+                        "Could not set GRACE CPU threads because TensorFlow was "
+                        "already initialized. Start mlipx in a fresh process or "
+                        "omit --cpu-threads."
+                    ) from e
             self._calculator = TPCalculator(model=str(self.model_path))
         return self._calculator
 
@@ -139,6 +170,7 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
             "actual_device": self._actual_device(),
             "device": self._device,
             "task": self._task,
+            "cpu_threads": self._cpu_threads,
             "implemented_properties": self.implemented_properties,
             "has_stress": self.has_stress,
         }

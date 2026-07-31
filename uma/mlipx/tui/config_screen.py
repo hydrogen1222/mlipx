@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -132,16 +133,62 @@ class ConfigScreen(Screen):
                 )
 
                 yield Label("Device:")
-                yield RadioSet(
-                    RadioButton(
-                        "CPU", id="cpu", value=self.app.get_config("device") == "cpu"
-                    ),
-                    RadioButton(
-                        "CUDA (GPU)",
-                        id="cuda",
-                        value=self.app.get_config("device") == "cuda",
-                    ),
-                    id="device-radio",
+                yield Input(
+                    value=str(self.app.get_config("device", "cpu")),
+                    placeholder="cpu, cuda, or cuda:N (for example cuda:1)",
+                    id="device-input",
+                )
+
+                yield Static("🧠 Backend & Resource Options", classes="section-title")
+                yield Static(
+                    "UMA-only controls are disabled for other engines. CPU Threads "
+                    "controls PyTorch (UMA/MACE/DPA) or TensorFlow (GRACE).",
+                )
+
+                yield Label("MACE Precision:")
+                yield Select(
+                    options=[("float32 (faster)", "float32"), ("float64", "float64")],
+                    value=self.app.get_config("default_dtype", "float32"),
+                    id="dtype-select",
+                )
+
+                yield Label("MACE/DPA Model Head or Branch (optional):")
+                yield Input(
+                    value=str(self.app.get_config("head", "") or ""),
+                    placeholder="e.g., default or Domains_SSE_PBE",
+                    id="head-input",
+                )
+
+                yield Label("UMA Inference Mode:")
+                yield Select(
+                    options=[("default", "default"), ("turbo", "turbo")],
+                    value=self.app.get_config("inference_mode", "default"),
+                    id="inference-mode-select",
+                )
+
+                threads = self.app.get_config("torch_num_threads")
+                yield Label("CPU Threads (blank = backend/system default):")
+                yield Input(
+                    value="" if threads is None else str(threads),
+                    placeholder="e.g., 4",
+                    id="torch-threads-input",
+                )
+
+                checkpointing = self.app.get_config("activation_checkpointing")
+                checkpointing_value = (
+                    "auto"
+                    if checkpointing is None
+                    else ("on" if checkpointing else "off")
+                )
+                yield Label("UMA Activation Checkpointing:")
+                yield Select(
+                    options=[
+                        ("Auto (from inference mode)", "auto"),
+                        ("On (lower VRAM)", "on"),
+                        ("Off (faster, more VRAM)", "off"),
+                    ],
+                    value=checkpointing_value,
+                    id="activation-checkpointing-select",
                 )
 
                 # Calculation-specific options
@@ -221,6 +268,14 @@ class ConfigScreen(Screen):
                 Switch(value=self.app.get_config("cell_opt", False), id="cell-opt"),
                 classes="switch-row",
             )
+            yield Horizontal(
+                Label("Preserve Crystal Symmetry:"),
+                Switch(
+                    value=self.app.get_config("fix_symmetry", False),
+                    id="fix-symmetry",
+                ),
+                classes="switch-row",
+            )
 
         elif calc_type == "md":
             current_ensemble = self.app.get_config("ensemble", "NVT").upper()
@@ -255,13 +310,56 @@ class ConfigScreen(Screen):
                 id="save-interval-input",
             )
 
+            yield Label("NVT Friction (1/fs):")
+            yield Input(
+                value=str(self.app.get_config("friction", 0.001)),
+                id="friction-input",
+            )
+
             yield Horizontal(
-                Label("Pre-relaxation (recommended):"),
+                Label("Pre-relaxation:"),
                 Switch(
                     value=self.app.get_config("pre_relax", True),
                     id="pre-relax",
                 ),
                 classes="switch-row",
+            )
+
+            yield Label("Pre-relaxation Max Steps:")
+            yield Input(
+                value=str(self.app.get_config("pre_relax_steps", 50)),
+                id="pre-relax-steps-input",
+            )
+
+            yield Label("Pre-relaxation Force Threshold (eV/Å):")
+            yield Input(
+                value=str(self.app.get_config("pre_relax_fmax", 0.1)),
+                id="pre-relax-fmax-input",
+            )
+
+            seed = self.app.get_config("seed")
+            yield Label("Random Seed (blank = auto-generate and record):")
+            yield Input(
+                value="" if seed is None else str(seed),
+                placeholder="e.g., 42",
+                id="seed-input",
+            )
+
+            yield Label("Velocity Policy:")
+            yield Select(
+                options=[
+                    ("Auto", "auto"),
+                    ("Initialize / overwrite", "initialize"),
+                    ("Preserve existing velocities", "preserve"),
+                ],
+                value=self.app.get_config("velocity_policy", "auto"),
+                id="velocity-policy-select",
+            )
+
+            yield Label("Large-force Warning Threshold (eV/Å):")
+            yield Input(
+                value=str(self.app.get_config("fmax_abort", 20.0)),
+                id="fmax-abort-input",
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
@@ -312,6 +410,7 @@ class ConfigScreen(Screen):
             task_select = self.query_one("#task-select", Select)
             task_select.set_options(self._task_options())
             task_select.value = self._default_task_value()
+            self._update_engine_option_states()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Handle live path validation on input change."""
@@ -325,6 +424,23 @@ class ConfigScreen(Screen):
         model_input = self.query_one("#model-input", Input)
         self._validate_path("structure-input", structure_input.value)
         self._validate_path("model-input", model_input.value)
+        self._update_engine_option_states()
+
+    def _update_engine_option_states(self) -> None:
+        """Enable only controls consumed by the selected backend."""
+        model_type = self._current_model_type()
+        self.query_one("#dtype-select", Select).disabled = model_type != "mace"
+        self.query_one("#head-input", Input).disabled = model_type not in {
+            "mace",
+            "dpa",
+        }
+        self.query_one("#inference-mode-select", Select).disabled = (
+            model_type != "uma"
+        )
+        self.query_one("#activation-checkpointing-select", Select).disabled = (
+            model_type != "uma"
+        )
+        self.query_one("#torch-threads-input", Input).disabled = False
 
     def _save_and_run(self) -> None:
         """Save configuration and run calculation."""
@@ -372,16 +488,53 @@ class ConfigScreen(Screen):
         model_type_select = self.query_one("#model-type-select", Select)
         if model_type_select.value:
             self.app.update_config("model_type", model_type_select.value)
+        model_type = str(self.app.get_config("model_type", "uma"))
 
         task_select = self.query_one("#task-select", Select)
         if task_select.value:
             self.app.update_config("task", task_select.value)
 
-        # Get device from radio buttons
-        device_radio = self.query_one("#device-radio", RadioSet)
-        selected_device = device_radio.pressed_button
-        if selected_device:
-            self.app.update_config("device", selected_device.id)
+        device = self.query_one("#device-input", Input).value.strip().lower()
+        if not re.fullmatch(r"(?:cpu|gpu|cuda(?::\d+)?)", device):
+            self.notify(
+                "Device must be cpu, gpu, cuda, or cuda:N (for example cuda:1)",
+                severity="error",
+            )
+            return
+        self.app.update_config("device", device)
+
+        # Backend/resource options. Disabled controls are intentionally not
+        # forwarded to an incompatible backend.
+        if model_type == "mace":
+            dtype_select = self.query_one("#dtype-select", Select)
+            self.app.update_config("default_dtype", str(dtype_select.value))
+        if model_type in {"mace", "dpa"}:
+            head = self.query_one("#head-input", Input).value.strip()
+            self.app.update_config("head", head or None)
+        if model_type == "uma":
+            inference_select = self.query_one("#inference-mode-select", Select)
+            self.app.update_config("inference_mode", str(inference_select.value))
+            checkpoint_select = self.query_one(
+                "#activation-checkpointing-select", Select
+            )
+            checkpoint_value = str(checkpoint_select.value)
+            self.app.update_config(
+                "activation_checkpointing",
+                None if checkpoint_value == "auto" else checkpoint_value == "on",
+            )
+        threads_text = self.query_one("#torch-threads-input", Input).value.strip()
+        if threads_text:
+            try:
+                threads = int(threads_text)
+            except ValueError:
+                self.notify("CPU threads must be a positive integer", severity="error")
+                return
+            if threads < 1:
+                self.notify("CPU threads must be at least 1", severity="error")
+                return
+            self.app.update_config("torch_num_threads", threads)
+        else:
+            self.app.update_config("torch_num_threads", None)
 
         # Get calculation-specific options
         calc_type = self.app.get_config("calc_type")
@@ -405,6 +558,8 @@ class ConfigScreen(Screen):
 
             cell_opt = self.query_one("#cell-opt", Switch)
             self.app.update_config("cell_opt", cell_opt.value)
+            fix_symmetry = self.query_one("#fix-symmetry", Switch)
+            self.app.update_config("fix_symmetry", fix_symmetry.value)
 
         elif calc_type == "md":
             ensemble_radio = self.query_one("#ensemble-radio", RadioSet)
@@ -438,8 +593,59 @@ class ConfigScreen(Screen):
             except ValueError:
                 pass
 
+            try:
+                friction = float(self.query_one("#friction-input", Input).value)
+                self.app.update_config("friction", friction)
+            except ValueError:
+                pass
+
             pre_relax = self.query_one("#pre-relax", Switch)
             self.app.update_config("pre_relax", pre_relax.value)
+
+            try:
+                pre_relax_steps = int(
+                    self.query_one("#pre-relax-steps-input", Input).value
+                )
+                self.app.update_config("pre_relax_steps", pre_relax_steps)
+            except ValueError:
+                pass
+
+            try:
+                pre_relax_fmax = float(
+                    self.query_one("#pre-relax-fmax-input", Input).value
+                )
+                self.app.update_config("pre_relax_fmax", pre_relax_fmax)
+            except ValueError:
+                pass
+
+            seed_text = self.query_one("#seed-input", Input).value.strip()
+            if seed_text:
+                try:
+                    seed = int(seed_text)
+                except ValueError:
+                    self.notify(
+                        "Random seed must be a non-negative integer",
+                        severity="error",
+                    )
+                    return
+                if seed < 0:
+                    self.notify(
+                        "Random seed must be a non-negative integer",
+                        severity="error",
+                    )
+                    return
+                self.app.update_config("seed", seed)
+            else:
+                self.app.update_config("seed", None)
+
+            velocity_select = self.query_one("#velocity-policy-select", Select)
+            self.app.update_config("velocity_policy", str(velocity_select.value))
+
+            try:
+                fmax_abort = float(self.query_one("#fmax-abort-input", Input).value)
+                self.app.update_config("fmax_abort", fmax_abort)
+            except ValueError:
+                pass
 
         # TUI calculations are launched as persistent background processes.
         self.app.update_config("detach", True)

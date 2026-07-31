@@ -68,6 +68,37 @@ class TestEngineConfig:
         config = EngineConfig.from_resolved(resolved)
         assert config.run_options["fmax_abort"] == 20.0
 
+    @pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
+    def test_from_resolved_routes_backend_thread_count(self, model_type):
+        from mlipx.config.resolver import resolve_config  # noqa: PLC0415
+        from mlipx.engine import EngineConfig  # noqa: PLC0415
+
+        resolved = resolve_config(
+            calc_type="sp",
+            cli={
+                "model_type": model_type,
+                "model_path": "model.pt",
+                "torch_num_threads": 3,
+            },
+        )
+        config = EngineConfig.from_resolved(resolved)
+        assert config.torch_num_threads == 3
+
+    def test_from_resolved_routes_uma_activation_checkpointing_override(self):
+        from mlipx.config.resolver import resolve_config  # noqa: PLC0415
+        from mlipx.engine import EngineConfig  # noqa: PLC0415
+
+        resolved = resolve_config(
+            calc_type="sp",
+            cli={
+                "model_type": "uma",
+                "model_path": "model.pt",
+                "activation_checkpointing": False,
+            },
+        )
+        config = EngineConfig.from_resolved(resolved)
+        assert config.activation_checkpointing is False
+
 
 class TestCalculationEngineSetup:
     """Tests for CalculationEngine construction and config validation."""
@@ -118,6 +149,52 @@ class TestCalculationEngineSetup:
         with patch.object(Path, "exists", return_value=True):
             engine = CalculationEngine.from_config(config)
             assert engine is not None
+
+    @pytest.mark.parametrize("model_type", ["uma", "mace", "dpa"])
+    def test_pytorch_thread_count_is_applied_before_calculator_creation(
+        self, model_type
+    ):
+        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+
+        config = EngineConfig(
+            calc_type="sp",
+            model_path=Path("model.pt"),
+            model_type=model_type,
+            task="omat" if model_type == "uma" else "bulk",
+            torch_num_threads=2,
+        )
+        engine = CalculationEngine.from_config(config)
+
+        with (
+            patch("torch.set_num_threads") as set_num_threads,
+            patch(
+                "mlipx.calculators.factory.CalculatorFactory.create",
+                return_value=object(),
+            ),
+        ):
+            engine._create_calculator()
+
+        set_num_threads.assert_called_once_with(2)
+
+    def test_grace_thread_count_reaches_tensorflow_calculator(self):
+        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+
+        config = EngineConfig(
+            calc_type="sp",
+            model_path=Path("grace-model"),
+            model_type="grace",
+            task="bulk",
+            torch_num_threads=2,
+        )
+        engine = CalculationEngine.from_config(config)
+
+        with patch(
+            "mlipx.calculators.factory.CalculatorFactory.create",
+            return_value=object(),
+        ) as create:
+            engine._create_calculator()
+
+        assert create.call_args.kwargs["cpu_threads"] == 2
 
 
 def test_engine_creates_live_log_and_tail_hint(tmp_path):

@@ -922,13 +922,19 @@ The CLI is invoked via `mlipx <command> [options]`. Running `mlipx` without argu
 
 ```
 mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
+                       [--cpu-threads N] [--inference-mode MODE]
+                       [--activation-checkpointing | --no-activation-checkpointing]
                        [--dtype DTYPE] [--head HEAD] [--output DIR] [--name NAME]
 
   STRUCTURE             Input structure file (CIF, XYZ, POSCAR, VASP, etc.)
   --model MODEL         Path to model checkpoint [required]
   --model-type TYPE     MLIP engine: uma|mace|dpa|grace [default: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc; others: bulk|molecule [default: omat]
-  --device DEVICE       cpu|cuda [default: cpu]
+  --device DEVICE       cpu|gpu|cuda|cuda:N [default: cpu]
+  --cpu-threads N       CPU intra-op threads (all engines; backend default if omitted)
+  --inference-mode MODE UMA inference preset: default|turbo
+  --[no-]activation-checkpointing
+                        UMA memory/speed override; omitted: follow inference preset
   --dtype DTYPE         MACE dtype float32|float64 [default: float32]
   --head HEAD           MACE head or DeepMD/DPA multi-task branch
   --output DIR, -o DIR  Output directory [default: .]
@@ -965,6 +971,7 @@ mlipx md STRUCTURE --model MODEL [options]
   --pre-relax           Pre-relax before MD [default: on for NVT, off for NVE]
   --pre-relax-steps N   Max pre-relaxation steps [default: 50]
   --pre-relax-fmax F    Pre-relaxation force threshold eV/Å [default: 0.1]
+  --fmax-abort F        Large-force warning threshold eV/Å [default: 20.0]
 ```
 
 ##### `mlipx batch` — Batch Processing
@@ -1055,7 +1062,19 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
 **Main Menu** — Select SP, OPT, MD, Jobs, Template, or Exit. Batch is currently
 CLI-only.
 
-**Configuration** — Fill in paths, task type, device, and calculation-specific parameters. Paths support live validation with visual feedback:
+**Configuration** — Fill in paths, engine/task and a device string (`cpu`,
+`cuda`, or `cuda:N`). The **Backend & Resource Options** section exposes:
+
+- CPU threads for every engine (PyTorch for UMA/MACE/DPA, TensorFlow for GRACE)
+- UMA inference mode and activation checkpointing
+- MACE precision and MACE/DPA model head or branch
+
+Controls that do not apply to the selected engine are disabled instead of being
+silently accepted. OPT also exposes cell optimization and symmetry
+preservation. MD exposes the ensemble, temperature, timestep, step/save counts,
+NVT friction, pre-relaxation controls, random seed, velocity policy, and
+large-force warning threshold. Paths support live validation with visual
+feedback:
 
 ```
 📁 Structure File: [structure.cif                ]
@@ -1523,17 +1542,33 @@ Job state files are stored at `~/.mlipx/jobs/`. Each job has a JSON state file a
 
 ## 11. Resource Control
 
+The common controls are available directly in both the TUI and CLI; environment
+variables are optional alternatives, not a requirement for TUI use.
+
+| Control | TUI | CLI | Applies to |
+|---|---|---|---|
+| Device / GPU index | **Device** | `--device cpu`, `cuda`, or `cuda:N` | All engines |
+| CPU thread count | **CPU Threads** | `--cpu-threads N` | All engines |
+| Inference preset | **UMA Inference Mode** | `--inference-mode default|turbo` | UMA only |
+| Activation checkpointing | **UMA Activation Checkpointing** | `--activation-checkpointing` / `--no-activation-checkpointing` | UMA only |
+
 ### 11.1 CPU Threads
 
-Control the number of CPU threads used by PyTorch:
+Set the backend's intra-op CPU thread count directly:
 
 ```bash
-# CLI: set via environment variable
-export OMP_NUM_THREADS=4
-mlipx sp structure.cif --model uma-s-1.pt
+mlipx sp structure.cif --model uma-s-1.pt --cpu-threads 4
 ```
 
+The equivalent TUI field is **CPU Threads**. Leaving it blank lets the
+backend/system choose. mlipx maps the value to PyTorch intra-op threads for
+UMA/MACE/DPA and TensorFlow intra-op threads for GRACE. The historical
+`--torch-num-threads` spelling remains a compatible CLI alias.
+`OMP_NUM_THREADS=4` remains an environment-level alternative for PyTorch
+backends.
+
 **Python API / EngineConfig:**
+
 ```python
 config = EngineConfig(
     ...,
@@ -1543,7 +1578,17 @@ config = EngineConfig(
 
 ### 11.2 GPU Memory
 
-`activation_checkpointing` trades compute for memory — enabling it reduces GPU memory usage at the cost of a slight slowdown:
+UMA's `activation_checkpointing` trades compute for memory: enabling it reduces
+GPU memory use at the cost of some speed. It is available in the TUI and CLI:
+
+```bash
+mlipx sp structure.cif --model uma-s-1.pt --device cuda \
+    --activation-checkpointing
+```
+
+Omit the flag (TUI: **Auto**) to follow the selected inference preset. Use
+`--no-activation-checkpointing` only when the structure fits in VRAM and speed
+is more important.
 
 ```python
 config = EngineConfig(
@@ -1552,19 +1597,19 @@ config = EngineConfig(
 )
 ```
 
-For systems with limited VRAM (< 8 GB), keep this enabled (default).
-
 ### 11.3 GPU Selection
 
-Use the standard `CUDA_VISIBLE_DEVICES` environment variable:
+Select a logical GPU directly with `--device cuda:N`, or enter the same value in
+the TUI **Device** field:
 
 ```bash
-# Use GPU 0 only
-CUDA_VISIBLE_DEVICES=0 mlipx sp structure.cif --model uma-s-1.pt --device cuda
-
-# Use GPUs 0 and 1
-CUDA_VISIBLE_DEVICES=0,1 mlipx sp structure.cif --model uma-s-1.pt --device cuda
+mlipx sp structure.cif --model uma-s-1.pt --device cuda:0
 ```
+
+For DPA and GRACE, mlipx maps this selection to the environment mechanism used
+by DeepMD/TensorFlow before constructing the calculator. An explicitly set
+`CUDA_VISIBLE_DEVICES` remains useful for process-level GPU isolation, but it
+is not required for ordinary TUI or CLI selection.
 
 ### 11.4 Inference Modes
 
@@ -1573,7 +1618,9 @@ CUDA_VISIBLE_DEVICES=0,1 mlipx sp structure.cif --model uma-s-1.pt --device cuda
 | `default` | No | No | No | Yes | General use, SP, OPT |
 | `turbo` | Yes | Yes | Yes | No | MD, large systems, production |
 
-`turbo` mode is automatically used for MD calculations through the CLI and API.
+UMA MD defaults to `turbo`; SP and OPT default to `default`. Choose another
+preset explicitly with the TUI selector or `--inference-mode`. MACE, DPA, and
+GRACE do not use this UMA-specific setting.
 
 ---
 

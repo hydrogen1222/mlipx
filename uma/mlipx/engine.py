@@ -55,7 +55,9 @@ class EngineConfig:
         options: *Deprecated* untyped bag. Kept for backward compatibility;
             routed into run/calculator options on first use with a
             DeprecationWarning. New code should use the two fields above.
-        torch_num_threads: CPU thread count for torch (UMA).
+        torch_num_threads: CPU intra-op thread count. The historical field name
+            is retained for compatibility; it controls PyTorch for
+            UMA/MACE/DPA and TensorFlow for GRACE.
         activation_checkpointing: GPU memory saving (UMA; overrides
             inference_mode preset).
         strict_config: When True, unknown option keys raise instead of warn
@@ -108,6 +110,13 @@ class EngineConfig:
             calculator_options=dict(resolved.calculator_options),
             run_options=run_options,
             settings=dict(resolved.settings),
+            torch_num_threads=(
+                resolved.calculator_options.get("torch_num_threads")
+                or resolved.settings.get("torch_num_threads")
+            ),
+            activation_checkpointing=resolved.calculator_options.get(
+                "activation_checkpointing"
+            ),
             strict_config=resolved.strict,
         )
 
@@ -208,6 +217,16 @@ class CalculationEngine:
         from mlipx.calculators.factory import CalculatorFactory  # noqa: PLC0415
 
         calc_opts = self._effective_calculator_options()
+        # Apply a user-selected thread limit to every PyTorch backend before
+        # its model is imported/constructed. UMA also receives the value in its
+        # InferenceSettings below.
+        if (
+            self.config.torch_num_threads is not None
+            and self.config.model_type.lower() in {"uma", "fairchem", "mace", "dpa"}
+        ):
+            import torch  # noqa: PLC0415
+
+            torch.set_num_threads(self.config.torch_num_threads)
         # The UMA-only top-level fields feed the calculator for UMA engines;
         # they are intentionally NOT forwarded to MACE/DPA/GRACE (which would
         # otherwise trigger a cross-engine warning in the factory).
@@ -219,6 +238,11 @@ class CalculationEngine:
                 calc_opts.setdefault(
                     "activation_checkpointing", self.config.activation_checkpointing
                 )
+        elif (
+            self.config.model_type.lower() == "grace"
+            and self.config.torch_num_threads is not None
+        ):
+            calc_opts.setdefault("cpu_threads", self.config.torch_num_threads)
         # MACE dtype default is float32 (the documented MACE default, matching
         # BUILTIN_DEFAULTS["calculator.mace"]). Applied for every calc type only
         # when nothing higher in the config layer (settings/INCAR/CLI) already set
