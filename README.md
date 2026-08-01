@@ -6,7 +6,7 @@ mlipx wraps multiple MLIP engines behind one unified interface — **UMA (FAIRCh
 
 Switch engines with a single flag: `--model-type` (CLI) or the `MODEL_TYPE` key (INCAR). Default is `uma`; existing UMA workflows keep working unchanged.
 
-> ℹ️ This repository contains the full source of [mlipx](uma/) — a multi-engine MLIP CLI/TUI/API tool — built on top of [fairchem-core](packages/fairchem-core/). The underlying fairchem library (UMA model, training, datasets) is preserved under [`src/`](src/), [`packages/`](packages/), and [`docs/`](docs/). Originally forked from [FAIRChem](https://github.com/FAIR-Chem/fairchem).
+> ℹ️ This repository contains the full source of [mlipx](mlipx/) — a multi-engine MLIP CLI/TUI/API tool — built on top of [fairchem-core](packages/fairchem-core/). The underlying fairchem library (UMA model, training, datasets) is preserved under [`src/`](src/), [`packages/`](packages/), and [`docs/`](docs/). Originally forked from [FAIRChem](https://github.com/FAIR-Chem/fairchem).
 
 ---
 
@@ -14,8 +14,8 @@ Switch engines with a single flag: `--model-type` (CLI) or the `MODEL_TYPE` key 
 
 | Language | Manual |
 |----------|--------|
-| 🇨🇳 中文 | [uma/docs/README_CN.md](uma/docs/README_CN.md) — 完整中文手册 |
-| 🇬🇧 English | [uma/docs/README_EN.md](uma/docs/README_EN.md) — Complete reference |
+| 🇨🇳 中文 | [mlipx/docs/README_CN.md](mlipx/docs/README_CN.md) — 完整中文手册 |
+| 🇬🇧 English | [mlipx/docs/README_EN.md](mlipx/docs/README_EN.md) — Complete reference |
 
 Both manuals are wiki-level references covering: installation, quick start, architecture, all calculation types, CLI/TUI/API, every INCAR keyword, output-file formats, task types, the **multi-engine guide**, background jobs, resource control, worked examples, troubleshooting, and performance.
 
@@ -47,8 +47,8 @@ and CUDA dependencies.
 | GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
 
 Copy-ready installation commands for all four environments are at the very
-start of the [English installation guide](uma/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
-and [中文安装教程](uma/docs/README_CN.md#21-小白先看四个引擎要用四个环境).
+start of the [English installation guide](mlipx/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
+and [中文安装教程](mlipx/docs/README_CN.md#21-小白先看四个引擎要用四个环境).
 Do not install MACE, DPA, or GRACE into the UMA `.venv`.
 
 ### Run a calculation
@@ -116,6 +116,60 @@ Each input gets its own output subdirectory and the root output directory gets
 `batch_summary.json`. The current CLI does not expose `--parallel` or
 `--workers`; do not include them.
 
+### 🎟️ Job queue (Slurm-like, background)
+
+For long or many calculations, submit **queued jobs** instead of running them
+in the foreground. Queued jobs start one at a time by default (single GPU);
+a scheduler promotes `PENDING` jobs to `RUNNING` and automatically starts the
+next job when one finishes. Each task can use its own Python environment
+(venv), engine (UMA/MACE/DPA/GRACE), model, structure and calc type, so a UMA
+OPT task and a GRACE MD task can share one queue.
+
+```bash
+# 1. Describe the tasks in a JSON file
+cat > tasks.json <<'JSON'
+{
+  "max_concurrent": 1,
+  "tasks": [
+    {
+      "name": "opt-uma-1",
+      "calc_type": "opt",
+      "structure": "/path/a.cif",
+      "model": "/path/uma-s-1.pt",
+      "model_type": "uma",
+      "device": "cuda:0",
+      "options": {"fmax": 0.05}
+    },
+    {
+      "name": "md-grace-1",
+      "python": "/path/.venv-grace/bin/python",
+      "calc_type": "md",
+      "structure": "/path/b.cif",
+      "model": "/path/grace_model/",
+      "model_type": "grace",
+      "options": {"ensemble": "NVE", "steps": 1000}
+    }
+  ]
+}
+JSON
+
+# 2. Enqueue the tasks (status PENDING)
+uv run mlipx queue submit tasks.json
+
+# 3. Run the scheduler (background; max_concurrent from the task file)
+uv run mlipx queue start            # stop with: mlipx queue stop
+uv run mlipx queue status           # queued / running / finished counts
+
+# Or run the scheduler in the foreground of a terminal
+uv run mlipx queue start --foreground
+```
+
+The TUI queues every calculation it submits (visible as `pending` in the
+Jobs screen) and provides **Start/Stop Scheduler** controls plus a concurrency
+setting for multi-GPU machines. `mlipx jobs` / `mlipx kill` / `mlipx clean`
+manage individual jobs; `mlipx convert-xdatcar` re-emits a trajectory in the
+exact standard VASP XDATCAR layout (unwrapped coordinates).
+
 ---
 
 ## 🧰 Interfaces
@@ -144,8 +198,8 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 > DPA requires a different PyTorch ABI/version; GRACE uses TensorFlow and a
 > separate cuDNN runtime. Use the four command prefixes shown above rather than
 > a globally installed `mlipx`. See the copy-ready
-> [English](uma/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
-> or [Chinese](uma/docs/README_CN.md#21-小白先看四个引擎要用四个环境)
+> [English](mlipx/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
+> or [Chinese](mlipx/docs/README_CN.md#21-小白先看四个引擎要用四个环境)
 > installation guide.
 
 ---
@@ -167,7 +221,7 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 ## 📦 Package Layout
 
 ```
-uma/
+mlipx/
 ├── README.md                  # Package README (links to full manuals)
 ├── docs/
 │   ├── README_CN.md           # 中文完整手册
@@ -179,7 +233,7 @@ uma/
 │   ├── calculators/           # MACE/DPA/GRACE wrappers + Factory
 │   ├── config.py              # INCAR config parser
 │   ├── api.py                 # Python API functions
-│   ├── cli.py                 # CLI (argparse, 10 subcommands)
+│   ├── cli.py                 # CLI (argparse, sp/opt/md/batch/run/config/queue/...)
 │   ├── runners/               # SinglePoint, Optimization, MD, Batch
 │   ├── tui/                   # Textual TUI (app, screens)
 │   └── writers/               # OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
@@ -191,7 +245,7 @@ uma/
 
 ## 📄 License
 
-MIT License. mlipx is built upon code from [FAIRChem](https://github.com/FAIR-Chem/fairchem) (Copyright © Meta Platforms, Inc. and affiliates), licensed under MIT. See [`uma/LICENSE`](uma/LICENSE) and [`LICENSE.md`](LICENSE.md).
+MIT License. mlipx is built upon code from [FAIRChem](https://github.com/FAIR-Chem/fairchem) (Copyright © Meta Platforms, Inc. and affiliates), licensed under MIT. See [`mlipx/LICENSE`](mlipx/LICENSE) and [`LICENSE.md`](LICENSE.md).
 
 ## 🙏 Acknowledgements
 

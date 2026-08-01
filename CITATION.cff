@@ -1,11 +1,14 @@
 cff-version: 1.2.0
 title: "mlipx — MLIP eXtended"
-version: 0.1.0
-message: "If you use this software, please cite it as below."
-version: 2.2.0
-message: "If you use this software, please cite it as below."
+version: 2.0.0
+message: >-
+  If you use this software, please cite it using the metadata from this file.
+  mlipx is built on FAIRChem (https://github.com/FAIR-Chem/fairchem); the
+  authors listed below are the original FAIRChem/UMA contributors whose work
+  mlipx builds upon.
 doi: 10.5281/zenodo.15587498
 url: "https://github.com/hydrogen1222/mlipx"
+repository-code: https://github.com/hydrogen1222/mlipx
 license:
 - MIT
 authors:
@@ -53,6 +56,4 @@ authors:
 - family-names: Kyle Michel
 - family-names: willis
 - family-names: vbttchr
-message: If you use this software, please cite it using the metadata from this file.
-repository-code: https://github.com/hydrogen1222/mlipx
 type: software

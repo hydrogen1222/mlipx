@@ -3125,7 +3125,7 @@ wheels = [
 [[package]]
 name = "mlipx"
 version = "2.0.0"
-source = { editable = "uma" }
+source = { editable = "mlipx" }
 dependencies = [
     { name = "ase" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple" }, marker = "python_full_version < '3.11'" },
@@ -3177,7 +3177,7 @@ requires-dist = [
     { name = "fairchem-applications-cattsunami", editable = "packages/fairchem-applications-cattsunami" },
     { name = "fairchem-applications-ocx", editable = "packages/fairchem-applications-ocx" },
     { name = "fairchem-core", editable = "packages/fairchem-core" },
-    { name = "mlipx", editable = "uma" },
+    { name = "mlipx", editable = "mlipx" },
 ]
 
 [[package]]

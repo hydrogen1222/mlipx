@@ -1,0 +1,99 @@
+"""Tests for mlipx.config.incar (INCAR parsing and validation)."""
+
+from __future__ import annotations
+
+from mlipx.config.incar import IncarConfig
+
+
+def test_parse_basic_types() -> None:
+    cfg = IncarConfig.from_string(
+        "CALC_TYPE = SP\n"
+        "FMAX = 0.05\n"
+        "STEPS = 1000\n"
+        "CELL_OPT = .TRUE.\n"
+        "MODEL_PATH = uma-s-1.pt\n"
+    )
+    assert cfg["CALC_TYPE"] == "SP"
+    assert cfg["FMAX"] == 0.05
+    assert cfg["STEPS"] == 1000
+    assert cfg["CELL_OPT"] is True
+    assert cfg["MODEL_PATH"] == "uma-s-1.pt"
+
+
+def test_validate_accepts_supported_calc_types() -> None:
+    for ct in ("SP", "OPT", "MD", "BATCH"):
+        cfg = IncarConfig.from_string(f"CALC_TYPE = {ct}\nMODEL_PATH = x.pt\n")
+        assert cfg.validate() == [], f"{ct} should validate"
+
+
+def test_validate_rejects_unsupported_calc_types() -> None:
+    """Regression: phonon/analyze passed INCAR validation but crashed at
+    engine construction with a late 'Unknown calc_type' error."""
+    for ct in ("PHONON", "ANALYZE", "BOGUS"):
+        cfg = IncarConfig.from_string(f"CALC_TYPE = {ct}\nMODEL_PATH = x.pt\n")
+        errors = cfg.validate()
+        assert len(errors) == 1, f"{ct}: {errors}"
+        # Error message must quote the value properly (missing closing quote bug).
+        assert f"Invalid CALC_TYPE '{ct.lower()}'. " in errors[0], errors[0]
+
+
+def test_validate_rejects_unsupported_optimizers() -> None:
+    """Regression: gpmin/mdmin passed INCAR validation but raised at runner
+    construction (OptimizationRunner only implements FIRE/BFGS/LBFGS)."""
+    for algo in ("GPMIN", "MDMIN", "BOGUS"):
+        cfg = IncarConfig.from_string(f"OPT_ALGO = {algo}\n")
+        errors = cfg.validate()
+        assert len(errors) == 1, f"{algo}: {errors}"
+        assert f"Invalid OPT_ALGO '{algo.lower()}'. " in errors[0], errors[0]
+
+
+def test_validate_accepts_supported_optimizers() -> None:
+    for algo in ("FIRE", "BFGS", "LBFGS"):
+        cfg = IncarConfig.from_string(f"OPT_ALGO = {algo}\n")
+        assert cfg.validate() == []
+
+
+def test_validate_ensemble_error_message_quotes_value() -> None:
+    cfg = IncarConfig.from_string("MD_ENSEMBLE = NPT\n")
+    errors = cfg.validate()
+    assert len(errors) == 1
+    assert "Invalid MD_ENSEMBLE 'npt'. " in errors[0], errors[0]
+
+
+def test_validate_invalid_task() -> None:
+    cfg = IncarConfig.from_string("TASK = not_a_task\n")
+    errors = cfg.validate()
+    assert len(errors) == 1
+    assert "Invalid TASK 'not_a_task'" in errors[0]
+
+
+def test_validate_invalid_device() -> None:
+    cfg = IncarConfig.from_string("DEVICE = quantum\n")
+    errors = cfg.validate()
+    assert len(errors) == 1
+    assert "Invalid DEVICE 'quantum'" in errors[0]
+
+
+def test_validate_cuda_n_device_accepted() -> None:
+    cfg = IncarConfig.from_string("DEVICE = cuda:3\n")
+    assert cfg.validate() == []
+
+
+def test_validate_invalid_model_type() -> None:
+    cfg = IncarConfig.from_string("MODEL_TYPE = alpaca\n")
+    errors = cfg.validate()
+    assert len(errors) == 1
+    assert "Invalid MODEL_TYPE 'alpaca'" in errors[0]
+
+
+def test_validate_invalid_dtype() -> None:
+    cfg = IncarConfig.from_string("DEFAULT_DTYPE = float16\n")
+    errors = cfg.validate()
+    assert len(errors) == 1
+    assert "Invalid DEFAULT_DTYPE 'float16'" in errors[0]
+
+
+def test_validate_multiple_errors_collected() -> None:
+    cfg = IncarConfig.from_string("CALC_TYPE = PHONON\nMD_ENSEMBLE = NPT\n")
+    errors = cfg.validate()
+    assert len(errors) == 2

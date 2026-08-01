@@ -154,8 +154,8 @@ _build
 .uv/
 
 # UMA model checkpoints and local test structures (do not commit — large / user-specific)
-uma/uma-s-1.pt
-uma/Si.cif
+mlipx/uma-s-1.pt
+mlipx/Si.cif
 models/
 # Editor/process temp backups
 *.tmp.*

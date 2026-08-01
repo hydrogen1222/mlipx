@@ -41,13 +41,13 @@ pip install -e src/packages/fairchem-core[dev]
 In V2, we removed all dependencies on 3rd party libraries such as torch-geometric, pyg, torch-scatter, torch-sparse etc that made installation difficult. So no additional steps are required!
 :::
 
-### GPU support (UMAKit / `uma_calc`)
+### GPU support (mlipx / `mlipx setup`)
 
-The right PyTorch build depends on your GPU's compute capability. The UMAKit CLI can detect your GPU and print the exact install command — it uses `nvidia-smi`, so it works **before** PyTorch is installed:
+The right PyTorch build depends on your GPU's compute capability. The mlipx CLI can detect your GPU and print the exact install command — it uses `nvidia-smi`, so it works **before** PyTorch is installed:
 
 ```bash
-uv run uma_calc setup      # detect GPU + print the exact torch install command
-uv run uma_calc doctor     # verify after install
+uv run mlipx setup      # detect GPU + print the exact torch install command
+uv run mlipx doctor     # verify after install
 ```
 
 Supported floor: **Maxwell (GTX 900 series, e.g. GTX 960)**. Kepler (GTX 700/600) is not supported (no prebuilt PyTorch wheel).

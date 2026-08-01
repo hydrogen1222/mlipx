@@ -14,7 +14,7 @@ dependencies = [
 [tool.uv.workspace]
 members = [
     "packages/*",
-    "uma",
+    "mlipx",
 ]
 
 # PyTorch 2.7+ removed sm_50/sm_60 from its pre-built CUDA wheels, so Pascal GPUs
