@@ -29,7 +29,9 @@ def test_schema_has_expected_specs(schema: Schema) -> None:
     for key in ("model_type", "model_path", "task", "device", "inference_mode"):
         assert key in names, f"missing core key {key!r}"
     # Run options
-    for key in ("fmax", "max_steps", "optimizer", "temperature", "steps"):
+    for key in (
+        "fmax", "max_steps", "optimizer", "temperature", "steps", "charge", "spin"
+    ):
         assert key in names, f"missing run key {key!r}"
     # Calculator keys
     for key in ("default_dtype", "head"):

@@ -29,6 +29,8 @@ def test_sp_parser_accepts_known_flags() -> None:
         "--model-type", "mace",
         "--task", "bulk",
         "--device", "cuda:0",
+        "--charge", "-1",
+        "--spin", "2",
         "--inference-mode", "turbo",
         "--cpu-threads", "6",
         "--no-activation-checkpointing",
@@ -44,6 +46,8 @@ def test_sp_parser_accepts_known_flags() -> None:
     assert args.model_type == "mace"
     assert args.task == "bulk"
     assert args.device == "cuda:0"
+    assert args.charge == -1
+    assert args.spin == 2
     assert args.inference_mode == "turbo"
     assert args.torch_num_threads == 6
     assert args.activation_checkpointing is False

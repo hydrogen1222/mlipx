@@ -51,6 +51,8 @@ _VALID_ENGINES = {"uma", "fairchem", "mace", "dpa", "grace"}
 
 #: option key -> CLI flag mapping for the shared command builder.
 _OPT_FLAGS: dict[str, tuple[str, ...]] = {
+    "charge": ("--charge",),
+    "spin": ("--spin",),
     "inference_mode": ("--inference-mode",),
     "activation_checkpointing": ("--activation-checkpointing", "--no-activation-checkpointing"),
     "torch_num_threads": ("--cpu-threads",),

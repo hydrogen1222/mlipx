@@ -135,6 +135,9 @@ async def test_backend_resource_controls_follow_selected_engine() -> None:
         assert config_screen.query_one("#activation-checkpointing-select").disabled is False
         assert config_screen.query_one("#dtype-select").disabled is True
         assert config_screen.query_one("#head-input").disabled is True
+        assert config_screen.query_one("#inference-mode-select").display is True
+        assert config_screen.query_one("#head-input").display is False
+        assert config_screen.query_one("#dtype-select").display is False
 
         config_screen.query_one("#model-type-select").value = "dpa"
         await pilot.pause()
@@ -143,11 +146,48 @@ async def test_backend_resource_controls_follow_selected_engine() -> None:
         assert config_screen.query_one("#dtype-select").disabled is True
         assert config_screen.query_one("#head-input").disabled is False
         assert config_screen.query_one("#torch-threads-input").disabled is False
+        assert config_screen.query_one("#inference-mode-select").display is False
+        assert config_screen.query_one("#head-input").display is True
+        assert config_screen.query_one("#dtype-select").display is False
 
         config_screen.query_one("#model-type-select").value = "grace"
         await pilot.pause()
         assert config_screen.query_one("#head-input").disabled is True
+        assert config_screen.query_one("#head-input").display is False
         assert config_screen.query_one("#torch-threads-input").disabled is False
+
+
+@pytest.mark.asyncio
+async def test_molecular_charge_and_spin_controls_are_task_aware(tmp_path: Path) -> None:
+    structure = tmp_path / "molecule.xyz"
+    model = tmp_path / "uma.pt"
+    structure.write_text("")
+    model.write_text("")
+    app = MlipxApp()
+
+    async with app.run_test(size=(100, 100)) as pilot:
+        config_screen = ConfigScreen()
+        await app.push_screen(config_screen)
+        await pilot.pause()
+
+        assert config_screen.query_one("#charge-input").display is False
+        assert config_screen.query_one("#spin-input").display is False
+
+        config_screen.query_one("#task-select").value = "omol"
+        await pilot.pause()
+        assert config_screen.query_one("#charge-input").display is True
+        assert config_screen.query_one("#spin-input").display is True
+        assert "Multiplicity" in str(config_screen.query_one("#spin-label").render())
+
+        config_screen.query_one("#structure-input").value = str(structure)
+        config_screen.query_one("#model-input").value = str(model)
+        config_screen.query_one("#charge-input").value = "-1"
+        config_screen.query_one("#spin-input").value = "2"
+        app.push_screen = Mock()
+        config_screen._save_and_run()
+
+    assert app.get_config("charge") == -1
+    assert app.get_config("spin") == 2
 
 
 @pytest.mark.asyncio
@@ -203,6 +243,32 @@ async def test_run_command_contains_tui_resource_and_md_options() -> None:
         "--no-pre-relax",
     ):
         assert expected in command
+
+
+@pytest.mark.asyncio
+async def test_run_command_contains_tui_charge_and_spin() -> None:
+    app = MlipxApp()
+    app.config.update(
+        {
+            "calc_type": "sp",
+            "structure_file": "/tmp/molecule.xyz",
+            "model_file": "/tmp/uma.pt",
+            "model_type": "uma",
+            "task": "omol",
+            "device": "cpu",
+            "output_dir": "/tmp/out",
+            "charge": -1,
+            "spin": 2,
+        }
+    )
+
+    async with app.run_test(size=(80, 40)):
+        screen = RunScreen()
+        screen._job_id = "test-molecule"
+        command = screen._build_command()
+
+    assert command[command.index("--charge") + 1] == "-1"
+    assert command[command.index("--spin") + 1] == "2"
 
 
 @pytest.mark.asyncio

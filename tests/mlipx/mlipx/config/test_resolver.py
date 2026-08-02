@@ -51,6 +51,17 @@ def test_source_tracking_cli_override() -> None:
     assert rc.sources["device"] == ResolvedValue("cuda:0", "CLI")
 
 
+def test_molecular_charge_and_spin_are_run_options() -> None:
+    rc = resolve_config(
+        calc_type="md",
+        cli={"task": "omol", "charge": -1, "spin": 2},
+    )
+    assert rc.run_options["charge"] == -1
+    assert rc.run_options["spin"] == 2
+    assert rc.sources["charge"] == ResolvedValue(-1, "CLI")
+    assert rc.sources["spin"] == ResolvedValue(2, "CLI")
+
+
 def test_source_tracking_settings_override() -> None:
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "settings.ini"

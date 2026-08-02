@@ -91,7 +91,7 @@ class ConfigScreen(Screen):
 
                 yield Label("Model File:")
                 yield Input(
-                    placeholder="e.g., uma-s-1.pt (relative paths supported)",
+                    placeholder="e.g., uma-s-1p2p1.pt (relative paths supported)",
                     value=str(self.app.get_config("model_file", "") or ""),
                     id="model-input",
                 )
@@ -132,6 +132,23 @@ class ConfigScreen(Screen):
                     id="task-select",
                 )
 
+                charge = self.app.get_config("charge")
+                yield Static("", id="electronic-state-note")
+                yield Label("Total Charge:", id="charge-label")
+                yield Input(
+                    value="" if charge is None else str(charge),
+                    placeholder="e.g., 0, -1, or 1",
+                    id="charge-input",
+                )
+
+                spin = self.app.get_config("spin")
+                yield Label("Spin:", id="spin-label")
+                yield Input(
+                    value="" if spin is None else str(spin),
+                    placeholder="e.g., 1",
+                    id="spin-input",
+                )
+
                 yield Label("Device:")
                 yield Input(
                     value=str(self.app.get_config("device", "cpu")),
@@ -141,25 +158,28 @@ class ConfigScreen(Screen):
 
                 yield Static("🧠 Backend & Resource Options", classes="section-title")
                 yield Static(
-                    "UMA-only controls are disabled for other engines. CPU Threads "
-                    "controls PyTorch (UMA/MACE/DPA) or TensorFlow (GRACE).",
+                    "",
+                    id="engine-options-note",
                 )
 
-                yield Label("MACE Precision:")
+                yield Label("MACE Precision:", id="dtype-label")
                 yield Select(
                     options=[("float32 (faster)", "float32"), ("float64", "float64")],
                     value=self.app.get_config("default_dtype", "float32"),
                     id="dtype-select",
                 )
 
-                yield Label("MACE/DPA Model Head or Branch (optional):")
+                yield Label(
+                    "MACE/DPA Model Head or Branch (optional):",
+                    id="head-label",
+                )
                 yield Input(
                     value=str(self.app.get_config("head", "") or ""),
                     placeholder="e.g., default or Domains_SSE_PBE",
                     id="head-input",
                 )
 
-                yield Label("UMA Inference Mode:")
+                yield Label("UMA Inference Mode:", id="inference-mode-label")
                 yield Select(
                     options=[("default", "default"), ("turbo", "turbo")],
                     value=self.app.get_config("inference_mode", "default"),
@@ -180,7 +200,10 @@ class ConfigScreen(Screen):
                     if checkpointing is None
                     else ("on" if checkpointing else "off")
                 )
-                yield Label("UMA Activation Checkpointing:")
+                yield Label(
+                    "UMA Activation Checkpointing:",
+                    id="activation-checkpointing-label",
+                )
                 yield Select(
                     options=[
                         ("Auto (from inference mode)", "auto"),
@@ -244,6 +267,16 @@ class ConfigScreen(Screen):
             if current in valid
             else ("omat" if self._current_model_type() == "uma" else "bulk")
         )
+
+    def _current_task(self) -> str:
+        """Task from the select widget (or app config fallback)."""
+        try:
+            sel = self.query_one("#task-select", Select)
+            if sel.value:
+                return str(sel.value)
+        except Exception:
+            pass
+        return str(self.app.get_config("task", self._default_task_value()))
 
     def _calc_options(self, calc_type: str):
         """Generate calculation-specific options."""
@@ -404,13 +437,15 @@ class ConfigScreen(Screen):
             return False
 
     def on_select_changed(self, event: Select.Changed) -> None:
-        """Refresh task options when the model engine changes."""
+        """Refresh engine- and task-dependent controls."""
         if event.select.id == "model-type-select":
             self.app.update_config("model_type", event.value)
             task_select = self.query_one("#task-select", Select)
             task_select.set_options(self._task_options())
             task_select.value = self._default_task_value()
             self._update_engine_option_states()
+        elif event.select.id == "task-select":
+            self._update_molecular_option_states()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Handle live path validation on input change."""
@@ -427,20 +462,89 @@ class ConfigScreen(Screen):
         self._update_engine_option_states()
 
     def _update_engine_option_states(self) -> None:
-        """Enable only controls consumed by the selected backend."""
+        """Show only controls consumed by the selected backend."""
         model_type = self._current_model_type()
-        self.query_one("#dtype-select", Select).disabled = model_type != "mace"
-        self.query_one("#head-input", Input).disabled = model_type not in {
-            "mace",
-            "dpa",
-        }
-        self.query_one("#inference-mode-select", Select).disabled = (
-            model_type != "uma"
-        )
-        self.query_one("#activation-checkpointing-select", Select).disabled = (
-            model_type != "uma"
-        )
+        is_uma = model_type == "uma"
+        is_mace = model_type == "mace"
+        has_head = model_type in {"mace", "dpa"}
+
+        for selector in ("#dtype-label", "#dtype-select"):
+            self.query_one(selector).display = is_mace
+        for selector in ("#head-label", "#head-input"):
+            self.query_one(selector).display = has_head
+        for selector in ("#inference-mode-label", "#inference-mode-select"):
+            self.query_one(selector).display = is_uma
+        for selector in (
+            "#activation-checkpointing-label",
+            "#activation-checkpointing-select",
+        ):
+            self.query_one(selector).display = is_uma
+
+        self.query_one("#dtype-select", Select).disabled = not is_mace
+        self.query_one("#head-input", Input).disabled = not has_head
+        self.query_one("#inference-mode-select", Select).disabled = not is_uma
+        self.query_one(
+            "#activation-checkpointing-select", Select
+        ).disabled = not is_uma
         self.query_one("#torch-threads-input", Input).disabled = False
+
+        head_label = self.query_one("#head-label", Label)
+        if model_type == "mace":
+            head_label.update("MACE Model Head (optional):")
+        elif model_type == "dpa":
+            head_label.update("DPA Model Branch (optional):")
+
+        note = self.query_one("#engine-options-note", Static)
+        if is_uma:
+            note.update(
+                "UMA inference mode and activation checkpointing are shown below. "
+                "CPU Threads controls PyTorch intra-op threads."
+            )
+        elif model_type in {"mace", "dpa"}:
+            note.update(
+                f"Only {model_type.upper()} options are shown below. CPU Threads "
+                "controls PyTorch intra-op threads."
+            )
+        else:
+            note.update(
+                "GRACE has no extra model option here. CPU Threads controls "
+                "TensorFlow intra-op threads."
+            )
+        self._update_molecular_option_states()
+
+    def _update_molecular_option_states(self) -> None:
+        """Show charge/spin controls only for a molecular task."""
+        model_type = self._current_model_type()
+        task = self._current_task()
+        is_molecular = task in {"omol", "molecule"}
+        for selector in (
+            "#electronic-state-note",
+            "#charge-label",
+            "#charge-input",
+            "#spin-label",
+            "#spin-input",
+        ):
+            self.query_one(selector).display = is_molecular
+
+        if not is_molecular:
+            return
+
+        note = self.query_one("#electronic-state-note", Static)
+        spin_label = self.query_one("#spin-label", Label)
+        spin_input = self.query_one("#spin-input", Input)
+        if model_type == "uma":
+            note.update(
+                "UMA omol electronic state (blank = charge 0, spin multiplicity 1)."
+            )
+            spin_label.update("Spin Multiplicity (2S+1):")
+            spin_input.placeholder = "1 = singlet, 2 = doublet, 3 = triplet"
+        else:
+            note.update(
+                "Optional molecular metadata; whether it affects predictions depends "
+                "on the selected model."
+            )
+            spin_label.update("Spin Metadata (model-specific):")
+            spin_input.placeholder = "blank = do not inject spin metadata"
 
     def _save_and_run(self) -> None:
         """Save configuration and run calculation."""
@@ -493,6 +597,36 @@ class ConfigScreen(Screen):
         task_select = self.query_one("#task-select", Select)
         if task_select.value:
             self.app.update_config("task", task_select.value)
+        task = str(self.app.get_config("task", "omat"))
+
+        if task in {"omol", "molecule"}:
+            charge_text = self.query_one("#charge-input", Input).value.strip()
+            spin_text = self.query_one("#spin-input", Input).value.strip()
+            try:
+                charge = int(charge_text) if charge_text else None
+            except ValueError:
+                self.notify("Total charge must be an integer", severity="error")
+                return
+            try:
+                spin = int(spin_text) if spin_text else None
+            except ValueError:
+                self.notify("Spin must be an integer", severity="error")
+                return
+            if charge is not None and not -100 <= charge <= 100:
+                self.notify(
+                    "Total charge must be between -100 and 100", severity="error"
+                )
+                return
+            if spin is not None and not 0 <= spin <= 100:
+                self.notify("Spin must be between 0 and 100", severity="error")
+                return
+            self.app.update_config("charge", charge)
+            self.app.update_config("spin", spin)
+        else:
+            # Do not leak electronic-state values from a previous molecular
+            # setup after the user switches back to a periodic task.
+            self.app.update_config("charge", None)
+            self.app.update_config("spin", None)
 
         device = self.query_one("#device-input", Input).value.strip().lower()
         if not re.fullmatch(r"(?:cpu|gpu|cuda(?::\d+)?)", device):

@@ -56,6 +56,8 @@ class SinglePointRunner(BaseRunner):
         log_fn: Any | None = None,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        charge: int | None = None,
+        spin: int | None = None,
     ):
         """Initialize single point runner.
 
@@ -80,6 +82,8 @@ class SinglePointRunner(BaseRunner):
             log_fn,
             progress_callback,
             cancel_event=cancel_event,
+            charge=charge,
+            spin=spin,
         )
         self.write_outcar = write_outcar
         self.write_forces = write_forces

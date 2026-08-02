@@ -222,7 +222,13 @@ place them under `models/` or another known path yourself.
 
 ### 2.3 UMA environment details
 
-> **Note:** `fairchem-core` is not published on PyPI. It is a workspace member in this repository under `packages/fairchem-core/` and will be installed automatically by `uv sync`.
+> **Note:** `fairchem-core` is published on
+> [PyPI](https://pypi.org/project/fairchem-core/). This repository also vendors
+> the upstream source at `packages/fairchem-core/`; the root uv workspace
+> explicitly selects that local member. Consequently, `uv sync` run **inside
+> this repository** installs the local editable workspace version rather than
+> fetching it from PyPI. Normal non-workspace installations can resolve it from
+> PyPI.
 
 ```bash
 # Clone the repository
@@ -303,13 +309,28 @@ mlipx tui
 
 ### 2.6 Model Checkpoint
 
-**UMA (default engine):** Download the checkpoint from FAIRChem:
+**UMA (default engine):** Checkpoints are hosted in the gated
+[Hugging Face `facebook/UMA`](https://huggingface.co/facebook/UMA) repository.
+They are not on GitHub and are not bundled with `fairchem-core` or mlipx:
 
 ```bash
-# UMA Small (recommended starting point, ~1.2 GB)
-# Download from: https://fair-chem.github.io/models/uma/
-# Place the .pt file in your working directory or a known path
+# 1. Request access in the browser and create a token that can read gated repos
+hf auth login
+
+# 2. After approval, download the current recommended small checkpoint
+hf download facebook/UMA checkpoints/uma-s-1p2p1.pt --local-dir models/uma
 ```
+
+Access is manually approved by Hugging Face/Meta. The form requires a full
+legal name, date of birth, country and affiliation, plus acceptance of the
+license. The official model page currently says UMA is unavailable in China,
+Russia, Belarus and comprehensively sanctioned jurisdictions. Check the model
+page before applying because these conditions may change.
+
+> The official repository archives `uma-s-1.pt` and notes a known extensivity
+> bug. Do not use it as the recommended starting point for new runs. mlipx takes
+> any local checkpoint path, for example
+> `--model models/uma/checkpoints/uma-s-1p2p1.pt`.
 
 **Other engines (optional):** MACE / DPA / GRACE models are released by each
 project. To prevent e3nn, PyTorch ABI, and CUDA/cuDNN binaries from overwriting
@@ -543,7 +564,10 @@ result = run_single_point(
 
 ### Backend Installation & Environment Isolation
 
-`fairchem-core` ships with mlipx, so UMA works out of the box. Other engines need their backend package installed separately:
+The repository's `uv sync` installs `fairchem-core` from the local workspace,
+so the UMA runtime is importable; model weights still require the separate
+Hugging Face access and download in Section 2.6. Other engines need their
+backend package installed separately:
 
 | Engine | Install command | Model format |
 |--------|-----------------|--------------|
@@ -678,7 +702,7 @@ UMA has a well-defined task system (each maps to a training dataset); other engi
 > **Charge/spin defaults (task-dependent):**
 > - UMA `omol`: when `atoms.info` is unset, auto-fills `charge=0` and `spin=1` (spin **multiplicity**, 1 = singlet).
 > - Non-UMA `molecule` (MACE/DPA/GRACE): auto-fills only `charge=0`; **no** `spin` is injected. MACE reads `atoms.info["spin"]` as **total spin S** (0 = singlet), a different semantic from UMA's multiplicity -- blindly injecting `spin=1` would force spin-sensitive MACE models into a doublet radical. Set spin explicitly if needed.
-> - Either can be overridden by setting `charge`/`spin` explicitly in the input structure's `atoms.info`.
+> - For molecular tasks, set these in the TUI, with CLI `--charge` / `--spin`, or with INCAR `CHARGE` / `SPIN`. These explicit values override existing input `atoms.info`; editing the metadata in Python remains supported.
 > - Molecular systems (`pbc=False`) do not compute a stress tensor.
 
 ### Complete Examples per Engine
@@ -946,6 +970,7 @@ The CLI is invoked via `mlipx <command> [options]`. Running `mlipx` without argu
 
 ```
 mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
+                       [--charge INTEGER] [--spin INTEGER]
                        [--cpu-threads N] [--inference-mode MODE]
                        [--activation-checkpointing | --no-activation-checkpointing]
                        [--dtype DTYPE] [--head HEAD] [--output DIR] [--name NAME]
@@ -955,6 +980,8 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --model-type TYPE     MLIP engine: uma|mace|dpa|grace [default: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc; others: bulk|molecule [default: omat]
   --device DEVICE       cpu|gpu|cuda|cuda:N [default: cpu]
+  --charge INTEGER      Total molecular charge (UMA omol default: 0)
+  --spin INTEGER        Molecular spin metadata; spin multiplicity for UMA omol (default: 1)
   --cpu-threads N       CPU intra-op threads (all engines; backend default if omitted)
   --inference-mode MODE UMA inference preset: default|turbo
   --[no-]activation-checkpointing
@@ -1092,9 +1119,12 @@ CLI-only.
 - CPU threads for every engine (PyTorch for UMA/MACE/DPA, TensorFlow for GRACE)
 - UMA inference mode and activation checkpointing
 - MACE precision and MACE/DPA model head or branch
+- Total charge and spin for `omol` / `molecule`; UMA labels spin as multiplicity
 
-Controls that do not apply to the selected engine are disabled instead of being
-silently accepted. OPT also exposes cell optimization and symmetry
+Only controls used by the selected backend are shown; for example, selecting
+UMA no longer leaves a disabled DPA branch field on screen. Charge/spin appear
+only for molecular tasks and are cleared when switching back to a periodic
+task. OPT also exposes cell optimization and symmetry
 preservation. MD exposes the ensemble, temperature, timestep, step/save counts,
 NVT friction, pre-relaxation controls, random seed, velocity policy, and
 large-force warning threshold. Paths support live validation with visual
@@ -1203,10 +1233,12 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `MODEL_PATH` | string | `uma-s-1.pt` | Path to model checkpoint (.pt file) |
+| `MODEL_PATH` | string | `uma-s-1p2p1.pt` (template placeholder) | Path to model checkpoint (.pt file) |
 | `MODEL_TYPE` | string | `uma` | MLIP engine: `uma`, `mace`, `dpa`, `grace` (`fairchem` = `uma`) |
 | `TASK` | string | `omat` | Task type. UMA: `omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`; others: `bulk`/`molecule` |
 | `DEVICE` | string | `cpu` | Compute device: `cpu`, `cuda`, `gpu`, or `cuda:N` |
+| `CHARGE` | int | unset (UMA omol uses `0`) | Total molecular charge; overrides `atoms.info["charge"]` |
+| `SPIN` | int | unset (UMA omol uses `1`) | Molecular spin metadata; spin multiplicity for UMA omol |
 | `INFERENCE_MODE` | string | `default` | Inference mode: `default`, `turbo` |
 | `DEFAULT_DTYPE` | string | `float32` | MACE dtype for every calculation type. MACE only. |
 | `HEAD` | string | - | MACE head or DeepMD/DPA multi-task branch. |
@@ -1486,7 +1518,17 @@ UMA models are trained on different datasets; each task corresponds to a specifi
 | `odac` | MOFs | Metal-organic frameworks | Optional | ✓ | Gas storage, separation |
 | `omc` | Molecular Crystals | Organic crystals | Optional | ✓ | Pharmaceuticals, organic electronics |
 
-**Important for molecular systems (omol):** UMA's `omol` task needs the total charge and spin multiplicity. If `atoms.info` does not set them, mlipx auto-fills `charge=0` and `spin=1` (singlet); to change this (e.g. ions, radicals, triplets) set them explicitly:
+**Important for molecular systems (omol):** UMA's `omol` task needs total charge
+and spin multiplicity. When unset, mlipx fills `charge=0` and `spin=1`
+(singlet). The TUI shows both fields after selecting `omol`; CLI/INCAR can set
+them directly:
+
+```bash
+mlipx sp molecule.xyz --model uma.pt --task omol --charge -1 --spin 2
+# INCAR.mlipx: CHARGE = -1, SPIN = 2
+```
+
+The input structure metadata can still be edited in Python:
 
 ```python
 from ase.io import read, write

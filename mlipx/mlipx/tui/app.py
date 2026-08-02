@@ -176,6 +176,10 @@ class MlipxApp(App):
             "model_type": "uma",
             "task": "omat",
             "device": "cpu",
+            # Molecular electronic state. None preserves structure metadata;
+            # UMA omol then falls back to charge=0 / spin multiplicity=1.
+            "charge": None,
+            "spin": None,
             # Backend/resource options
             "inference_mode": "default",
             "torch_num_threads": None,

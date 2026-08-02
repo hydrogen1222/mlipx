@@ -218,7 +218,11 @@ TUI 也遵循同一规则。例如 MACE 必须运行
 
 ### 2.3 UMA 环境说明
 
-> **注意：** `fairchem-core` 未发布到 PyPI，它作为本仓库的 workspace 成员位于 `packages/fairchem-core/`，`uv sync` 会自动安装。
+> **注意：** `fairchem-core` 已发布到
+> [PyPI](https://pypi.org/project/fairchem-core/)。本仓库同时保留了上游源码
+> `packages/fairchem-core/`，根目录的 uv workspace 显式选择该本地成员，因此在
+> **本仓库内**执行 `uv sync` 时安装的是本地 editable workspace 版本，而不是重新
+> 从 PyPI 下载。普通的非 workspace 安装仍可从 PyPI 解析该包。
 
 ```bash
 # 克隆仓库
@@ -298,13 +302,26 @@ mlipx tui
 
 ### 2.6 模型检查点
 
-**UMA（默认引擎）：** 从 FAIRChem 下载检查点：
+**UMA（默认引擎）：** 检查点托管在 gated 的
+[Hugging Face `facebook/UMA`](https://huggingface.co/facebook/UMA) 仓库，
+不在 GitHub，也不随 `fairchem-core` 或 mlipx 安装：
 
 ```bash
-# UMA Small（推荐入门，约 1.2 GB）
-# 下载地址：https://fair-chem.github.io/models/uma/
-# 将 .pt 文件放在工作目录或已知路径下
+# 1. 先在网页申请访问权限，并创建可读取 gated 仓库的 Hugging Face token
+hf auth login
+
+# 2. 审批通过后下载当前推荐的小模型（保留仓库内 checkpoints/ 子目录）
+hf download facebook/UMA checkpoints/uma-s-1p2p1.pt --local-dir models/uma
 ```
+
+访问申请由 Hugging Face/Meta 人工审批，需要提供完整法定姓名、出生日期、国家和
+单位等信息并接受许可。官方模型页目前明确说明 UMA 不在中国、俄罗斯、白俄罗斯及
+受全面制裁的司法辖区提供，因此中国大陆地区用户也不在可申请使用范围内。该条件
+可能变化，申请前请以模型页的最新说明为准。
+
+> `uma-s-1.pt` 已被官方列为归档检查点并注明存在 extensivity bug；新任务不要再把
+> 它作为推荐起点。mlipx 接受任意本地检查点路径，例如
+> `--model models/uma/checkpoints/uma-s-1p2p1.pt`。
 
 **其他引擎（可选）：** MACE / DPA / GRACE 的模型由各项目单独发布。
 为避免 e3nn、PyTorch ABI 和 CUDA/cuDNN 的二进制依赖互相覆盖，推荐四个后端
@@ -536,7 +553,9 @@ result = run_single_point(
 
 ### 各引擎后端安装与环境隔离
 
-`fairchem-core` 已随 mlipx 安装，UMA 可直接使用。其他引擎需单独安装后端包：
+仓库的 `uv sync` 会从本地 workspace 安装 `fairchem-core`，所以 UMA 运行时代码
+可直接导入；模型权重仍须按 §2.6 从 Hugging Face 单独申请和下载。其他引擎需单独
+安装后端包：
 
 | 引擎 | 安装命令 | 模型格式 |
 |------|----------|----------|
@@ -663,7 +682,7 @@ UMA 有明确的任务体系（对应不同训练数据集）；其他引擎不�
 > **电荷/自旋默认值（任务相关）：**
 > - UMA `omol`：`atoms.info` 未设置时自动填 `charge=0`、`spin=1`（自旋**多重度**，1 = 单重态）。
 > - 非 UMA `molecule`（MACE/DPA/GRACE）：仅自动填 `charge=0`；**不**注入 `spin`。MACE 将 `atoms.info["spin"]` 读作**总自旋 S**（0 = 单重态），与 UMA 的多重度语义不同，贸然注入 `spin=1` 会把自旋敏感的 MACE 模型强制为双自由基。如需自旋，请显式设置。
-> - 二者均可通过在输入结构的 `atoms.info` 中显式设置 `charge`/`spin` 覆盖默认值。
+> - 分子任务可在 TUI 直接填写，也可用 CLI 的 `--charge` / `--spin` 或 INCAR 的 `CHARGE` / `SPIN` 设置；它们会覆盖输入结构已有的 `atoms.info`。仍可用 Python 直接编辑结构元数据。
 > - 分子体系（`pbc=False`）不计算应力张量。
 
 ### 各引擎完整示例
@@ -924,6 +943,7 @@ CLI 通过 `mlipx <command> [选项]` 调用。不带参数运行 `mlipx` 默认
 
 ```
 mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEVICE]
+                       [--charge INTEGER] [--spin INTEGER]
                        [--cpu-threads N] [--inference-mode MODE]
                        [--activation-checkpointing | --no-activation-checkpointing]
                        [--dtype DTYPE] [--head HEAD] [--output DIR] [--name NAME]
@@ -933,6 +953,8 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --model-type TYPE     MLIP 引擎：uma|mace|dpa|grace [默认: uma]
   --task TASK           UMA: omat|omol|oc20|oc25|odac|omc；其他: bulk|molecule [默认: omat]
   --device DEVICE       cpu|gpu|cuda|cuda:N [默认: cpu]
+  --charge INTEGER      分子总电荷（UMA omol 默认: 0）
+  --spin INTEGER        分子自旋元数据；UMA omol 中为自旋多重度（默认: 1）
   --cpu-threads N       CPU intra-op 线程数（全部后端；省略则由后端决定）
   --inference-mode MODE UMA 推理预设：default|turbo
   --[no-]activation-checkpointing
@@ -1070,8 +1092,10 @@ Batch 当前仅能通过 CLI 运行。
 - 全部引擎的 CPU 线程数（UMA/MACE/DPA 为 PyTorch，GRACE 为 TensorFlow）
 - UMA 的推理模式和激活检查点
 - MACE 精度，以及 MACE/DPA 的模型 head 或分支
+- 在 `omol` / `molecule` 任务下设置总电荷和自旋；UMA 会明确显示自旋多重度语义
 
-选择某个引擎后，不适用的控件会被禁用，不会假装接受后再静默忽略。
+选择某个引擎后，只显示该引擎实际使用的后端控件；例如选择 UMA 时不会再显示
+DPA branch。电荷/自旋仅在分子任务下出现，周期任务不会携带上一次的分子设置。
 OPT 还可设置晶胞优化和保持晶体对称性；MD 可设置系综、温度、时间步、
 步数/保存间隔、NVT 摩擦系数、预弛豫、随机种子、速度策略和大力告警阈值。
 路径支持实时验证和视觉反馈：
@@ -1178,10 +1202,12 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 
 | 键 | 类型 | 默认值 | 描述 |
 |-----|------|--------|------|
-| `MODEL_PATH` | 字符串 | `uma-s-1.pt` | 模型检查点路径（.pt 文件） |
+| `MODEL_PATH` | 字符串 | `uma-s-1p2p1.pt`（模板占位） | 模型检查点路径（.pt 文件） |
 | `MODEL_TYPE` | 字符串 | `uma` | MLIP 引擎：`uma`、`mace`、`dpa`、`grace`（`uma` 也可写 `fairchem`） |
 | `TASK` | 字符串 | `omat` | 任务类型。UMA：`omat`/`omol`/`oc20`/`oc25`/`odac`/`omc`；其他引擎：`bulk`/`molecule` |
 | `DEVICE` | 字符串 | `cpu` | 计算设备：`cpu`、`cuda`、`gpu` 或 `cuda:N` |
+| `CHARGE` | 整数 | 未设置（UMA omol 使用 `0`） | 分子总电荷；覆盖结构的 `atoms.info["charge"]` |
+| `SPIN` | 整数 | 未设置（UMA omol 使用 `1`） | 分子自旋元数据；UMA omol 中为自旋多重度 |
 | `INFERENCE_MODE` | 字符串 | `default` | 推理模式：`default`、`turbo` |
 | `DEFAULT_DTYPE` | 字符串 | `float32` | 所有计算类型的 MACE 精度默认值。仅 MACE。 |
 | `HEAD` | 字符串 | - | MACE head 或 DeepMD/DPA 多任务分支。 |
@@ -1367,7 +1393,16 @@ UMA 模型在不同数据集上训练；每个任务对应特定领域：
 | `odac` | MOFs | 金属有机框架 | 可选 | ✓ | 气体存储、分离 |
 | `omc` | 分子晶体 | 有机晶体 | 可选 | ✓ | 药物、有机电子学 |
 
-**分子体系（omol）重要提示：** UMA 的 `omol` 任务需要总电荷与自旋多重度。若 `atoms.info` 未设置，mlipx 自动填 `charge=0`、`spin=1`（单重态）；如需改变（如离子、自由基、三重态），请显式设置：
+**分子体系（omol）重要提示：** UMA 的 `omol` 任务需要总电荷与自旋多重度。若未
+设置，mlipx 自动填 `charge=0`、`spin=1`（单重态）。TUI 会在选择 `omol` 后显示
+这两个字段；CLI/INCAR 可直接设置：
+
+```bash
+mlipx sp molecule.xyz --model uma.pt --task omol --charge -1 --spin 2
+# INCAR.mlipx: CHARGE = -1, SPIN = 2
+```
+
+也可在 Python 中写入结构元数据：
 
 ```python
 from ase.io import read, write

@@ -151,9 +151,11 @@ def build_incar_default(calc_type: str) -> str:
     lines.append("")
     lines.append("# Model Settings")
     lines.append("MODEL_TYPE = UMA")
-    lines.append("MODEL_PATH = uma-s-1.pt")
+    lines.append("MODEL_PATH = uma-s-1p2p1.pt")
     device = DEFAULT_DEVICE_BY_CALC_TYPE.get(calc_type, "cpu")
     lines.append(f"DEVICE = {device}")
+    lines.append("# Molecular tasks only: CHARGE = 0")
+    lines.append("# UMA omol spin multiplicity: SPIN = 1")
     if calc_type == "md":
         lines.append("INFERENCE_MODE = turbo")
     else:

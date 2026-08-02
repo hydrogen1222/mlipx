@@ -51,6 +51,13 @@ start of the [English installation guide](mlipx/docs/README_EN.md#21-start-here-
 and [中文安装教程](mlipx/docs/README_CN.md#21-小白先看四个引擎要用四个环境).
 Do not install MACE, DPA, or GRACE into the UMA `.venv`.
 
+UMA weights are not bundled with either mlipx or `fairchem-core`. They are
+hosted in the manually gated
+[`facebook/UMA` Hugging Face repository](https://huggingface.co/facebook/UMA),
+which currently excludes China, Russia, Belarus, and comprehensively sanctioned
+jurisdictions. Request access and authenticate with a gated-repository token
+before downloading a checkpoint; see the language manuals for exact steps.
+
 ### Run a calculation
 
 ```bash

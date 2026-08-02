@@ -172,6 +172,23 @@ _SPECS: list[OptionSpec] = [
         aliases={"ACTIVATION_CHECKPOINTING"},
         description="GPU memory saving (UMA, overrides inference_mode preset).",
     ),
+    # --- molecular electronic state (applied to atoms.info by every runner) ---
+    OptionSpec(
+        "charge", int, frozenset({"sp", "opt", "md", "batch"}),
+        aliases={"CHARGE"},
+        minimum=-100,
+        maximum=100,
+        description="Total molecular charge stored in atoms.info.",
+    ),
+    OptionSpec(
+        "spin", int, frozenset({"sp", "opt", "md", "batch"}),
+        aliases={"SPIN", "SPIN_MULTIPLICITY"},
+        minimum=0,
+        maximum=100,
+        description=(
+            "Molecular spin metadata; UMA omol uses spin multiplicity (2S+1)."
+        ),
+    ),
     # --- OPT run options ---
     OptionSpec(
         "optimizer", str, frozenset({"opt"}),

@@ -68,6 +68,15 @@ def test_build_command_md_options() -> None:
     assert "--seed" in cmd and "42" in cmd
 
 
+def test_build_command_forwards_molecular_electronic_state() -> None:
+    cmd = build_mlipx_command(
+        "sp", "molecule.xyz", "uma.pt", model_type="uma", task="omol",
+        options={"charge": -1, "spin": 2},
+    )
+    assert cmd[cmd.index("--charge") + 1] == "-1"
+    assert cmd[cmd.index("--spin") + 1] == "2"
+
+
 def test_build_command_engine_option_isolation() -> None:
     """UMA-only options must not leak into a GRACE task, MACE dtype must not
     leak into UMA, etc."""

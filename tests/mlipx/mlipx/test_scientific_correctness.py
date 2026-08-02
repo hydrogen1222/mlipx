@@ -105,6 +105,21 @@ def test_output_control_flags_affect_written_files(tmp_path):
     assert not (tmp_path / "mlipx_results.json").exists()
 
 
+def test_explicit_charge_and_spin_override_structure_metadata(tmp_path):
+    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.75]])
+    atoms.info.update({"charge": 0, "spin": 1})
+    runner = SinglePointRunner(
+        _Wrapper(), output_dir=tmp_path, charge=-1, spin=2, verbose=False,
+    )
+
+    prepared = runner._prepare_atoms(atoms)
+
+    assert prepared.info["charge"] == -1
+    assert prepared.info["spin"] == 2
+    # Preparation works on a copy and must not rewrite the caller's object.
+    assert atoms.info == {"charge": 0, "spin": 1}
+
+
 def test_xdatcar_preserves_interleaved_symbol_blocks(tmp_path):
     atoms = Atoms(
         ["Li", "S", "Li"],

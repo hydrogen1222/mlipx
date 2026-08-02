@@ -133,6 +133,8 @@ class RunScreen(Screen):
 
         options: dict = {}
         for key in (
+            "charge",
+            "spin",
             "inference_mode",
             "activation_checkpointing",
             "torch_num_threads",

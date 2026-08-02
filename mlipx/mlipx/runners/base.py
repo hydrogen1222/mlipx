@@ -60,6 +60,8 @@ class BaseRunner(ABC):
         log_fn: Any | None = None,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        charge: int | None = None,
+        spin: int | None = None,
     ):
         """Initialize base runner.
 
@@ -70,6 +72,9 @@ class BaseRunner(ABC):
             job_name: Optional job name for organizing results
             log_fn: Optional callback function for custom log output
             progress_callback: Optional callback for progress events
+            charge: Optional total molecular charge override
+            spin: Optional molecular spin metadata override. UMA omol treats
+                this as spin multiplicity (2S+1).
         """
         self.calculator = calculator
         self.job_name = job_name
@@ -81,6 +86,8 @@ class BaseRunner(ABC):
         )
         self._timing: RunTiming | None = None
         self._pending_done_event: ProgressEvent | None = None
+        self.charge = charge
+        self.spin = spin
 
         # Build output directory path
         base_dir = Path(output_dir)
@@ -261,6 +268,14 @@ class BaseRunner(ABC):
         # pre-relaxation and velocity initialisation.
         atoms = atoms.copy()
         task = self.calculator.task
+
+        # Explicit CLI/TUI/INCAR values override metadata embedded in the
+        # structure. If omitted, preserve the structure value and let the
+        # task-specific defaults below fill only missing fields.
+        if self.charge is not None:
+            atoms.info["charge"] = self.charge
+        if self.spin is not None:
+            atoms.info["spin"] = self.spin
 
         # Periodic vs molecular task classification. UMA tasks (omat/oc20/...)
         # and the generic 'bulk' are periodic; 'omol'/'molecule' are not.

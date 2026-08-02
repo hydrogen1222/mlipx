@@ -83,6 +83,23 @@ Examples:
     def _add_resolver_args(p: argparse.ArgumentParser) -> None:
         """Add config-resolver args shared by sp/opt/md/batch."""
         p.add_argument(
+            "--charge",
+            type=int,
+            default=None,
+            metavar="INTEGER",
+            help="Total molecular charge stored in atoms.info (UMA omol default: 0).",
+        )
+        p.add_argument(
+            "--spin",
+            type=int,
+            default=None,
+            metavar="INTEGER",
+            help=(
+                "Molecular spin metadata; UMA omol interprets it as spin "
+                "multiplicity (default: 1)."
+            ),
+        )
+        p.add_argument(
             "--inference-mode",
             type=str,
             default=None,
@@ -833,6 +850,8 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
         "model_type",
         "task",
         "device",
+        "charge",
+        "spin",
         "inference_mode",
         "torch_num_threads",
         "activation_checkpointing",

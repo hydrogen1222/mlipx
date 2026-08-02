@@ -83,6 +83,8 @@ class OptimizationRunner(BaseRunner):
         log_fn: Any | None = None,
         progress_callback: ProgressCallback | None = None,
         cancel_event: threading.Event | None = None,
+        charge: int | None = None,
+        spin: int | None = None,
     ):
         """Initialize optimization runner.
 
@@ -113,6 +115,8 @@ class OptimizationRunner(BaseRunner):
             log_fn,
             progress_callback,
             cancel_event=cancel_event,
+            charge=charge,
+            spin=spin,
         )
         self.fmax = fmax
         self.max_steps = max_steps
