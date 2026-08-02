@@ -599,7 +599,7 @@ class AnalysisRunner:
                 store.write_csv(
                     "kinisi_mscd.csv",
                     {
-                        "lag_time_ps": data["lag_time_ps"],
+                        "lag_time_ps": data["mscd_lag_time_ps"],
                         "mscd": data["mscd"],
                         "mscd_variance": data["mscd_variance"],
                     },

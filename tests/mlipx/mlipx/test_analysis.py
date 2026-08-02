@@ -10,6 +10,7 @@ import numpy as np
 from ase import Atoms
 from ase.calculators.singlepoint import SinglePointCalculator
 from ase.io.trajectory import Trajectory
+
 from mlipx.analysis.core import (
     _msd_components_fft,
     arrhenius_fit,
@@ -180,6 +181,36 @@ def test_runner_writes_versioned_results_and_reuses_cache(tmp_path: Path) -> Non
         assert item["cached"] is False
     cached = runner.run(tasks=["msd"], mobile="Li")
     assert cached["msd"]["cached"] is True
+
+
+def test_runner_uses_conductivity_time_axis_for_kinisi_mscd(
+    tmp_path: Path, monkeypatch
+) -> None:
+    run = _make_run(tmp_path / "run")
+
+    def fake_transport(*args, **kwargs):
+        return {
+            "lag_time_ps": np.arange(4, dtype=float),
+            "msd_A2": np.arange(4, dtype=float),
+            "msd_variance_A4": np.ones(4),
+            "diffusivity_samples_cm2_s": np.ones(8),
+            "mscd_lag_time_ps": np.arange(1, 4, dtype=float),
+            "mscd": np.arange(3, dtype=float),
+            "mscd_variance": np.ones(3),
+            "conductivity_samples_mS_cm": np.ones(8),
+            "summary": {"method": "fake kinisi"},
+        }
+
+    monkeypatch.setattr(
+        "mlipx.analysis.transport.kinisi_transport", fake_transport
+    )
+    result = AnalysisRunner(run, plots=False).run(
+        tasks=["transport"], mobile="Li"
+    )
+    output = Path(result["transport"]["path"])
+    with (output / "kinisi_mscd.csv").open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [float(row["lag_time_ps"]) for row in rows] == [1.0, 2.0, 3.0]
 
 
 def test_analysis_cli_parser_and_command(tmp_path: Path, capsys) -> None:

@@ -161,6 +161,9 @@ def kinisi_transport(
         )
         result.update(
             {
+                "mscd_lag_time_ps": np.asarray(
+                    conductivity.dt.to(unit="ps").values, dtype=float
+                ),
                 "mscd": np.asarray(conductivity.mscd.values, dtype=float),
                 "mscd_variance": (
                     np.asarray(conductivity.mscd.variances, dtype=float)
