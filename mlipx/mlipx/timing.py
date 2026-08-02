@@ -99,8 +99,10 @@ def append_timing_to_outputs(
 ) -> None:
     """Append timing to human output and update machine-readable JSON output."""
     output_dir = Path(output_dir)
-    outcar_path = output_dir / "OUTCAR"
-    if outcar_path.exists():
+    outcar_paths = (output_dir / "OUTCAR", output_dir / "vasp" / "OUTCAR")
+    for outcar_path in outcar_paths:
+        if not outcar_path.exists():
+            continue
         total = timing["total_elapsed_time_s"]
         compute = timing["compute_time_s"]
         block = [
@@ -121,14 +123,18 @@ def append_timing_to_outputs(
             handle.write("\n".join(block))
             handle.write("\n")
 
-    for filename in ("mlipx_results.json", "batch_summary.json"):
-        json_path = output_dir / filename
+    json_paths = (
+        output_dir / "mlipx_results.json",
+        output_dir / "raw" / "mlipx_results.json",
+        output_dir / "batch_summary.json",
+    )
+    for json_path in json_paths:
         if not json_path.exists():
             continue
         with open(json_path, encoding="utf-8") as handle:
             data: dict[str, Any] = json.load(handle)
 
-        if filename == "mlipx_results.json":
+        if json_path.name == "mlipx_results.json":
             calculation = data.setdefault("calculation", {})
             calculation.setdefault("timing", {}).update(timing)
         else:
@@ -136,3 +142,16 @@ def append_timing_to_outputs(
 
         with open(json_path, "w", encoding="utf-8") as handle:
             json.dump(data, handle, indent=2)
+
+    manifest_path = output_dir / "artifacts.json"
+    if manifest_path.exists():
+        with open(manifest_path, encoding="utf-8") as handle:
+            manifest: dict[str, Any] = json.load(handle)
+        manifest["timing"] = timing
+        for artifact in manifest.get("artifacts", {}).values():
+            artifact_path = output_dir / artifact["path"]
+            if artifact_path.exists():
+                artifact["bytes"] = artifact_path.stat().st_size
+        with open(manifest_path, "w", encoding="utf-8") as handle:
+            json.dump(manifest, handle, indent=2)
+            handle.write("\n")

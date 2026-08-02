@@ -1,8 +1,8 @@
 # mlipx - MLIP eXtended
 
-A VASP-compatible CLI / TUI / Python API for machine-learning interatomic
-potentials (UMA, MACE, DPA, GRACE). Built upon code originally developed by
-Meta FAIR as part of the FAIRChem project.
+A CLI / TUI / Python API for machine-learning interatomic potentials and
+VASP-oriented workflows (UMA, MACE, DPA, GRACE). Built upon code originally
+developed by Meta FAIR as part of the FAIRChem project.
 
 ## Quick Start
 
@@ -187,13 +187,17 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 
 - **Multi-engine support:** UMA (FAIRChem), MACE, DPA (DeepMD-kit), GRACE via a unified ASE Calculator interface
 - **Calculation types:** Single-point (SP), Geometry optimization (OPT, FIRE/BFGS/LBFGS), Molecular dynamics (MD, NVT/NVE), Batch processing
-- **VASP-compatible output:** OUTCAR, CONTCAR, XDATCAR, OSZICAR formats
+- **VASP ecosystem output:** syntax-compatible CONTCAR/XDATCAR, documented
+  VASP-like OUTCAR, and OSZICAR formats
 - **Background jobs:** Submit, detach, re-attach, kill long-running calculations
 - **INCAR files:** VASP-style `KEY = VALUE` configuration format
 - **Cross-platform:** Windows, Linux, macOS | CPU & CUDA
 - **Resource control in TUI and CLI:** indexed GPU selection, backend CPU
   threads, and UMA activation checkpointing/inference mode
 - **Live progress:** Structured progress events, indeterminate spinner for SP, step counter for OPT/MD
+- **Layered MD analysis:** normalized trajectories; MSD/RDF/RMSD/density/VACF;
+  optional native kinisi and GEMDAT solid-electrolyte adapters with cached
+  provenance ([中文](docs/ANALYSIS_CN.md) / [English](docs/ANALYSIS_EN.md))
 
 ## Package Structure
 
@@ -212,6 +216,7 @@ mlipx/
 │   ├── runners/                      # SinglePoint, Optimization, MD, Batch
 │   ├── tui/                          # Textual TUI (app, screens)
 │   ├── writers/                      # OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
+│   ├── analysis/                     # trajectory/core/kinisi/GEMDAT post-processing
 │   ├── api.py                        # Python API functions
 │   ├── cli.py                        # CLI (argparse; sp/opt/md/batch/run/queue/...)
 │   ├── doctor.py                     # mlipx doctor diagnostics

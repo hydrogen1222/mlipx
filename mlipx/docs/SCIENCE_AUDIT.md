@@ -37,7 +37,7 @@
 | 6 | 预松弛与几何优化 | ✅ 通过 | `runners/md.py::_pre_relax_structure`、`runners/optimization.py` |
 | 7 | 数值稳定性守卫(NaN/Inf 中止) | ✅ 通过 | `runners/base.py::_check_finite` |
 | 8 | GPU 架构二进制兼容判断 | ✅ 通过 | `gpu_compat.py::arch_supports_device` |
-| 9 | VASP 输出格式约定 | ⚠️ 汇报 | XDATCAR 分数坐标 `wrap=True`(见 §3.9) |
+| 9 | VASP 输出格式约定 | ✅ 已修复 | XDATCAR 使用 VASP 固定列宽和未折回分数坐标(见 §3.9) |
 | 10 | 死代码中的潜在判断缺陷 | ⚠️ 汇报 | `utils.py::check_structure_valid` 用 `np.diag` 代替行列式(见 §3.10) |
 
 ---
@@ -96,13 +96,11 @@
 - `arch_supports_device`:`sm_XY` 内核可在同 major、`minor ≤ 设备minor` 的 GPU 上运行(如 sm_60 内核 → sm_61 设备),这是 CUDA SASS 二进制兼容规则的正确建模。
 - 实测:`('sm_61', ['sm_60','sm_80']) → True`、`('sm_50', ['sm_60']) → False`、`('sm_100', ['sm_90']) → False`,均符合预期。✅
 
-### 3.9 ⚠️ 发现 1:XDATCAR 分数坐标默认 `wrap=True`(格式约定,未修改)
+### 3.9 ✅ XDATCAR 使用未折回分数坐标
 
-- **位置**:`writers/xdatcar.py::append_frame` → `atoms.get_scaled_positions()`(ASE 默认 `wrap=True`)。
-- **现象**:原子跨晶胞边界后,其分数坐标被折叠回 `[0,1)`(实测:跨边界位置 `4.06 Å` 被折叠为 `0.01 Å`)。
+- **旧实现**:`writers/xdatcar.py::append_frame` 调用 ASE 默认的 `wrap=True`,原子跨晶胞边界后会被折叠回 `[0,1)`。
 - **VASP 惯例**:XDATCAR 写 **unwrapped** 分数坐标,长轨迹中原子平滑穿越边界;折叠写法在 ASE/常见可视化工具读取上**完全兼容**,仅在超长轨迹中观察扩散/位移时坐标会"跳回"。
-- **影响评估**:低。属输出格式约定而非数值错误;当前 MD 每帧坐标仍精确代表真实位置(折叠是等价表示)。
-- **未修改原因**:属于"科学计算输出约定"层面,按用户要求仅汇报。
+- **当前实现**:原生 writer 使用 `get_scaled_positions(wrap=False)`,采用 VASP 固定列宽并保留跨周期连续坐标。历史结果应优先从 `trajectory.traj` 重建,因为已经折回的旧 XDATCAR 无法恢复 image 信息。
 
 ### 3.10 ⚠️ 发现 2:`check_structure_valid` 用 `np.diag(cell)` 代替行列式(死代码,未修改)
 
@@ -131,11 +129,13 @@
 
 ---
 
-## 5. 发现汇总(仅汇报,未修改)
+## 5. 发现与处置汇总
 
-| # | 位置 | 问题 | 影响 | 建议(待用户决定) |
+| # | 位置 | 问题 | 影响 | 当前处置 |
 |---|------|------|------|------------------|
-| 1 | `writers/xdatcar.py::append_frame` | 分数坐标 `wrap=True`,VASP 惯例为 unwrapped | 低:读取兼容,仅超长轨迹可视化"跳回" | 可改为 `get_scaled_positions(wrap=False)` |
+| 1 | `writers/xdatcar.py::append_frame` | 旧实现用 `wrap=True`，不符合 VASP 连续轨迹惯例 | 旧长轨迹跨胞时出现坐标“跳回” | ✅ 已改为 `get_scaled_positions(wrap=False)`，并增加标准格式测试与转换命令 |
 | 2 | `utils.py::check_structure_valid` | `np.diag(cell)` 不能代表体积,共面零体积晶胞误判为有效 | 无:死代码,无调用方 | 若启用,改用 `cell.volume <= 0` |
 
-**核查结论:核心理论计算(科学计算)原理未发现需要修改的硬错误;两处发现均不影响当前任何运行路径,维持现状。**
+**核查结论：核心理论计算原理未发现硬错误；已修复影响轨迹交换语义的
+XDATCAR 输出问题。剩余一项位于无调用方的死代码中，若将来启用该函数再改用
+晶胞体积/行列式判断。**

@@ -1,7 +1,7 @@
 # mlipx — User Manual
 
 > **MLIP eXtended**
-> A VASP-compatible CLI/TUI/API for machine-learning interatomic potentials. Supports UMA (FAIRChem, default), MACE, DPA (DeepMD-kit), and GRACE behind one interface.
+> A multi-engine machine-learning interatomic-potential interface for VASP-oriented workflows. Supports UMA (FAIRChem, default), MACE, DPA (DeepMD-kit), and GRACE behind one interface.
 
 ---
 
@@ -30,6 +30,7 @@
 - [13. Performance Guide](#13-performance-guide)
 - [14. Examples](#14-examples)
 - [15. License](#15-license)
+- [MD analysis guide: core tasks, kinisi, and GEMDAT](ANALYSIS_EN.md)
 
 ---
 
@@ -52,7 +53,7 @@ All engines plug in through a unified ASE Calculator interface, so the higher-le
 - Optimize atomic positions and cell parameters (geometry relaxation)
 - Run molecular dynamics simulations (NVT / NVE ensembles)
 - Process hundreds of structures in batch mode
-- Output results in VASP-compatible formats (OUTCAR, CONTCAR, XDATCAR, OSZICAR)
+- Write VASP-syntax CONTCAR/XDATCAR, a documented VASP-like OUTCAR, and OSZICAR
 
 **How mlipx works:**
 
@@ -76,7 +77,7 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 | Background jobs | Submit, detach, re-attach, and kill long-running calculations |
 | Batch processing | Process many structures sequentially with one model load |
 | CPU & CUDA | Runs on CPU or GPU, auto-detected |
-| VASP output | OUTCAR, CONTCAR, XDATCAR, OSZICAR formats |
+| VASP ecosystem output | Syntax-compatible CONTCAR/XDATCAR, VASP-like OUTCAR, OSZICAR |
 | Cross-platform | Windows, Linux, macOS |
 
 ---
@@ -662,8 +663,8 @@ nvidia-smi
 ```
 
 Success means step 1 completes, the process exits with code 0, and complete
-OUTCAR, XDATCAR, and `mlipx_results.json` files are produced. Only then submit
-the long job with `.venv-mace/bin/mlipx tui`.
+`vasp/OUTCAR`, `vasp/XDATCAR`, and `raw/mlipx_results.json` files are produced.
+Only then submit the long job with `.venv-mace/bin/mlipx tui`.
 
 ### Task Mapping & Periodic Boundaries (PBC)
 
@@ -873,7 +874,30 @@ mlipx md CONTCAR \
 | `--pre-relax-steps` | 50 | Max pre-relaxation steps |
 | `--pre-relax-fmax` | 0.1 | Pre-relaxation force threshold (eV/Å) |
 
-**Output files:** `OUTCAR`, `CONTCAR` (final structure), `XDATCAR` (trajectory), `trajectory.traj` (ASE format), `mlipx_results.json`
+**MD output layout:**
+
+```text
+<run-directory>/
+├── raw/
+│   ├── trajectory.traj       # lossless ASE trajectory; internal source of truth
+│   ├── md.csv                # time, energies, temperature, volume, stress, pressure
+│   └── mlipx_results.json    # machine-readable result summary
+├── vasp/
+│   ├── XDATCAR               # VASP syntax, unwrapped direct coordinates
+│   ├── CONTCAR               # VASP POSCAR/CONTCAR syntax
+│   └── OUTCAR                # explicitly labelled VASP-like MD subset
+├── analysis/                 # task/hash analysis results with provenance
+├── artifacts.json            # output contract, units, frame metadata, file index
+├── resolved_config.json
+└── run.log
+```
+
+Use `raw/trajectory.traj` as the preferred post-processing input.
+`vasp/XDATCAR` targets OVITO, ASE, and other VASP ecosystem tools. It uses
+VASP fixed-width fields and `Direct configuration=` records while retaining
+continuous coordinates across periodic boundaries.
+See the [MD analysis guide](ANALYSIS_EN.md) for commands, result contracts,
+and solid-electrolyte workflows.
 
 ### 5.4 Batch Processing
 
@@ -1276,12 +1300,18 @@ The following are all recognized as `TRUE` and `FALSE` (case-insensitive):
 
 | File | Created By | Format | Description |
 |------|-----------|--------|-------------|
-| `OUTCAR` | SP, OPT, MD | Text | VASP-style detailed output with energies, forces, stress, timing |
-| `CONTCAR` | SP, OPT, MD | Text | Current/final atomic structure in VASP POSCAR format |
+| `OUTCAR` | SP, OPT | Text | VASP-style detailed output with energies, forces, stress, timing |
+| `vasp/OUTCAR` | MD | Text | Labelled VASP-like subset with per-frame positions, forces, energies, temperature, cell, and stress |
+| `CONTCAR` | SP, OPT | Text | Current/final atomic structure in VASP POSCAR format |
+| `vasp/CONTCAR` | MD | Text | MD final structure in VASP POSCAR/CONTCAR syntax |
 | `OSZICAR` | OPT | Text | Step-by-step optimization progress with energy and force |
-| `XDATCAR` | MD | Text | Trajectory in VASP format (concatenated POSCARs) |
-| `mlipx_results.json` | SP, OPT, MD | JSON | Machine-readable results with all computed quantities |
-| `trajectory.traj` | MD | Binary | ASE trajectory file for analysis |
+| `vasp/XDATCAR` | MD | Text | VASP-syntax trajectory with unwrapped direct coordinates |
+| `mlipx_results.json` | SP, OPT | JSON | Machine-readable results with all computed quantities |
+| `raw/mlipx_results.json` | MD | JSON | MD result summary and canonical data paths |
+| `raw/trajectory.traj` | MD | Binary | Lossless ASE trajectory retaining positions, velocities, forces, and more |
+| `raw/md.csv` | MD | CSV | Per-frame thermodynamic scalars, stress, and pressure |
+| `artifacts.json` | MD | JSON | Versioned output contract, units, frame interval, and file index |
+| `analysis/<task>/<hash>/metadata.json` | ANALYZE | JSON | Input checksums, parameters, software versions, warnings, output index |
 | `optimization.log` | OPT | Text | ASE optimizer log |
 | `run.log` | All | Text | Continuously flushed live log; its path is shown by CLI and TUI |
 | `batch_summary.json` | BATCH | JSON | Summary of all structures processed in batch |
@@ -1293,7 +1323,7 @@ Live log: /absolute/path/to/results/run.log
 Follow live output: tail -f /absolute/path/to/results/run.log
 ```
 
-`run.log` is flushed after every message, so the displayed command can be used from another terminal. On completion, the terminal log, `run.log`, the end of `OUTCAR`, and JSON output record:
+`run.log` is flushed after every message, so the displayed command can be used from another terminal. On completion, the terminal log, `run.log`, the end of the corresponding `OUTCAR`, and JSON output record:
 
 - **Total elapsed time:** from the user's run request until all standard output files are generated.
 - **Compute elapsed time:** from the first compute phase after the model is ready until output writing starts; model loading and final output writing are excluded.
@@ -1301,6 +1331,13 @@ Follow live output: tail -f /absolute/path/to/results/run.log
 ### 8.2 OUTCAR Format
 
 The OUTCAR file contains:
+
+SP/OPT retain the existing summary format. MD writes the versioned
+`mlipx.vasp-like-outcar.md/1` subset to `vasp/OUTCAR`. Its header explicitly
+states that it is not a native VASP OUTCAR. Every saved frame records the cell,
+`POSITION / TOTAL-FORCE`, potential/kinetic/total energies, temperature,
+volume, ASE stress, and pressure without inventing SCF, POTCAR, or electronic
+structure data.
 
 ```
 ================================================================================

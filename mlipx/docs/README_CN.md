@@ -1,7 +1,7 @@
 # mlipx — 用户手册
 
 > **通用材料应用计算器**
-> 基于 FAIRChem UMA 机器学习原子间势函数的 VASP 兼容接口
+> 面向 VASP 工作流的多引擎机器学习原子间势函数接口
 
 ---
 
@@ -30,6 +30,7 @@
 - [13. 性能指南](#13-性能指南)
 - [14. 使用示例](#14-使用示例)
 - [15. 许可证](#15-许可证)
+- [MD 后处理专题：基础分析、kinisi 与 GEMDAT](ANALYSIS_CN.md)
 
 ---
 
@@ -52,7 +53,7 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 - 优化原子位置和晶胞参数（几何弛豫）
 - 运行分子动力学模拟（NVT / NVE 系综）
 - 批量处理数百个结构
-- 以 VASP 兼容格式输出结果（OUTCAR、CONTCAR、XDATCAR、OSZICAR）
+- 输出 VASP 语法兼容的 CONTCAR/XDATCAR、VASP-like OUTCAR 和 OSZICAR
 
 **工作原理：**
 
@@ -76,7 +77,7 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 | 后台任务 | 提交、分离、重连、终止长时间计算 |
 | 批量处理 | 模型只加载一次，顺序处理多个结构 |
 | CPU & CUDA | 支持 CPU 和 GPU，自动检测 |
-| VASP 输出 | OUTCAR、CONTCAR、XDATCAR、OSZICAR 格式 |
+| VASP 生态输出 | 语法兼容的 CONTCAR/XDATCAR、VASP-like OUTCAR、OSZICAR |
 | 跨平台 | Windows、Linux、macOS |
 
 ---
@@ -646,8 +647,9 @@ nvidia-smi
   --output /tmp/mlipx-mace-smoke --name smoke
 ```
 
-成功标准：日志完成第 1 步、退出码为 0，并生成完整的 OUTCAR、XDATCAR 和
-`mlipx_results.json`。之后再通过 `.venv-mace/bin/mlipx tui` 提交长任务。
+成功标准：日志完成第 1 步、退出码为 0，并生成完整的
+`vasp/OUTCAR`、`vasp/XDATCAR` 和 `raw/mlipx_results.json`。之后再通过
+`.venv-mace/bin/mlipx tui` 提交长任务。
 
 ### 任务映射与周期性边界 (PBC)
 
@@ -852,7 +854,29 @@ mlipx md CONTCAR \
 | `--pre-relax-steps` | 50 | 预弛豫最大步数 |
 | `--pre-relax-fmax` | 0.1 | 预弛豫力收敛阈值 (eV/Å) |
 
-**输出文件：** `OUTCAR`、`CONTCAR`（最终结构）、`XDATCAR`（轨迹）、`trajectory.traj`（ASE 格式）、`mlipx_results.json`
+**MD 输出目录：**
+
+```text
+<任务目录>/
+├── raw/
+│   ├── trajectory.traj       # 不丢信息的 ASE 轨迹，内部事实源
+│   ├── md.csv                # 时间、能量、温度、体积、应力和压力
+│   └── mlipx_results.json    # 机器可读结果摘要
+├── vasp/
+│   ├── XDATCAR               # VASP 语法兼容、未折回分数坐标
+│   ├── CONTCAR               # VASP POSCAR/CONTCAR 语法
+│   └── OUTCAR                # 明确标注的 VASP-like MD 子集
+├── analysis/                 # 按任务/参数哈希保存后处理结果与 provenance
+├── artifacts.json            # 输出契约、单位、帧信息和文件索引
+├── resolved_config.json
+└── run.log
+```
+
+`raw/trajectory.traj` 是后处理的首选输入。`vasp/XDATCAR` 面向 OVITO、ASE
+及其他 VASP 生态工具，使用 VASP 的固定列宽和
+`Direct configuration=` 语法，并保留跨周期的连续坐标。
+后处理命令、结果契约及固态电解质工作流见
+[MD 后处理专题](ANALYSIS_CN.md)。
 
 ### 5.4 批量处理
 
@@ -1251,12 +1275,18 @@ SAVE_INTERVAL = 10
 
 | 文件 | 生成者 | 格式 | 描述 |
 |------|--------|------|------|
-| `OUTCAR` | SP, OPT, MD | 文本 | VASP 风格详细输出，含能量、力、应力、耗时 |
-| `CONTCAR` | SP, OPT, MD | 文本 | 当前/最终原子结构（VASP POSCAR 格式） |
+| `OUTCAR` | SP, OPT | 文本 | VASP 风格详细输出，含能量、力、应力、耗时 |
+| `vasp/OUTCAR` | MD | 文本 | 明确标注的 VASP-like 子集；逐帧位置、力、能量、温度、晶胞和应力 |
+| `CONTCAR` | SP, OPT | 文本 | 当前/最终原子结构（VASP POSCAR 格式） |
+| `vasp/CONTCAR` | MD | 文本 | MD 最终结构，VASP POSCAR/CONTCAR 语法 |
 | `OSZICAR` | OPT | 文本 | 逐步优化进度，含能量和力 |
-| `XDATCAR` | MD | 文本 | VASP 格式轨迹（串联 POSCAR） |
-| `mlipx_results.json` | SP, OPT, MD | JSON | 机器可读结果，含所有计算量 |
-| `trajectory.traj` | MD | 二进制 | ASE 轨迹文件，用于分析 |
+| `vasp/XDATCAR` | MD | 文本 | VASP 语法兼容轨迹，使用未折回分数坐标 |
+| `mlipx_results.json` | SP, OPT | JSON | 机器可读结果，含所有计算量 |
+| `raw/mlipx_results.json` | MD | JSON | MD 机器可读结果摘要和规范化数据路径 |
+| `raw/trajectory.traj` | MD | 二进制 | 不丢失坐标、速度、力等信息的 ASE 轨迹 |
+| `raw/md.csv` | MD | CSV | 逐帧热力学标量、应力和压力 |
+| `artifacts.json` | MD | JSON | 版本化输出契约、单位、帧间隔和文件索引 |
+| `analysis/<task>/<hash>/metadata.json` | ANALYZE | JSON | 输入校验和、参数、软件版本、告警和输出索引 |
 | `optimization.log` | OPT | 文本 | ASE 优化器日志 |
 | `run.log` | 所有 | 文本 | 实时刷新日志；CLI 与 TUI 启动时显示其路径 |
 | `batch_summary.json` | BATCH | JSON | 批量处理所有结果的汇总 |
@@ -1268,7 +1298,7 @@ Live log: /absolute/path/to/results/run.log
 Follow live output: tail -f /absolute/path/to/results/run.log
 ```
 
-`run.log` 逐条刷新，可以在另一个终端执行所显示的命令实时查看。计算完成后，终端日志、`run.log`、`OUTCAR` 末尾及 JSON 输出均记录：
+`run.log` 逐条刷新，可以在另一个终端执行所显示的命令实时查看。计算完成后，终端日志、`run.log`、对应的 `OUTCAR` 末尾及 JSON 输出均记录：
 
 - **总耗时**：用户发起运行到所有标准输出文件生成完成。
 - **实际计算耗时**：模型加载就绪后的首个计算阶段到开始写输出文件；不包含模型加载和最终输出写入。
@@ -1276,6 +1306,11 @@ Follow live output: tail -f /absolute/path/to/results/run.log
 ### 8.2 OUTCAR 格式
 
 OUTCAR 文件包含以下部分：
+
+SP/OPT 继续使用原有摘要格式。MD 的 `vasp/OUTCAR` 使用版本化的
+`mlipx.vasp-like-outcar.md/1` 子集，文件头明确声明它不是原生 VASP
+OUTCAR；每个保存帧包含晶格、`POSITION / TOTAL-FORCE`、势能、动能、
+总能、温度、体积、ASE 应力和压力，不虚构 SCF、POTCAR 或电子结构数据。
 
 ```
 ================================================================================

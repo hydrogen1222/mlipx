@@ -208,8 +208,12 @@ class JsonWriter:
         elif mode == "md":
             data["calculation"]["md"] = {
                 "steps": results.get("md_steps"),
+                "timestep_fs": results.get("timestep_fs"),
+                "save_interval_steps": results.get("save_interval"),
                 "temperature": results.get("temperature"),
                 "ensemble": results.get("ensemble"),
+                "trajectory_path": results.get("trajectory_path"),
+                "thermodynamics_path": results.get("md_csv_path"),
             }
 
         return data

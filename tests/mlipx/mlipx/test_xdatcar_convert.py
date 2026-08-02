@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import numpy as np
+import pytest
 from ase import Atoms
 from ase.io import read
-
 from mlipx.writers.xdatcar import XdatcarWriter, convert_to_vasp_xdatcar
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _mlipx_style_xdatcar(path: Path, *, cross_boundary: bool = False) -> None:
@@ -61,9 +64,8 @@ def test_convert_keeps_unwrapped_coordinates(tmp_path: Path) -> None:
     """VASP keeps unwrapped scaled coordinates (atoms travel across cell
     boundaries). The conversion must not fold coordinates back into [0,1)."""
     src = tmp_path / "XDATCAR"
-    # hand-built input whose first atom sits at scaled x = 1.025 (crossed the
-    # x=4.0 boundary); the native mlipx writer would have wrapped this to
-    # 0.025, so it cannot be used to build this input.
+    # Hand-built input whose first atom sits at scaled x = 1.025 (crossed the
+    # x=4.0 boundary). This also exercises conversion of external files.
     src.write_text(
         "H2O\n"
         "1.0\n"
@@ -87,6 +89,16 @@ def test_convert_keeps_unwrapped_coordinates(tmp_path: Path) -> None:
     assert abs(scaled[0][0] - 1.025) < 1e-7, scaled
 
 
+def test_native_writer_keeps_unwrapped_coordinates(tmp_path: Path) -> None:
+    """New MD output must preserve boundary crossings before conversion."""
+    src = tmp_path / "XDATCAR"
+    _mlipx_style_xdatcar(src, cross_boundary=True)
+
+    frames = read(src, index=":")
+    scaled = frames[-1].get_scaled_positions(wrap=False)
+    assert scaled[0][0] == pytest.approx(1.05)
+
+
 def test_convert_roundtrip_preserves_trajectory(tmp_path: Path) -> None:
     """ASE can read the converted file back with identical positions
     (up to the decimal precision of the format)."""
@@ -97,7 +109,7 @@ def test_convert_roundtrip_preserves_trajectory(tmp_path: Path) -> None:
     original = read(src, index=":")
     converted = read(out, index=":")
     assert len(converted) == len(original) == 3
-    for orig, conv in zip(original, converted):
+    for orig, conv in zip(original, converted, strict=True):
         assert conv.cell[0][0] == 4.0
         assert np.allclose(
             conv.get_scaled_positions(),
@@ -148,7 +160,9 @@ def test_convert_real_vasp_xdatcar_is_noop(tmp_path: Path) -> None:
     src.write_text(vasp_content, encoding="utf-8")
     out = convert_to_vasp_xdatcar(src)
     converted = out.read_text(encoding="utf-8").splitlines()
-    for orig_line, conv_line in zip(vasp_content.splitlines(), converted):
+    for orig_line, conv_line in zip(
+        vasp_content.splitlines(), converted, strict=True
+    ):
         # comment line may be reformatted (formula vs "unknown system");
         # everything else must match exactly
         if orig_line.startswith("unknown"):
@@ -167,8 +181,15 @@ def test_convert_single_frame(tmp_path: Path) -> None:
     assert sum(1 for l in lines if l.startswith("Direct configuration=")) == 1
 
 
-def test_convert_missing_file_raises(tmp_path: Path) -> None:
-    import pytest
+def test_convert_creates_output_directory(tmp_path: Path) -> None:
+    src = tmp_path / "XDATCAR"
+    _mlipx_style_xdatcar(src)
+    destination = tmp_path / "exports" / "vasp" / "XDATCAR"
 
+    assert convert_to_vasp_xdatcar(src, destination) == destination
+    assert destination.is_file()
+
+
+def test_convert_missing_file_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         convert_to_vasp_xdatcar(tmp_path / "nope.XDATCAR")

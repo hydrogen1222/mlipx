@@ -3,11 +3,7 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
-"""
-VASP-style XDATCAR writer.
-
-Writes MD trajectories in VASP XDATCAR format for visualization.
-"""
+"""VASP-syntax-compatible XDATCAR trajectory writer."""
 
 from __future__ import annotations
 
@@ -59,25 +55,25 @@ class XdatcarWriter:
             else:
                 symbol_counts.append((symbol, 1))
 
-        # Build header
+        # Match VASP's own fixed-width XDATCAR layout.  Apart from making the
+        # file familiar to users, keeping this grammar exact matters for
+        # readers that are less permissive than ASE.
         lines = [
-            f"{atoms.get_chemical_formula()}",
-            "1.0",  # Scale factor
+            f"{atoms.get_chemical_formula():<40s}",
+            f"{1:12d}",  # absolute lattice vectors below
         ]
 
         # Lattice vectors
         cell = atoms.cell
         for i in range(3):
-            lines.append(
-                f"  {cell[i][0]:20.16f}  {cell[i][1]:20.16f}  {cell[i][2]:20.16f}"
-            )
+            lines.append(" " + "".join(f"{value:12.6f}" for value in cell[i]))
 
         # Element symbols
-        element_line = "  ".join(symbol for symbol, _ in symbol_counts)
+        element_line = "".join(f"{symbol:>5s}" for symbol, _ in symbol_counts)
         lines.append(element_line)
 
         # Atom counts
-        count_line = "  ".join(str(count) for _, count in symbol_counts)
+        count_line = " " + "".join(f"{count:>5d}" for _, count in symbol_counts)
         lines.append(count_line)
 
         with open(output_path, "w", encoding="utf-8") as f:
@@ -101,8 +97,10 @@ class XdatcarWriter:
         """
         output_path = Path(output_path)
 
-        # Get scaled positions
-        scaled_pos = atoms.get_scaled_positions()
+        # VASP writes continuous (unwrapped) direct coordinates in XDATCAR.
+        # This is essential for diffusion/MSD: wrapping into [0, 1) destroys
+        # the image history whenever an atom crosses a periodic boundary.
+        scaled_pos = atoms.get_scaled_positions(wrap=False)
 
         if not self.header_written:
             raise RuntimeError("write_header() must be called before append_frame()")
@@ -111,10 +109,10 @@ class XdatcarWriter:
         # This exact marker is the VASP/ASE XDATCAR grammar.  The previous
         # custom "# Step:" comment made the streamed file unreadable as a
         # multi-frame XDATCAR.
-        lines = [f"Direct configuration={self.configuration_index:6d}"]
+        lines = [f"Direct configuration={self.configuration_index:12d}"]
 
         for pos in scaled_pos:
-            lines.append(f"  {pos[0]:20.16f}  {pos[1]:20.16f}  {pos[2]:20.16f}")
+            lines.append(" " + "".join(f"{value:12.8f}" for value in pos))
 
         with open(output_path, "a", encoding="utf-8") as f:
             f.write("\n".join(lines) + "\n")
@@ -215,22 +213,15 @@ def convert_to_vasp_xdatcar(
 ) -> Path:
     """Convert an XDATCAR trajectory to the standard VASP XDATCAR layout.
 
-    mlipx's native XDATCAR (see :class:`XdatcarWriter`) is a valid
-    multi-frame VASP-style file, but it differs from what VASP itself writes:
-
-    * scaled positions are wrapped back into ``[0, 1)`` (VASP keeps them
-      unwrapped, so atoms travel smoothly across cell boundaries);
-    * column widths differ (VASP uses 12-char fields, 6 decimals for the
-      lattice and 8 decimals for coordinates, 5-char element/count fields,
-      and a 12-char right-aligned ``Direct configuration=`` index).
-
-    This converter re-emits the trajectory in the exact VASP layout, so the
-    output is byte-level compatible with files produced by a real VASP run
-    (see e.g. ``/home/storm/vasp/MD_test/XDATCAR``).
+    Current mlipx output already uses this layout.  The converter remains
+    useful for older mlipx files, ASE trajectories (especially ``.traj``),
+    and VASP-style files produced by other tools.  When recovering an old MD
+    run, prefer ``trajectory.traj`` over an already-wrapped legacy XDATCAR:
+    text reformatting cannot reconstruct image information that was lost.
 
     Args:
-        input_path: Any XDATCAR-style trajectory (mlipx output, ASE output,
-            or a real VASP XDATCAR -- conversion is idempotent).
+        input_path: Any ASE-readable trajectory, including ``trajectory.traj``
+            and a real or mlipx XDATCAR (conversion is idempotent).
         output_path: Destination file. Defaults to ``<input>.vasp``.
 
     Returns:
@@ -280,5 +271,6 @@ def convert_to_vasp_xdatcar(
             lines.append(" " + "".join(f"{component:12.8f}" for component in position))
 
     output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return output_path

@@ -355,3 +355,209 @@ class OutcarWriter:
                 "=" * 80,
             ]
         )
+
+
+class MDOutcarWriter:
+    """Stream a documented VASP-like subset for an MLIP MD trajectory.
+
+    This deliberately is *not* presented as a native VASP OUTCAR: an MLIP
+    calculation has no electronic SCF, POTCAR, Fermi level, or VASP thermostat
+    state.  The familiar labels and ``POSITION / TOTAL-FORCE`` tables make the
+    text useful to humans and simple downstream readers without inventing
+    electronic-structure data.
+    """
+
+    EV_A3_TO_GPA = 160.21766208
+
+    def __init__(self) -> None:
+        self.output_path: Path | None = None
+        self.configuration_index = 0
+        self._finished = False
+
+    def write_header(
+        self,
+        atoms: Atoms,
+        output_path: Path | str,
+        *,
+        task_name: str,
+        metadata: dict[str, Any] | None,
+        settings: dict[str, Any],
+    ) -> None:
+        """Create the file and write static model/system/MD information."""
+        self.output_path = Path(output_path)
+        self.output_path.parent.mkdir(parents=True, exist_ok=True)
+        self.configuration_index = 0
+        self._finished = False
+
+        atom_counts = Counter(atoms.get_chemical_symbols())
+        summary = "  ".join(
+            f"{symbol}={count}" for symbol, count in sorted(atom_counts.items())
+        )
+        model = metadata or {}
+        lines = [
+            "=" * 100,
+            " MLIPX VASP-LIKE MOLECULAR DYNAMICS OUTPUT".center(100),
+            " NOT A NATIVE VASP OUTCAR: no electronic/SCF data are implied".center(
+                100
+            ),
+            "=" * 100,
+            "",
+            f"Generated:          {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+            "Format contract:    mlipx.vasp-like-outcar.md/1",
+            f"Formula:            {atoms.get_chemical_formula()}",
+            f"Number of ions:     {len(atoms)}",
+            f"Ion counts:         {summary}",
+            f"Task:               {task_name}",
+        ]
+
+        for key, label in (
+            ("model_type", "Model type"),
+            ("model_path", "Model path"),
+            ("device", "Device"),
+            ("inference_mode", "Inference mode"),
+        ):
+            if model.get(key) is not None:
+                lines.append(f"{label + ':':<20}{model[key]}")
+
+        lines.extend(["", " MD SETTINGS", "-" * 100])
+        for key, value in settings.items():
+            lines.append(f"{key + ':':<20}{value}")
+        lines.extend(
+            [
+                "",
+                "Units: positions=Angstrom, forces=eV/Angstrom, energy=eV, ",
+                "       stress=eV/Angstrom^3 and GPa, time=fs",
+                "Stress convention: ASE Voigt order xx yy zz yz xz xy; ",
+                "                   pressure = -trace(stress)/3",
+                "",
+            ]
+        )
+        self.output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def append_frame(
+        self,
+        atoms: Atoms,
+        *,
+        step: int,
+        time_fs: float,
+        potential_energy: float,
+        kinetic_energy: float,
+        total_energy: float,
+        temperature: float,
+        forces: np.ndarray | None,
+        stress: np.ndarray | None,
+    ) -> None:
+        """Append one saved ionic configuration and its observables."""
+        if self.output_path is None:
+            raise RuntimeError("write_header() must be called before append_frame()")
+        if self._finished:
+            raise RuntimeError("Cannot append a frame after finalize()")
+
+        self.configuration_index += 1
+        lines = [
+            "-" * 100,
+            f" Ionic step {step:12d}   "
+            f"Saved configuration {self.configuration_index:8d}   "
+            f"Time = {time_fs:16.8f} fs",
+            "-" * 100,
+            "",
+            " direct lattice vectors                 reciprocal lattice vectors",
+        ]
+        reciprocal = atoms.cell.reciprocal()
+        for vector, rec_vector in zip(atoms.cell, reciprocal):
+            lines.append(
+                " "
+                + "".join(f"{value:13.7f}" for value in vector)
+                + "    "
+                + "".join(f"{value:13.7f}" for value in rec_vector)
+            )
+
+        lines.extend(
+            [
+                "",
+                " POSITION                                       TOTAL-FORCE (eV/Angst)",
+                " " + "-" * 91,
+            ]
+        )
+        if forces is None:
+            force_rows = np.full((len(atoms), 3), np.nan)
+        else:
+            force_rows = np.asarray(forces, dtype=float)
+        for position, force in zip(atoms.positions, force_rows):
+            lines.append(
+                " "
+                + "".join(f"{value:14.8f}" for value in position)
+                + "   "
+                + "".join(f"{value:14.8f}" for value in force)
+            )
+        lines.extend(
+            [
+                " " + "-" * 91,
+                "",
+                f"  free  energy   MLIPX-TOTEN  = {potential_energy:20.10f} eV",
+                f"  kinetic energy EKIN         = {kinetic_energy:20.10f} eV",
+                f"  total energy   ETOTAL       = {total_energy:20.10f} eV",
+                f"  temperature    T            = {temperature:20.8f} K",
+                f"  volume of cell               = {atoms.get_volume():20.10f} Angstrom^3",
+            ]
+        )
+
+        if stress is not None:
+            voigt = np.asarray(stress, dtype=float).reshape(6)
+            stress_gpa = voigt * self.EV_A3_TO_GPA
+            pressure = -float(np.sum(stress_gpa[:3])) / 3.0
+            tensor = np.array(
+                [
+                    [voigt[0], voigt[5], voigt[4]],
+                    [voigt[5], voigt[1], voigt[3]],
+                    [voigt[4], voigt[3], voigt[2]],
+                ]
+            )
+            lines.extend(
+                [
+                    "",
+                    "  stress tensor (ASE convention, eV/Angstrom^3):",
+                    *[
+                        "    " + "".join(f"{value:16.9f}" for value in row)
+                        for row in tensor
+                    ],
+                    "  stress Voigt xx yy zz yz xz xy (GPa):",
+                    "    " + "".join(f"{value:16.8f}" for value in stress_gpa),
+                    f"  external pressure (from ASE stress) = {pressure:16.8f} GPa",
+                ]
+            )
+        else:
+            lines.extend(["", "  stress: unavailable or disabled"])
+        lines.append("")
+
+        with self.output_path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines) + "\n")
+
+    def finalize(
+        self,
+        *,
+        status: str,
+        md_time_s: float | None = None,
+        final_energy: float | None = None,
+        final_temperature: float | None = None,
+    ) -> None:
+        """Finish the stream with an explicit MLIP calculation summary."""
+        if self.output_path is None or self._finished:
+            return
+        lines = [
+            "=" * 100,
+            " MLIPX MD SUMMARY",
+            "=" * 100,
+            f"Status:              {status}",
+            f"Saved configurations:{self.configuration_index:12d}",
+        ]
+        if final_energy is not None:
+            lines.append(f"Final potential E:  {final_energy:20.10f} eV")
+        if final_temperature is not None:
+            lines.append(f"Final temperature:  {final_temperature:20.8f} K")
+        if md_time_s is not None:
+            lines.append(f"MD wall time:       {md_time_s:20.6f} s")
+        lines.extend(["", " END OF MLIPX VASP-LIKE MD OUTPUT", "=" * 100, ""])
+        with self.output_path.open("a", encoding="utf-8") as handle:
+            handle.write("\n".join(lines))
+        self._finished = True

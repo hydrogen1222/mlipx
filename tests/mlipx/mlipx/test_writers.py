@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from ase import Atoms
-
 from mlipx.writers.trajectory import TrajectoryWriter
 from mlipx.writers.xdatcar import XdatcarWriter
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _tmp_path(tmp_path: Path, name: str) -> Path:
@@ -43,8 +45,9 @@ def test_xdatcar_write_from_md_with_positions_and_symbols(tmp_path: Path) -> Non
     assert text.count("Direct configuration=") == 2
     # Element line from header. Note: ASE's Atoms(symbols=[...]) constructor
     # sorts atoms by default, so H H O collapses to the "H  O" / "2  1" blocks.
-    assert "H  O" in text
-    assert "2  1" in text
+    lines = text.splitlines()
+    assert lines[5].split() == ["H", "O"]
+    assert lines[6].split() == ["2", "1"]
 
 
 def test_xdatcar_write_from_md_positions_without_symbols_raises_clear_error(

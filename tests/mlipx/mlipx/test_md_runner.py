@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import csv
 import gc
+import json
 import tracemalloc
 
 import numpy as np
@@ -245,26 +246,54 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     for f in frames:
         assert "atoms" not in f
         assert set(f) == {
-            "step", "energy", "kinetic_energy", "total_energy", "temperature"
+            "step",
+            "time_fs",
+            "energy",
+            "kinetic_energy",
+            "total_energy",
+            "temperature",
+            "volume",
+            "stress",
+            "pressure_gpa",
         }
     # Full frames are on disk in trajectory.traj.
-    assert results["trajectory_path"] == str(tmp_path / "trajectory.traj")
+    assert results["trajectory_path"] == str(tmp_path / "raw" / "trajectory.traj")
     assert len(list(Trajectory(results["trajectory_path"]))) == nframes
     # XDATCAR was streamed using the standard VASP configuration marker and
     # is readable by ASE as a multi-frame trajectory.
-    xdatcar = (tmp_path / "XDATCAR").read_text()
+    xdatcar = (tmp_path / "vasp" / "XDATCAR").read_text()
     assert xdatcar.count("Direct configuration=") == nframes
     assert "# Step:" not in xdatcar
-    assert len(read(tmp_path / "XDATCAR", index=":", format="vasp-xdatcar")) == nframes
+    assert len(
+        read(tmp_path / "vasp" / "XDATCAR", index=":", format="vasp-xdatcar")
+    ) == nframes
     # md.csv was streamed: header + nframes rows.
-    with open(tmp_path / "md.csv", newline="") as fh:
+    with open(tmp_path / "raw" / "md.csv", newline="") as fh:
         rows = list(csv.reader(fh))
     assert rows[0] == [
-        "step", "potential_energy_eV", "kinetic_energy_eV",
-        "total_energy_eV", "temperature_K",
+        "step", "time_fs", "potential_energy_eV", "kinetic_energy_eV",
+        "total_energy_eV", "temperature_K", "volume_A3",
+        "stress_xx_eV_A3", "stress_yy_eV_A3", "stress_zz_eV_A3",
+        "stress_yz_eV_A3", "stress_xz_eV_A3", "stress_xy_eV_A3",
+        "pressure_GPa",
     ]
     assert len(rows) == nframes + 1
-    assert results["md_csv_path"] == str(tmp_path / "md.csv")
+    assert results["md_csv_path"] == str(tmp_path / "raw" / "md.csv")
+
+    # VASP-like OUTCAR contains every saved frame and the requested physical
+    # observables; the final CONTCAR is a readable VASP structure.
+    outcar = (tmp_path / "vasp" / "OUTCAR").read_text()
+    assert "NOT A NATIVE VASP OUTCAR" in outcar
+    assert outcar.count(" POSITION ") == nframes
+    assert outcar.count("MLIPX-TOTEN") == nframes
+    assert "stress tensor" in outcar
+    assert len(read(tmp_path / "vasp" / "CONTCAR", format="vasp")) == 8
+    assert (tmp_path / "analysis").is_dir()
+    manifest = json.loads((tmp_path / "artifacts.json").read_text())
+    assert manifest["schema"] == "mlipx.md-artifacts/1"
+    assert manifest["status"] == "completed"
+    assert manifest["trajectory"]["frames"] == nframes
+    assert manifest["artifacts"]["xdatcar"]["path"] == "vasp/XDATCAR"
 
 
 def test_md_long_trajectory_keeps_only_scalars_in_memory(tmp_path):
@@ -350,7 +379,9 @@ def test_nvt_seed_reproduces_entire_stochastic_trajectory(tmp_path):
             seed=seed,
         )
         runner.run(_bulk_atoms())
-        return np.asarray([a.positions for a in Trajectory(out / "trajectory.traj")])
+        return np.asarray(
+            [a.positions for a in Trajectory(out / "raw" / "trajectory.traj")]
+        )
 
     same_a = run(42, "same-a")
     same_b = run(42, "same-b")

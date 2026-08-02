@@ -63,6 +63,41 @@ def test_append_timing_to_human_and_json_outputs(tmp_path) -> None:
     assert data["calculation"]["timing"]["compute_time_s"] == 8.25
 
 
+def test_append_timing_supports_layered_md_outputs(tmp_path) -> None:
+    (tmp_path / "vasp").mkdir()
+    (tmp_path / "raw").mkdir()
+    outcar = tmp_path / "vasp" / "OUTCAR"
+    outcar.write_text("MLIPX MD", encoding="utf-8")
+    results = tmp_path / "raw" / "mlipx_results.json"
+    results.write_text(
+        json.dumps({"calculation": {"timing": {}}}), encoding="utf-8"
+    )
+    manifest = tmp_path / "artifacts.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "artifacts": {
+                    "outcar": {"path": "vasp/OUTCAR", "bytes": 0},
+                    "results": {
+                        "path": "raw/mlipx_results.json",
+                        "bytes": 0,
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    values = {"total_elapsed_time_s": 4.0, "compute_time_s": 3.0}
+
+    append_timing_to_outputs(tmp_path, values)
+
+    assert "FINAL TIMING SUMMARY" in outcar.read_text()
+    assert json.loads(results.read_text())["calculation"]["timing"] == values
+    manifest_data = json.loads(manifest.read_text())
+    assert manifest_data["timing"] == values
+    assert manifest_data["artifacts"]["outcar"]["bytes"] == outcar.stat().st_size
+
+
 def test_runner_execute_adds_timing_and_delays_done_event(tmp_path) -> None:
     events = []
     logs = []

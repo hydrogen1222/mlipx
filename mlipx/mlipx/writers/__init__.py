@@ -11,7 +11,7 @@ Provides VASP-style and modern output formats for calculation results.
 
 from __future__ import annotations
 
-from mlipx.writers.outcar import OutcarWriter
+from mlipx.writers.outcar import MDOutcarWriter, OutcarWriter
 from mlipx.writers.oszicar import OszicarWriter
 from mlipx.writers.contcar import ContcarWriter
 from mlipx.writers.xdatcar import XdatcarWriter
@@ -20,6 +20,7 @@ from mlipx.writers.trajectory import TrajectoryWriter
 
 __all__ = [
     "OutcarWriter",
+    "MDOutcarWriter",
     "OszicarWriter",
     "ContcarWriter",
     "XdatcarWriter",
