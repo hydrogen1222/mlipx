@@ -14,7 +14,12 @@ from mlipx.jobs import JobManager, JobStatus
 from mlipx.queue import (
     QueueScheduler,
     build_mlipx_command,
+    pause_pending_job,
+    pause_scheduler,
     parse_task_file,
+    queue_paused,
+    resume_paused_job,
+    resume_scheduler,
     scheduler_pid_file,
     scheduler_status,
     start_scheduler,
@@ -302,6 +307,82 @@ def test_scheduler_concurrency_limit(tmp_path: Path) -> None:
         time.sleep(0.2)
     assert mgr.get_job("j2")["status"] in ("done", "failed"), mgr.get_job("j2")
     assert (tmp_path / "m1").exists()
+    assert (tmp_path / "m2").exists()
+
+
+def test_scheduler_pause_keeps_pending_jobs_until_resume(tmp_path: Path) -> None:
+    """Pausing dispatch leaves running work alone and blocks the next job."""
+    mgr = JobManager(jobs_dir=tmp_path / "jobs")
+    _queued_cmd(mgr, "j1", tmp_path / "m1", sleep=0.6)
+    _queued_cmd(mgr, "j2", tmp_path / "m2")
+    scheduler = QueueScheduler(jobs_dir=mgr.jobs_dir, max_concurrent=1)
+
+    assert scheduler.run_once() == 1
+    assert mgr.get_job("j1")["status"] == "running"
+    assert mgr.get_job("j2")["status"] == "pending"
+    assert pause_scheduler(mgr.jobs_dir) is True
+    assert queue_paused(mgr.jobs_dir) is True
+
+    deadline = time.time() + 15
+    while time.time() < deadline and mgr.get_job("j1")["status"] == "running":
+        time.sleep(0.1)
+    assert mgr.get_job("j1")["status"] == "done"
+    assert scheduler.run_once() == 0
+    assert mgr.get_job("j2")["status"] == "pending"
+    assert not (tmp_path / "m2").exists()
+
+    assert resume_scheduler(mgr.jobs_dir) is True
+    assert queue_paused(mgr.jobs_dir) is False
+    assert scheduler.run_once() == 1
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        if mgr.get_job("j2")["status"] in ("done", "failed"):
+            break
+        time.sleep(0.1)
+    assert mgr.get_job("j2")["status"] == "done"
+    assert (tmp_path / "m2").exists()
+
+
+def test_scheduler_pause_resume_are_idempotent(tmp_path: Path) -> None:
+    jobs_dir = tmp_path / "jobs"
+    JobManager(jobs_dir=jobs_dir)
+    assert pause_scheduler(jobs_dir) is True
+    assert pause_scheduler(jobs_dir) is False
+    assert resume_scheduler(jobs_dir) is True
+    assert resume_scheduler(jobs_dir) is False
+
+
+def test_pause_one_pending_job_does_not_block_other_pending_jobs(tmp_path: Path) -> None:
+    """A paused job is skipped while other pending jobs continue FIFO dispatch."""
+    mgr = JobManager(jobs_dir=tmp_path / "jobs")
+    _queued_cmd(mgr, "j1", tmp_path / "m1", sleep=0.6)
+    _queued_cmd(mgr, "j2", tmp_path / "m2")
+    _queued_cmd(mgr, "j3", tmp_path / "m3")
+    scheduler = QueueScheduler(jobs_dir=mgr.jobs_dir, max_concurrent=1)
+
+    assert scheduler.run_once() == 1
+    assert pause_pending_job(mgr.jobs_dir, "j2") is True
+    assert mgr.get_job("j2")["status"] == "paused"
+    assert mgr.get_job("j3")["status"] == "pending"
+
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        scheduler.run_once()
+        if mgr.get_job("j3")["status"] in ("running", "done", "failed"):
+            break
+        time.sleep(0.1)
+    assert mgr.get_job("j3")["status"] in ("running", "done", "failed")
+    assert not (tmp_path / "m2").exists()
+
+    assert resume_paused_job(mgr.jobs_dir, "j2") is True
+    assert mgr.get_job("j2")["status"] == "pending"
+    deadline = time.time() + 15
+    while time.time() < deadline:
+        scheduler.run_once()
+        if mgr.get_job("j2")["status"] in ("done", "failed"):
+            break
+        time.sleep(0.1)
+    assert mgr.get_job("j2")["status"] == "done"
     assert (tmp_path / "m2").exists()
 
 

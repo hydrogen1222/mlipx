@@ -1053,6 +1053,19 @@ mlipx clean
 
 删除已完成、失败或取消的任务的状态文件。保留正在运行的任务。
 
+##### `mlipx queue pause/resume` — 暂停/恢复单个待执行任务
+
+```bash
+mlipx queue pause <job-id>     # 只暂停指定的 PENDING 任务
+mlipx queue status
+mlipx queue resume <job-id>    # 恢复指定任务
+```
+
+单个任务暂停后会变为 `paused`，调度器会跳过它并继续寻找其他 `pending` 任务；
+当前 RUNNING 任务和其他 pending 任务不受影响。恢复后该任务重新进入队列，
+按原提交时间参与 FIFO 调度。省略 `<job-id>` 仍可暂停/恢复整个 pending 队列；
+这不同于 `mlipx queue stop`，后者会停止调度器进程。
+
 ##### `mlipx tui` — 启动 TUI
 
 ```
@@ -1078,7 +1091,9 @@ TUI 基于 [Textual](https://textual.textualize.io/) 构建，提供交互式、
 | `PgUp` / `PgDn` | 可滚动区域的上下翻页 |
 | `C` | 取消选中的任务（Jobs 屏幕） |
 | `D` | 删除任务记录（Jobs 屏幕） |
+| `P` | 暂停选中的 pending 任务（Jobs 屏幕） |
 | `R` | 刷新任务列表（Jobs 屏幕） |
+| `U` | 恢复选中的 paused 任务（Jobs 屏幕） |
 
 #### 屏幕说明
 
@@ -1116,6 +1131,8 @@ OPT 还可设置晶胞优化和保持晶体对称性；MD 可设置系综、温�
 - ● 运行中 | ✓ 已完成 | ✗ 失败 | ⊘ 已取消
 - 按 Enter 查看任务日志输出
 - 每 2 秒自动刷新
+- 在 Jobs 表中选中任务后使用 **Pause Job** / **Resume Job**，或按 `P` / `U`；只影响单个 pending/paused 任务
+- **Pause Queue** / **Resume Queue** 仍可用于整体暂停/恢复 pending 队列；正在运行的任务不受影响
 
 ### 6.3 Python API
 

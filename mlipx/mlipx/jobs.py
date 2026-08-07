@@ -30,6 +30,7 @@ if TYPE_CHECKING:
 
 class JobStatus(str, Enum):
     PENDING = "pending"
+    PAUSED = "paused"
     RUNNING = "running"
     DONE = "done"
     FAILED = "failed"
@@ -287,6 +288,20 @@ class JobManager:
             python=data.get("python"),
         )
         return True
+
+    def pause_pending(self, job_id: str) -> bool:
+        """Move one PENDING job to PAUSED without touching its worker state."""
+        data = self._read_job_state(job_id)
+        if data is None or data.get("status") != JobStatus.PENDING.value:
+            return False
+        return self.update_status(job_id, JobStatus.PAUSED)
+
+    def resume_paused(self, job_id: str) -> bool:
+        """Move one PAUSED job back to PENDING so the scheduler can launch it."""
+        data = self._read_job_state(job_id)
+        if data is None or data.get("status") != JobStatus.PAUSED.value:
+            return False
+        return self.update_status(job_id, JobStatus.PENDING)
 
     def count_by_status(self, status: str) -> int:
         """Number of jobs currently in ``status`` (pending/running/done/...)."""

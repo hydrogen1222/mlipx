@@ -29,7 +29,9 @@ class JobsScreen(Screen):
         ("escape", "back", "Back"),
         ("c", "cancel_job", "Cancel Job"),
         ("d", "delete_job", "Delete"),
+        ("p", "pause_selected_job", "Pause Selected Job"),
         ("r", "refresh", "Refresh"),
+        ("u", "resume_selected_job", "Resume Selected Job"),
     ]
 
     def __init__(self, **kwargs):
@@ -51,10 +53,14 @@ class JobsScreen(Screen):
                 ),
                 Button("Start Scheduler", id="start-sched-btn"),
                 Button("Stop Scheduler", id="stop-sched-btn"),
+                Button("Pause Queue", id="pause-queue-btn"),
+                Button("Resume Queue", id="resume-queue-btn"),
                 id="scheduler-bar",
             ),
             DataTable(id="jobs-table"),
             Horizontal(
+                Button("Pause Job", id="pause-job-btn"),
+                Button("Resume Job", id="resume-job-btn"),
                 Button("Cancel Job", variant="error", id="cancel-job-btn"),
                 Button("Delete", id="delete-btn"),
                 Button("Refresh", id="refresh-btn"),
@@ -95,15 +101,24 @@ class JobsScreen(Screen):
         except Exception:
             status = {"running": False, "pid": None}
         widget = self.query_one("#sched-status", Static)
-        if status["running"]:
+        if status["running"] and status.get("paused"):
+            widget.update(
+                f"[yellow]Ⅱ Queue PAUSED (scheduler PID {status['pid']})[/]"
+                " — running jobs continue; pending jobs wait"
+            )
+        elif status["running"]:
             widget.update(f"[green]● Scheduler RUNNING (PID {status['pid']})[/]")
         else:
+            suffix = " — queue is paused" if status.get("paused") else ""
             widget.update(
                 "[yellow]○ Scheduler not running[/] — queued jobs wait until "
-                "you start it (or use: mlipx queue start)"
+                f"you start it (or use: mlipx queue start){suffix}"
             )
     def _refresh_table(self) -> None:
         table = self.query_one("#jobs-table", DataTable)
+        selected_job_id: str | None = None
+        if table.row_count and table.cursor_row < table.row_count:
+            selected_job_id = str(table.get_row_at(table.cursor_row)[0])
         table.clear()
         jobs = self._job_manager.list_jobs()
         status_icons = {
@@ -112,6 +127,7 @@ class JobsScreen(Screen):
             "failed": "✗",
             "cancelled": "⊘",
             "pending": "○",
+            "paused": "Ⅱ",
         }
         for job in jobs:
             job_id = str(job.get("job_id", "unknown"))
@@ -126,6 +142,8 @@ class JobsScreen(Screen):
                 job.get("device", ""),
                 key=job_id,
             )
+        if selected_job_id is not None and selected_job_id in table.rows:
+            table.move_cursor(row=table.get_row_index(selected_job_id), scroll=False)
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
@@ -137,6 +155,14 @@ class JobsScreen(Screen):
             self._start_scheduler()
         elif button_id == "stop-sched-btn":
             self._stop_scheduler()
+        elif button_id == "pause-queue-btn":
+            self._pause_queue()
+        elif button_id == "resume-queue-btn":
+            self._resume_queue()
+        elif button_id == "pause-job-btn":
+            self._pause_selected_job()
+        elif button_id == "resume-job-btn":
+            self._resume_selected_job()
         elif button_id == "cancel-job-btn":
             self._cancel_selected_job()
         elif button_id == "delete-btn":
@@ -187,6 +213,78 @@ class JobsScreen(Screen):
         else:
             self.app.notify("No scheduler was running.", title="Scheduler")
         self._refresh_scheduler_status()
+
+    def _pause_queue(self) -> None:
+        """Pause only pending-job dispatch; do not touch running workers."""
+        from mlipx.queue import pause_scheduler
+
+        if pause_scheduler(jobs_dir=self._job_manager.jobs_dir):
+            self.app.notify(
+                "Pending jobs paused; running jobs continue.", title="Queue"
+            )
+        else:
+            self.app.notify("Queue is already paused.", title="Queue")
+        self._refresh_scheduler_status()
+
+    def _resume_queue(self) -> None:
+        """Allow the scheduler to launch pending jobs again."""
+        from mlipx.queue import resume_scheduler
+
+        if resume_scheduler(jobs_dir=self._job_manager.jobs_dir):
+            self.app.notify("Pending jobs can now be launched.", title="Queue")
+        else:
+            self.app.notify("Queue was not paused.", title="Queue")
+        self._refresh_scheduler_status()
+
+    def _selected_job_id(self) -> str | None:
+        """Return the job ID under the table cursor, if any."""
+        table = self.query_one("#jobs-table", DataTable)
+        if table.cursor_row is None or table.cursor_row >= table.row_count:
+            return None
+        row = table.get_row_at(table.cursor_row)
+        return str(row[0]) if row else None
+
+    def _pause_selected_job(self) -> None:
+        """Pause only the selected PENDING job."""
+        from mlipx.queue import pause_pending_job
+
+        job_id = self._selected_job_id()
+        if job_id is None:
+            self.app.notify("Select a pending job first.", title="Job")
+            return
+        job = self._job_manager.get_job(job_id)
+        if not job or job.get("status") != "pending":
+            self.app.notify(
+                f"Only pending jobs can be paused: {job_id}",
+                title="Job",
+                severity="error",
+            )
+            return
+        if pause_pending_job(self._job_manager.jobs_dir, job_id):
+            self.app.notify(
+                f"Paused {job_id}; other pending jobs are unchanged.", title="Job"
+            )
+            self._refresh_table()
+
+    def _resume_selected_job(self) -> None:
+        """Resume only the selected PAUSED job."""
+        from mlipx.queue import resume_paused_job
+
+        job_id = self._selected_job_id()
+        if job_id is None:
+            self.app.notify("Select a paused job first.", title="Job")
+            return
+        job = self._job_manager.get_job(job_id)
+        if not job or job.get("status") != "paused":
+            self.app.notify(
+                f"Only paused jobs can be resumed: {job_id}",
+                title="Job",
+                severity="error",
+            )
+            return
+        if resume_paused_job(self._job_manager.jobs_dir, job_id):
+            self.app.notify(f"Resumed {job_id}; it is pending again.", title="Job")
+            self._refresh_table()
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Show job detail/log on selection."""
         row_key = event.row_key
@@ -231,6 +329,18 @@ class JobsScreen(Screen):
 
     def action_refresh(self) -> None:
         self._refresh_table()
+
+    def action_pause_queue(self) -> None:
+        self._pause_queue()
+
+    def action_resume_queue(self) -> None:
+        self._resume_queue()
+
+    def action_pause_selected_job(self) -> None:
+        self._pause_selected_job()
+
+    def action_resume_selected_job(self) -> None:
+        self._resume_selected_job()
 
 
 class JobDetailScreen(Screen):

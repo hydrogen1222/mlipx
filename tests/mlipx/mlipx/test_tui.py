@@ -326,6 +326,8 @@ async def test_jobs_screen_handles_empty_store_and_remounts(tmp_path: Path) -> N
         table = jobs_screen.query_one("#jobs-table")
         assert len(table.columns) == 6
         assert table.row_count == 0
+        assert jobs_screen.query_one("#pause-job-btn")
+        assert jobs_screen.query_one("#resume-job-btn")
         assert jobs_screen._jobs_refresh_timer is not None
 
         app.pop_screen()
@@ -362,6 +364,39 @@ async def test_jobs_screen_uses_job_id_as_row_key(tmp_path: Path) -> None:
 
         table = jobs_screen.query_one("#jobs-table")
         assert [row_key.value for row_key in table.rows] == ["job-123"]
+
+
+@pytest.mark.asyncio
+async def test_jobs_screen_refresh_preserves_selected_job(tmp_path: Path) -> None:
+    """Auto-refresh must not move the cursor back to the first running job."""
+    manager = JobManager(jobs_dir=tmp_path)
+    for job_id, status, pid in (
+        ("a-running", JobStatus.RUNNING, 123),
+        ("b-pending", JobStatus.PENDING, 0),
+    ):
+        manager._write_job_state(
+            job_id,
+            status=status,
+            calc_type="sp",
+            structure="/tmp/POSCAR",
+            formula="H2",
+            natoms=2,
+            pid=pid,
+            device="cpu",
+        )
+
+    app = MlipxApp()
+    jobs_screen = JobsScreen()
+    jobs_screen._job_manager = manager
+    async with app.run_test(size=(80, 40)) as pilot:
+        await app.push_screen(jobs_screen)
+        await pilot.pause()
+
+        table = jobs_screen.query_one("#jobs-table")
+        table.move_cursor(row=1)
+        assert table.get_row_at(table.cursor_row)[0] == "b-pending"
+        jobs_screen._refresh_table()
+        assert table.get_row_at(table.cursor_row)[0] == "b-pending"
 
 
 def test_run_screen_unmount_keeps_background_job_running() -> None:

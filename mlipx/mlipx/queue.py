@@ -386,9 +386,18 @@ class QueueScheduler:
         Returns the number of jobs started in this pass.
         """
         self._reap_stale_running()
+        # Pausing the queue is deliberately different from stopping the
+        # scheduler: existing RUNNING workers continue, while PENDING jobs
+        # remain untouched until the queue is resumed.
+        if queue_paused(self.mgr.jobs_dir):
+            return 0
         launched = 0
         running = self.mgr.count_by_status("running")
         while running < self.max_concurrent:
+            # Re-check between launches so a pause request cannot cause a
+            # second pending job to start after the first one in this pass.
+            if queue_paused(self.mgr.jobs_dir):
+                break
             job = self.mgr.next_pending()
             if job is None:
                 break
@@ -424,6 +433,45 @@ class QueueScheduler:
 def scheduler_pid_file(jobs_dir: str | Path) -> Path:
     """PID file for a background scheduler, next to the jobs directory."""
     return Path(jobs_dir).parent / "scheduler.pid"
+
+
+def scheduler_pause_file(jobs_dir: str | Path) -> Path:
+    """Persistent control file that pauses only pending queue dispatch."""
+    return Path(jobs_dir).parent / "scheduler.paused"
+
+
+def queue_paused(jobs_dir: str | Path) -> bool:
+    """Return whether pending jobs are currently prevented from launching."""
+    return scheduler_pause_file(jobs_dir).exists()
+
+
+def pause_scheduler(jobs_dir: str | Path) -> bool:
+    """Pause dispatching PENDING jobs without affecting RUNNING workers."""
+    path = scheduler_pause_file(jobs_dir)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        return False
+    path.touch()
+    return True
+
+
+def resume_scheduler(jobs_dir: str | Path) -> bool:
+    """Resume dispatching PENDING jobs. Returns whether it was paused."""
+    path = scheduler_pause_file(jobs_dir)
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
+
+
+def pause_pending_job(jobs_dir: str | Path, job_id: str) -> bool:
+    """Pause one queued job without affecting other pending or running jobs."""
+    return JobManager(jobs_dir).pause_pending(job_id)
+
+
+def resume_paused_job(jobs_dir: str | Path, job_id: str) -> bool:
+    """Resume one paused job so it can re-enter normal FIFO dispatch."""
+    return JobManager(jobs_dir).resume_paused(job_id)
 
 
 def start_scheduler(
@@ -489,12 +537,12 @@ def stop_scheduler(jobs_dir: str | Path) -> bool:
 
 
 def scheduler_status(jobs_dir: str | Path) -> dict[str, Any]:
-    """Whether a background scheduler is alive, and its PID."""
+    """Whether a background scheduler is alive, paused, and its PID."""
     pid_file = scheduler_pid_file(jobs_dir)
     if not pid_file.exists():
-        return {"running": False, "pid": None}
+        return {"running": False, "pid": None, "paused": queue_paused(jobs_dir)}
     pid_text = pid_file.read_text(encoding="utf-8").strip()
     if not pid_text.isdigit():
-        return {"running": False, "pid": None}
+        return {"running": False, "pid": None, "paused": queue_paused(jobs_dir)}
     pid = int(pid_text)
-    return {"running": _pid_alive(pid), "pid": pid}
+    return {"running": _pid_alive(pid), "pid": pid, "paused": queue_paused(jobs_dir)}

@@ -764,6 +764,24 @@ Examples:
         "status",
         help="Show queue and scheduler status",
     )
+    queue_pause = queue_sub.add_parser(
+        "pause",
+        help="Pause one pending job, or the whole pending queue",
+    )
+    queue_pause.add_argument(
+        "job_id",
+        nargs="?",
+        help="Specific pending job ID; omit to pause all pending dispatch",
+    )
+    queue_resume = queue_sub.add_parser(
+        "resume",
+        help="Resume one paused job, or the whole pending queue",
+    )
+    queue_resume.add_argument(
+        "job_id",
+        nargs="?",
+        help="Specific paused job ID; omit to resume all pending dispatch",
+    )
 
     # doctor command
     doctor_parser = subparsers.add_parser(
@@ -1386,6 +1404,10 @@ def cmd_queue(args: argparse.Namespace) -> int:
     from mlipx.jobs import JobManager  # noqa: PLC0415
     from mlipx.queue import (  # noqa: PLC0415
         QueueScheduler,
+        pause_pending_job,
+        pause_scheduler,
+        resume_paused_job,
+        resume_scheduler,
         scheduler_status,
         start_scheduler,
         stop_scheduler,
@@ -1446,15 +1468,67 @@ def cmd_queue(args: argparse.Namespace) -> int:
             print("No scheduler was running.")
         return 0
 
+    if sub == "pause":
+        if args.job_id:
+            mgr = JobManager()
+            job = mgr.get_job(args.job_id)
+            if job is None:
+                print(f"Error: job not found: {args.job_id}")
+                return 1
+            if job.get("status") != "pending":
+                print(
+                    f"Error: job {args.job_id} has status {job.get('status')!r}; "
+                    "only pending jobs can be paused."
+                )
+                return 1
+            pause_pending_job(mgr.jobs_dir, args.job_id)
+            print(f"Job paused: {args.job_id}. Other pending jobs are unchanged.")
+            return 0
+        paused = pause_scheduler(jobs_dir=JobManager().jobs_dir)
+        if paused:
+            print("Queue paused: running jobs continue; pending jobs will wait.")
+        else:
+            print("Queue is already paused.")
+        return 0
+
+    if sub == "resume":
+        if args.job_id:
+            mgr = JobManager()
+            job = mgr.get_job(args.job_id)
+            if job is None:
+                print(f"Error: job not found: {args.job_id}")
+                return 1
+            if job.get("status") != "paused":
+                print(
+                    f"Error: job {args.job_id} has status {job.get('status')!r}; "
+                    "only paused jobs can be resumed."
+                )
+                return 1
+            resume_paused_job(mgr.jobs_dir, args.job_id)
+            print(f"Job resumed: {args.job_id}. It re-enters the pending queue.")
+            return 0
+        resumed = resume_scheduler(jobs_dir=JobManager().jobs_dir)
+        if resumed:
+            print("Queue resumed: pending jobs may now be launched.")
+        else:
+            print("Queue was not paused.")
+        return 0
+
     # sub == "status"
     mgr = JobManager()
     summary = mgr.queue_summary()
     status = scheduler_status(jobs_dir=mgr.jobs_dir)
-    if status["running"]:
+    if status["running"] and status.get("paused"):
+        print(f"Scheduler: PAUSED (PID {status['pid']}; running jobs continue)")
+    elif status["running"]:
         print(f"Scheduler: RUNNING (PID {status['pid']})")
     else:
-        print("Scheduler: not running")
-    print(f"Queued:     {summary['pending']} pending, {summary['running']} running")
+        suffix = " (queue paused)" if status.get("paused") else ""
+        print(f"Scheduler: not running{suffix}")
+    print(
+        f"Queued:     {summary['pending']} pending, {summary['paused']} paused, "
+        f"{summary['running']} running"
+    )
     print(
         f"Finished:   {summary['done']} done, {summary['failed']} failed, ",
         f"{summary['cancelled']} cancelled",

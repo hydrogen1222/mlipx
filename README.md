@@ -166,6 +166,8 @@ uv run mlipx queue submit tasks.json
 # 3. Run the scheduler (background; max_concurrent from the task file)
 uv run mlipx queue start            # stop with: mlipx queue stop
 uv run mlipx queue status           # queued / running / finished counts
+uv run mlipx queue pause <job-id>   # hold one pending job
+uv run mlipx queue resume <job-id>  # resume one paused job
 
 # Or run the scheduler in the foreground of a terminal
 uv run mlipx queue start --foreground
@@ -173,7 +175,10 @@ uv run mlipx queue start --foreground
 
 The TUI queues every calculation it submits (visible as `pending` in the
 Jobs screen) and provides **Start/Stop Scheduler** controls plus a concurrency
-setting for multi-GPU machines. `mlipx jobs` / `mlipx kill` / `mlipx clean`
+setting for multi-GPU machines. Select a pending row and use **Pause Job** or
+**Resume Job** (also `P`/`U`) to control one task; **Pause Queue** and
+**Resume Queue** remain available for the whole pending queue. Running jobs are
+never affected. `mlipx jobs` / `mlipx kill` / `mlipx clean`
 manage individual jobs; `mlipx convert-xdatcar` re-emits a trajectory in the
 exact standard VASP XDATCAR layout (unwrapped coordinates).
 

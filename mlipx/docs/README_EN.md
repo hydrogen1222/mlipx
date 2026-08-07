@@ -1081,6 +1081,21 @@ mlipx clean
 
 Removes state files for jobs that are done, failed, or cancelled. Running jobs are preserved.
 
+##### `mlipx queue pause/resume` — Pause/Resume an Individual Pending Job
+
+```bash
+mlipx queue pause <job-id>     # pause only the selected PENDING job
+mlipx queue status
+mlipx queue resume <job-id>    # resume that job
+```
+
+The selected job becomes `paused`, so the scheduler skips it and can continue
+with other `pending` jobs. The current RUNNING job and other pending jobs are
+unaffected. After resuming, the job returns to the queue and participates in
+FIFO dispatch by its original submission time. Omitting `<job-id>` still pauses
+or resumes the whole pending queue; this differs from `mlipx queue stop`, which
+stops the scheduler process itself.
+
 ##### `mlipx tui` — Launch TUI
 
 ```
@@ -1106,7 +1121,9 @@ The TUI is built on [Textual](https://textual.textualize.io/) and provides an in
 | `PgUp` / `PgDn` | Page up/down in scrollable areas |
 | `C` | Cancel selected job (Jobs screen) |
 | `D` | Delete job record (Jobs screen) |
+| `P` | Pause selected pending job (Jobs screen) |
 | `R` | Refresh job list (Jobs screen) |
+| `U` | Resume selected paused job (Jobs screen) |
 
 #### Screens
 
@@ -1146,6 +1163,8 @@ feedback:
 - ● Running | ✓ Done | ✗ Failed | ⊘ Cancelled
 - Press Enter on a job to view its log output
 - Auto-refreshes every 2 seconds
+- Select a job in the Jobs table and use **Pause Job** / **Resume Job**, or press `P` / `U`; only that pending/paused job is affected.
+- **Pause Queue** / **Resume Queue** remain available for pausing/resuming the entire pending queue. Running jobs are unaffected.
 
 ### 6.3 Python API
 

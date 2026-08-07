@@ -21,6 +21,22 @@ def test_parser_has_all_subcommands() -> None:
     assert exc.value.code == 0
 
 
+@pytest.mark.parametrize("queue_command", ["pause", "resume", "status"])
+def test_queue_control_commands_parse(queue_command: str) -> None:
+    parser = create_parser()
+    args = parser.parse_args(["queue", queue_command])
+    assert args.command == "queue"
+    assert args.queue_command == queue_command
+
+
+@pytest.mark.parametrize("queue_command", ["pause", "resume"])
+def test_queue_job_control_accepts_job_id(queue_command: str) -> None:
+    parser = create_parser()
+    args = parser.parse_args(["queue", queue_command, "job-2"])
+    assert args.queue_command == queue_command
+    assert args.job_id == "job-2"
+
+
 def test_sp_parser_accepts_known_flags() -> None:
     parser = create_parser()
     args = parser.parse_args([
