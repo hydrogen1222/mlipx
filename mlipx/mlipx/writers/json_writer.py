@@ -206,15 +206,31 @@ class JsonWriter:
                 "fmax_threshold": results.get("fmax"),
             }
         elif mode == "md":
-            data["calculation"]["md"] = {
+            md_data = {
                 "steps": results.get("md_steps"),
                 "timestep_fs": results.get("timestep_fs"),
                 "save_interval_steps": results.get("save_interval"),
-                "temperature": results.get("temperature"),
+                "temperature": results.get("target_temperature"),
+                "final_temperature": results.get("temperature"),
                 "ensemble": results.get("ensemble"),
+                "thermostat": results.get("thermostat"),
+                "seed": results.get("seed"),
+                "velocity_policy": results.get("velocity_policy"),
                 "trajectory_path": results.get("trajectory_path"),
                 "thermodynamics_path": results.get("md_csv_path"),
             }
+            provenance = results.get("md_provenance") or {}
+            for key in (
+                "friction_fs^-1",
+                "approx_velocity_damping_time_ps",
+                "bussi_tau_fs",
+                "nhc_tdamp_fs",
+                "nhc_tchain",
+                "nhc_tloop",
+            ):
+                if key in provenance:
+                    md_data[key] = provenance[key]
+            data["calculation"]["md"] = md_data
 
         return data
 

@@ -196,6 +196,52 @@ class TestCalculationEngineSetup:
 
         assert create.call_args.kwargs["cpu_threads"] == 2
 
+    def test_engine_forwards_all_thermostat_options_to_md_runner(self, tmp_path):
+        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+
+        config = EngineConfig(
+            calc_type="md",
+            model_path=Path("model.pt"),
+            output_dir=tmp_path,
+            run_options={
+                "thermostat": "NHC",
+                "friction": 0.002,
+                "bussi_tau": 800.0,
+                "nhc_tdamp": 120.0,
+                "nhc_tchain": 4,
+                "nhc_tloop": 2,
+                "pre_relax": False,
+            },
+        )
+        runner = CalculationEngine.from_config(config)._create_runner(Mock())
+
+        assert runner.thermostat == "nhc"
+        assert runner.friction > 0
+        assert runner.bussi_tau > 0
+        assert runner.nhc_tdamp > 0
+        assert runner.nhc_tchain == 4
+        assert runner.nhc_tloop == 2
+
+    @pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
+    def test_legacy_md_defaults_remain_nvt_langevin_for_every_backend(
+        self, model_type
+    ):
+        from ase import units
+        from mlipx.config.resolver import resolve_config
+        from mlipx.engine import CalculationEngine, EngineConfig
+
+        resolved = resolve_config(
+            calc_type="md",
+            cli={"model_type": model_type, "model_path": "model"},
+        )
+        runner = CalculationEngine.from_config(
+            EngineConfig.from_resolved(resolved)
+        )._create_runner(Mock())
+
+        assert runner.ensemble == "nvt"
+        assert runner.thermostat == "langevin"
+        assert runner.friction * units.fs == pytest.approx(0.001)
+
 
 def test_engine_creates_live_log_and_tail_hint(tmp_path):
     from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
@@ -228,6 +274,50 @@ def test_engine_creates_live_log_and_tail_hint(tmp_path):
     assert any("Follow live output:" in message for message in messages)
     runner.execute.assert_called_once()
     assert runner.execute.call_args.kwargs["started_at"] == 123.0
+
+
+def test_python_api_forwards_all_thermostat_options(monkeypatch):
+    from ase import Atoms
+    from mlipx import api
+
+    captured = {}
+
+    def fake_resolve(calc_type, model_path, cli, *args, **kwargs):
+        captured.update(cli)
+        return object()
+
+    class DummyEngine:
+        def run(self, atoms, **kwargs):
+            return {"ok": True}
+
+    monkeypatch.setattr(api, "_api_resolve", fake_resolve)
+    monkeypatch.setattr(
+        api.CalculationEngine,
+        "from_config",
+        lambda config: DummyEngine(),
+    )
+
+    result = api.run_md(
+        Atoms("Ar", positions=[[0.0, 0.0, 0.0]]),
+        "model.pt",
+        thermostat="NHC",
+        friction=0.002,
+        bussi_tau=800.0,
+        nhc_tdamp=120.0,
+        nhc_tchain=4,
+        nhc_tloop=2,
+        verbose=False,
+    )
+
+    assert result == {"ok": True}
+    assert captured.items() >= {
+        "thermostat": "NHC",
+        "friction": 0.002,
+        "bussi_tau": 800.0,
+        "nhc_tdamp": 120.0,
+        "nhc_tchain": 4,
+        "nhc_tloop": 2,
+    }.items()
 
 
 class TestMaceDtypeDefaults:

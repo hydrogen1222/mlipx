@@ -113,8 +113,9 @@ Examples:
             type=int,
             metavar="N",
             default=None,
-            help="CPU intra-op threads (PyTorch for UMA/MACE/DPA, TensorFlow "
-            "for GRACE; default: backend/system).",
+            help="CPU intra-op threads (PyTorch for UMA/MACE and DPA PyTorch "
+            "models; TensorFlow for GRACE; DPA .pb uses its TensorFlow backend "
+            "settings; default: backend/system).",
         )
         p.add_argument(
             "--activation-checkpointing",
@@ -374,10 +375,41 @@ Examples:
         help="Number of MD steps (default: 1000).",
     )
     md_parser.add_argument(
+        "--thermostat",
+        type=str,
+        default=None,
+        choices=["LANGEVIN", "BUSSI", "NHC"],
+        help="NVT thermostat (default: LANGEVIN).",
+    )
+    md_parser.add_argument(
         "--friction",
         type=float,
         default=None,
-        help="Friction coefficient for NVT (default: 0.001).",
+        help="Langevin friction coefficient in fs^-1 (default: 0.001).",
+    )
+    md_parser.add_argument(
+        "--bussi-tau",
+        type=float,
+        default=None,
+        help="Bussi/CSVR coupling time in fs (default: 1000.0).",
+    )
+    md_parser.add_argument(
+        "--nhc-tdamp",
+        type=float,
+        default=None,
+        help="Nose-Hoover-chain damping time in fs (default: 100.0).",
+    )
+    md_parser.add_argument(
+        "--nhc-tchain",
+        type=int,
+        default=None,
+        help="Nose-Hoover chain length (default: 3).",
+    )
+    md_parser.add_argument(
+        "--nhc-tloop",
+        type=int,
+        default=None,
+        help="Nose-Hoover thermostat substeps (default: 1).",
     )
     md_parser.add_argument(
         "--save-interval",
@@ -891,7 +923,12 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
             "ensemble",
             "timestep",
             "steps",
+            "thermostat",
             "friction",
+            "bussi_tau",
+            "nhc_tdamp",
+            "nhc_tchain",
+            "nhc_tloop",
             "save_interval",
             "pre_relax",
             "pre_relax_steps",

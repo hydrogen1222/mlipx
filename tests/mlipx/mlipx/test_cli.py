@@ -109,7 +109,12 @@ def test_md_parser_accepts_ensemble_flags() -> None:
         "--temp", "500",
         "--timestep", "2.0",
         "--steps", "5000",
+        "--thermostat", "NHC",
         "--friction", "0.005",
+        "--bussi-tau", "800",
+        "--nhc-tdamp", "120",
+        "--nhc-tchain", "4",
+        "--nhc-tloop", "2",
         "--save-interval", "25",
         "--seed", "42",
         "--velocity-policy", "initialize",
@@ -121,11 +126,27 @@ def test_md_parser_accepts_ensemble_flags() -> None:
     assert args.temp == 500.0
     assert args.timestep == 2.0
     assert args.steps == 5000
+    assert args.thermostat == "NHC"
     assert args.friction == 0.005
+    assert args.bussi_tau == 800.0
+    assert args.nhc_tdamp == 120.0
+    assert args.nhc_tchain == 4
+    assert args.nhc_tloop == 2
     assert args.save_interval == 25
     assert args.seed == 42
     assert args.velocity_policy == "initialize"
     assert args.fmax_abort == 15.0
+
+
+def test_md_thermostat_flags_default_to_resolver() -> None:
+    parser = create_parser()
+    args = parser.parse_args(["md", "struct.xyz", "--model", "model.pt"])
+    assert args.thermostat is None
+    assert args.friction is None
+    assert args.bussi_tau is None
+    assert args.nhc_tdamp is None
+    assert args.nhc_tchain is None
+    assert args.nhc_tloop is None
 
 
 def test_batch_parser_accepts_pattern_and_workers() -> None:

@@ -815,11 +815,13 @@ mlipx opt structure.cif \
 
 ### 5.3 分子动力学 (MD)
 
-模拟原子在给定温度下的时间演化。支持两种系综：
+模拟原子在给定温度下的时间演化。支持以下方法：
 
 | 系综 | 积分器 | 描述 |
 |------|--------|------|
-| NVT | Langevin | 恒粒子数、体积、温度（正则系综） |
+| NVT | Langevin | 随机 Langevin 恒温器 |
+| NVT | Bussi / CSVR | 随机速度重标度 |
+| NVT | Nosé-Hoover Chain | 确定性链式恒温器 |
 | NVE | Velocity Verlet | 恒粒子数、体积、能量（微正则系综） |
 
 **预弛豫：** 在开始 MD 前，mlipx 可执行短程、仅优化原子位置的 FIRE
@@ -865,13 +867,24 @@ mlipx md CONTCAR \
 | `--temp` | 300 | 温度 (K) |
 | `--timestep` | 1.0 | 时间步长 (fs) |
 | `--steps` | 1000 | MD 步数 |
-| `--friction` | 0.001 | 摩擦系数（仅 NVT，fs⁻¹） |
+| `--thermostat` | LANGEVIN | NVT 使用 `LANGEVIN`、`BUSSI` 或 `NHC` |
+| `--friction` | 0.001 | Langevin 摩擦系数（fs⁻¹） |
+| `--bussi-tau` | 1000.0 | Bussi/CSVR 耦合时间（fs） |
+| `--nhc-tdamp` | 100.0 | NHC 阻尼时间（fs） |
+| `--nhc-tchain` | 3 | NHC 链长度 |
+| `--nhc-tloop` | 1 | NHC 恒温器子步数 |
 | `--save-interval` | 10 | 每隔 N 步保存轨迹 |
 | `--seed` | 自动生成并记录 | 复现初始速度与 NVT 随机力的随机种子 |
 | `--velocity-policy` | auto | `auto`、`initialize` 或 `preserve` 已有动量 |
 | `--pre-relax` | NVT 开 / NVE 关 | MD 前预弛豫（`--no-pre-relax` 关闭） |
 | `--pre-relax-steps` | 50 | 预弛豫最大步数 |
 | `--pre-relax-fmax` | 0.1 | 预弛豫力收敛阈值 (eV/Å) |
+
+恒温器选择和耦合强度可能影响动力学与输运性质。面向输运的计算应检查恒温器
+敏感性；也可以先独立平衡，再执行 NVE 生产段。
+
+真实后端接口 smoke test 默认使用 CPU、4 个原子、每种方法 5 步。请分别用
+对应隔离环境运行 `mlipx/examples/smoke_md_backends.py`。
 
 **MD 输出目录：**
 
@@ -988,7 +1001,12 @@ mlipx md STRUCTURE --model MODEL [选项]
   --temp TEMP           温度 (K) [默认: 300]
   --timestep DT         时间步长 (fs) [默认: 1.0]
   --steps N             MD 步数 [默认: 1000]
-  --friction FRICTION   摩擦系数（NVT）[默认: 0.001]
+  --thermostat TYPE     LANGEVIN|BUSSI|NHC [默认: LANGEVIN]
+  --friction VALUE      Langevin 摩擦系数 fs^-1 [默认: 0.001]
+  --bussi-tau FS        Bussi/CSVR 耦合时间 [默认: 1000.0]
+  --nhc-tdamp FS        NHC 阻尼时间 [默认: 100.0]
+  --nhc-tchain N        NHC 链长度 [默认: 3]
+  --nhc-tloop N         NHC 恒温器子步数 [默认: 1]
   --save-interval N     轨迹保存间隔 [默认: 10]
   --seed N              可复现 MD 随机种子 [默认: 自动生成并记录]
   --velocity-policy P   auto|initialize|preserve [默认: auto]
@@ -1104,7 +1122,8 @@ Batch 当前仅能通过 CLI 运行。
 （`cpu`、`cuda` 或 `cuda:N`）。其中 **Backend & Resource Options**
 （后端与资源选项）直接提供：
 
-- 全部引擎的 CPU 线程数（UMA/MACE/DPA 为 PyTorch，GRACE 为 TensorFlow）
+- 全部引擎的 CPU 线程数（UMA/MACE 与 DPA `.pt` 模型为 PyTorch，GRACE 为
+  TensorFlow；DPA `.pb` 使用 DeepMD TensorFlow 后端设置）
 - UMA 的推理模式和激活检查点
 - MACE 精度，以及 MACE/DPA 的模型 head 或分支
 - 在 `omol` / `molecule` 任务下设置总电荷和自旋；UMA 会明确显示自旋多重度语义
@@ -1256,7 +1275,12 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `TEMPERATURE` | 浮点数 | `300.0` | 温度 (K) |
 | `TIMESTEP` | 浮点数 | `1.0` | 时间步长 (fs) |
 | `STEPS` | 整数 | `10000` | MD 步数 |
-| `FRICTION` | 浮点数 | `0.001` | 摩擦系数 |
+| `THERMOSTAT` | 字符串 | `LANGEVIN` | NVT 恒温器：`LANGEVIN`、`BUSSI`、`NHC` |
+| `FRICTION` | 浮点数 | `0.001` | Langevin 摩擦系数（fs⁻¹） |
+| `BUSSI_TAU` | 浮点数 | `1000.0` | Bussi/CSVR 耦合时间（fs） |
+| `NHC_TDAMP` | 浮点数 | `100.0` | NHC 阻尼时间（fs） |
+| `NHC_TCHAIN` | 整数 | `3` | NHC 链长度 |
+| `NHC_TLOOP` | 整数 | `1` | NHC 恒温器子步数 |
 | `SAVE_INTERVAL` | 整数 | `10` | 轨迹保存间隔 |
 | `PRE_RELAX` | 布尔 | NVT=`.TRUE.`/NVE=`.FALSE.` | MD 前预弛豫（系综相关默认值） |
 | `PRE_RELAX_STEPS` | 整数 | `50` | 预弛豫最大步数 |
@@ -1299,7 +1323,12 @@ MD_ENSEMBLE = NVT
 TEMPERATURE = 300.0
 TIMESTEP = 1.0
 STEPS = 10000
+THERMOSTAT = LANGEVIN
 FRICTION = 0.001
+BUSSI_TAU = 1000.0
+NHC_TDAMP = 100.0
+NHC_TCHAIN = 3
+NHC_TLOOP = 1
 SAVE_INTERVAL = 10
 ```
 
@@ -1410,6 +1439,10 @@ UMA 模型在不同数据集上训练；每个任务对应特定领域：
 | `odac` | MOFs | 金属有机框架 | 可选 | ✓ | 气体存储、分离 |
 | `omc` | 分子晶体 | 有机晶体 | 可选 | ✓ | 药物、有机电子学 |
 
+当前安装的 `fairchem-core 0.1.dev1316` 以其 `UMATask` API 为准，其中不包含
+OC22；因此 mlipx 不会在 TUI 暴露随后会被计算器拒绝的 `oc22`。加载 checkpoint
+时还会再次按该 checkpoint 的实际数据集检查 task。
+
 **分子体系（omol）重要提示：** UMA 的 `omol` 任务需要总电荷与自旋多重度。若未
 设置，mlipx 自动填 `charge=0`、`spin=1`（单重态）。TUI 会在选择 `omol` 后显示
 这两个字段；CLI/INCAR 可直接设置：
@@ -1490,8 +1523,9 @@ mlipx sp structure.cif --model uma-s-1.pt --cpu-threads 4
 ```
 
 TUI 中填写 **CPU Threads** 即可；留空表示让后端/系统自行决定。mlipx 会把
-该值映射到 UMA/MACE/DPA 的 PyTorch intra-op 线程或 GRACE 的 TensorFlow
-intra-op 线程。旧写法 `--torch-num-threads` 继续作为兼容别名；
+该值映射到 UMA/MACE 和 DPA PyTorch 模型的 PyTorch intra-op 线程，或
+GRACE 的 TensorFlow intra-op 线程。DPA 的旧 TensorFlow `.pb` 模型使用
+DeepMD TensorFlow 后端自身的线程设置。旧写法 `--torch-num-threads` 继续作为兼容别名；
 `OMP_NUM_THREADS=4` 仍可作为 PyTorch 后端的环境级替代。
 
 ### 11.2 GPU 显存

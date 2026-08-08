@@ -837,11 +837,13 @@ mlipx opt structure.cif \
 
 ### 5.3 Molecular Dynamics (MD)
 
-Simulates the time evolution of atoms at a given temperature. Supports two ensembles:
+Simulates the time evolution of atoms at a given temperature. Supports these methods:
 
 | Ensemble | Integrator | Description |
 |----------|-----------|-------------|
-| NVT | Langevin | Constant particle number, volume, temperature (canonical) |
+| NVT | Langevin | Stochastic Langevin thermostat |
+| NVT | Bussi / CSVR | Stochastic velocity rescaling |
+| NVT | Nosé-Hoover Chain | Deterministic chain thermostat |
 | NVE | Velocity Verlet | Constant particle number, volume, energy (microcanonical) |
 
 **Pre-relaxation:** Before starting MD, mlipx can perform a short,
@@ -890,13 +892,32 @@ mlipx md CONTCAR \
 | `--temp` | 300 | Temperature (K) |
 | `--timestep` | 1.0 | Time step (fs) |
 | `--steps` | 1000 | Number of MD steps |
-| `--friction` | 0.001 | Friction coefficient (NVT only, fs⁻¹) |
+| `--thermostat` | LANGEVIN | `LANGEVIN`, `BUSSI`, or `NHC` for NVT |
+| `--friction` | 0.001 | Langevin friction (fs⁻¹) |
+| `--bussi-tau` | 1000.0 | Bussi/CSVR coupling time (fs) |
+| `--nhc-tdamp` | 100.0 | NHC damping time (fs) |
+| `--nhc-tchain` | 3 | NHC chain length |
+| `--nhc-tloop` | 1 | NHC thermostat substeps |
 | `--save-interval` | 10 | Save trajectory every N steps |
 | `--seed` | generated and recorded | Random seed for reproducible velocity initialization and NVT noise |
 | `--velocity-policy` | auto | `auto`, `initialize`, or `preserve` stored momenta |
 | `--pre-relax` | NVT on / NVE off | Pre-relax before MD (`--no-pre-relax` to disable) |
 | `--pre-relax-steps` | 50 | Max pre-relaxation steps |
 | `--pre-relax-fmax` | 0.1 | Pre-relaxation force threshold (eV/Å) |
+
+Thermostat choice and coupling strength may influence dynamical and transport
+properties. For transport-oriented calculations, thermostat sensitivity should
+be checked. NVE production after a separate equilibration run remains available.
+
+The real-backend interface smoke test uses four atoms, CPU by default, and
+5 steps per method. Run it with each isolated environment, for example:
+
+```bash
+.venv/bin/python mlipx/examples/smoke_md_backends.py --backend uma --model UMA.pt
+.venv-mace/bin/python mlipx/examples/smoke_md_backends.py --backend mace --model MACE.model
+.venv-dpa/bin/python mlipx/examples/smoke_md_backends.py --backend dpa --model DPA.pt
+.venv-grace/bin/python mlipx/examples/smoke_md_backends.py --backend grace --model GRACE_SAVEDMODEL
+```
 
 **MD output layout:**
 
@@ -1015,7 +1036,12 @@ mlipx md STRUCTURE --model MODEL [options]
   --temp TEMP           Temperature in Kelvin [default: 300]
   --timestep DT         Time step in fs [default: 1.0]
   --steps N             Number of MD steps [default: 1000]
-  --friction FRICTION   Friction coefficient for NVT [default: 0.001]
+  --thermostat TYPE     LANGEVIN|BUSSI|NHC [default: LANGEVIN]
+  --friction VALUE      Langevin friction in fs^-1 [default: 0.001]
+  --bussi-tau FS        Bussi/CSVR coupling time [default: 1000.0]
+  --nhc-tdamp FS        NHC damping time [default: 100.0]
+  --nhc-tchain N        NHC chain length [default: 3]
+  --nhc-tloop N         NHC thermostat substeps [default: 1]
   --save-interval N     Save trajectory every N steps [default: 10]
   --seed N              Reproducible MD seed [default: generated and recorded]
   --velocity-policy P   auto|initialize|preserve [default: auto]
@@ -1133,7 +1159,8 @@ CLI-only.
 **Configuration** — Fill in paths, engine/task and a device string (`cpu`,
 `cuda`, or `cuda:N`). The **Backend & Resource Options** section exposes:
 
-- CPU threads for every engine (PyTorch for UMA/MACE/DPA, TensorFlow for GRACE)
+- CPU threads for every engine (PyTorch for UMA/MACE and DPA `.pt` models,
+  TensorFlow for GRACE; DPA `.pb` uses its DeepMD TensorFlow settings)
 - UMA inference mode and activation checkpointing
 - MACE precision and MACE/DPA model head or branch
 - Total charge and spin for `omol` / `molecule`; UMA labels spin as multiplicity
@@ -1289,7 +1316,12 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `TEMPERATURE` | float | `300.0` | Temperature (K) |
 | `TIMESTEP` | float | `1.0` | Time step (fs) |
 | `STEPS` | int | `10000` | Number of MD steps |
-| `FRICTION` | float | `0.001` | Friction coefficient |
+| `THERMOSTAT` | string | `LANGEVIN` | NVT thermostat: `LANGEVIN`, `BUSSI`, `NHC` |
+| `FRICTION` | float | `0.001` | Langevin friction (fs⁻¹) |
+| `BUSSI_TAU` | float | `1000.0` | Bussi/CSVR coupling time (fs) |
+| `NHC_TDAMP` | float | `100.0` | NHC damping time (fs) |
+| `NHC_TCHAIN` | int | `3` | NHC chain length |
+| `NHC_TLOOP` | int | `1` | NHC thermostat substeps |
 | `SAVE_INTERVAL` | int | `10` | Trajectory save interval |
 | `PRE_RELAX` | bool | NVT=`.TRUE.`/NVE=`.FALSE.` | Pre-relax before MD (ensemble-aware default) |
 | `PRE_RELAX_STEPS` | int | `50` | Max pre-relaxation steps |
@@ -1332,7 +1364,12 @@ MD_ENSEMBLE = NVT
 TEMPERATURE = 300.0
 TIMESTEP = 1.0
 STEPS = 10000
+THERMOSTAT = LANGEVIN
 FRICTION = 0.001
+BUSSI_TAU = 1000.0
+NHC_TDAMP = 100.0
+NHC_TCHAIN = 3
+NHC_TLOOP = 1
 SAVE_INTERVAL = 10
 ```
 
@@ -1537,6 +1574,11 @@ UMA models are trained on different datasets; each task corresponds to a specifi
 | `odac` | MOFs | Metal-organic frameworks | Optional | ✓ | Gas storage, separation |
 | `omc` | Molecular Crystals | Organic crystals | Optional | ✓ | Pharmaceuticals, organic electronics |
 
+This installation follows `fairchem-core 0.1.dev1316`'s `UMATask` API, which
+does not expose OC22. mlipx therefore rejects `--task oc22` instead of showing
+a TUI choice that the installed calculator cannot accept. Checkpoint-specific
+task availability is also validated when the checkpoint is loaded.
+
 **Important for molecular systems (omol):** UMA's `omol` task needs total charge
 and spin multiplicity. When unset, mlipx fills `charge=0` and `spin=1`
 (singlet). The TUI shows both fields after selecting `omol`; CLI/INCAR can set
@@ -1660,7 +1702,8 @@ mlipx sp structure.cif --model uma-s-1.pt --cpu-threads 4
 
 The equivalent TUI field is **CPU Threads**. Leaving it blank lets the
 backend/system choose. mlipx maps the value to PyTorch intra-op threads for
-UMA/MACE/DPA and TensorFlow intra-op threads for GRACE. The historical
+UMA/MACE and DPA PyTorch models, and TensorFlow intra-op threads for GRACE.
+Legacy DPA TensorFlow `.pb` models use their DeepMD TensorFlow backend settings. The historical
 `--torch-num-threads` spelling remains a compatible CLI alias.
 `OMP_NUM_THREADS=4` remains an environment-level alternative for PyTorch
 backends.

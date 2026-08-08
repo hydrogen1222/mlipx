@@ -195,10 +195,11 @@ class _FiniteCalc(Calculator):
 class _RunWrapper:
     """Minimal BaseMLIPCalculator stub that returns a real ASE calculator."""
 
-    def __init__(self, calc, task="bulk", has_stress=True):
+    def __init__(self, calc, task="bulk", has_stress=True, model_type="stub"):
         self._calc = calc
         self._task = task
         self._has_stress = has_stress
+        self._model_type = model_type
 
     def get_calculator(self):
         return self._calc
@@ -216,7 +217,172 @@ class _RunWrapper:
         return list(self._calc.implemented_properties)
 
     def info(self):
-        return {"model_type": "stub", "task": self._task}
+        return {"model_type": self._model_type, "task": self._task}
+
+
+@pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
+@pytest.mark.parametrize(
+    ("ensemble", "thermostat"),
+    [
+        ("NVE", "LANGEVIN"),
+        ("NVT", "LANGEVIN"),
+        ("NVT", "BUSSI"),
+        ("NVT", "NHC"),
+    ],
+)
+def test_all_backends_share_every_md_integrator_path(
+    tmp_path, model_type, ensemble, thermostat
+):
+    """Level-1 matrix: each backend wrapper can drive each ASE MD method."""
+    out = tmp_path / f"{model_type}-{ensemble}-{thermostat}"
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc(), model_type=model_type),
+        ensemble=ensemble,
+        thermostat=thermostat,
+        temperature=300.0,
+        timestep=0.25,
+        steps=2,
+        save_interval=1,
+        output_dir=out,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
+    )
+
+    results = runner.run(_bulk_atoms(n=4))
+
+    assert np.isfinite(results["energy"])
+    assert np.isfinite(results["temperature"])
+    assert len(Trajectory(out / "raw" / "trajectory.traj")) == 3
+    assert (out / "vasp" / "XDATCAR").is_file()
+    assert results["thermostat"] == (
+        thermostat if ensemble == "NVT" else None
+    )
+
+
+@pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
+def test_all_backends_support_basic_molecule_md_path(tmp_path, model_type):
+    atoms = _bulk_atoms(n=4)
+    atoms.pbc = False
+    runner = MDRunner(
+        _RunWrapper(
+            _FiniteCalc(), task="molecule", has_stress=False, model_type=model_type
+        ),
+        ensemble="NVE",
+        temperature=300.0,
+        steps=1,
+        save_interval=1,
+        output_dir=tmp_path / model_type,
+        pre_relax=False,
+        verbose=False,
+        seed=7,
+    )
+
+    results = runner.run(atoms)
+
+    assert np.isfinite(results["energy"])
+    assert results["stress"] is None
+
+
+@pytest.mark.parametrize(
+    ("thermostat", "expected_key", "inactive_keys"),
+    [
+        (
+            "LANGEVIN",
+            "friction_fs^-1",
+            {"bussi_tau_fs", "nhc_tdamp_fs", "nhc_tchain", "nhc_tloop"},
+        ),
+        (
+            "BUSSI",
+            "bussi_tau_fs",
+            {
+                "friction_fs^-1",
+                "approx_velocity_damping_time_ps",
+                "nhc_tdamp_fs",
+                "nhc_tchain",
+                "nhc_tloop",
+            },
+        ),
+        (
+            "NHC",
+            "nhc_tdamp_fs",
+            {"friction_fs^-1", "approx_velocity_damping_time_ps", "bussi_tau_fs"},
+        ),
+    ],
+)
+def test_md_provenance_records_only_active_thermostat_parameters(
+    tmp_path, thermostat, expected_key, inactive_keys
+):
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        thermostat=thermostat,
+        steps=0,
+        output_dir=tmp_path / thermostat,
+        pre_relax=False,
+        verbose=False,
+        seed=12,
+        velocity_policy="initialize",
+    )
+    results = runner.run(_bulk_atoms(n=4))
+    provenance = results["md_provenance"]
+
+    assert provenance["thermostat"] == thermostat
+    assert provenance["seed"] == 12
+    assert provenance["velocity_policy"] == "initialize"
+    assert expected_key in provenance
+    assert inactive_keys.isdisjoint(provenance)
+
+    json_data = json.loads(
+        (tmp_path / thermostat / "raw" / "mlipx_results.json").read_text()
+    )
+    md_data = json_data["calculation"]["md"]
+    assert md_data["thermostat"] == thermostat
+    assert expected_key in md_data
+    assert inactive_keys.isdisjoint(md_data)
+
+
+def test_nve_provenance_has_null_thermostat_and_no_coupling_parameters(tmp_path):
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        ensemble="NVE",
+        thermostat="not-used",
+        friction=-1.0,
+        bussi_tau=-1.0,
+        nhc_tdamp=-1.0,
+        nhc_tchain=0,
+        nhc_tloop=0,
+        steps=0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=9,
+    )
+    results = runner.run(_bulk_atoms(n=4))
+
+    assert results["md_provenance"]["thermostat"] is None
+    assert set(results["md_provenance"]) == {
+        "ensemble",
+        "thermostat",
+        "temperature",
+        "timestep",
+        "steps",
+        "seed",
+        "velocity_policy",
+    }
+
+
+def test_bussi_zero_kinetic_energy_has_mlipx_error(tmp_path):
+    atoms = _bulk_atoms(n=4)
+    atoms.set_momenta(np.zeros((len(atoms), 3)))
+    runner = MDRunner(
+        _CalculatorStub(),
+        thermostat="BUSSI",
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+    )
+    with pytest.raises(ValueError, match="Bussi/CSVR requires non-zero"):
+        runner._build_dynamics(atoms)
 
 
 def _bulk_atoms(n=8):
@@ -416,6 +582,11 @@ def test_md_uses_explicit_com_constraint_for_consistent_temperature_dof(tmp_path
         ({"steps": -1}, "steps"),
         ({"save_interval": 0}, "save_interval"),
         ({"ensemble": "NVT", "friction": 0.0}, "friction"),
+        ({"ensemble": "NVT", "thermostat": "BUSSI", "bussi_tau": 0.0}, "bussi_tau"),
+        ({"ensemble": "NVT", "thermostat": "NHC", "nhc_tdamp": 0.0}, "nhc_tdamp"),
+        ({"ensemble": "NVT", "thermostat": "NHC", "nhc_tchain": 0}, "nhc_tchain"),
+        ({"ensemble": "NVT", "thermostat": "NHC", "nhc_tloop": 0}, "nhc_tloop"),
+        ({"ensemble": "NVT", "thermostat": "unknown"}, "thermostat"),
     ],
 )
 def test_md_rejects_nonphysical_parameters(tmp_path, kwargs, message):

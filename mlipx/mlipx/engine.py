@@ -57,7 +57,8 @@ class EngineConfig:
             DeprecationWarning. New code should use the two fields above.
         torch_num_threads: CPU intra-op thread count. The historical field name
             is retained for compatibility; it controls PyTorch for
-            UMA/MACE/DPA and TensorFlow for GRACE.
+            UMA/MACE and DPA PyTorch models, and TensorFlow for GRACE. Legacy
+            DPA TensorFlow ``.pb`` models use their DeepMD backend settings.
         activation_checkpointing: GPU memory saving (UMA; overrides
             inference_mode preset).
         strict_config: When True, unknown option keys raise instead of warn
@@ -311,7 +312,12 @@ class CalculationEngine:
                 temperature=opts.get("temperature", 300.0),
                 timestep=opts.get("timestep", 1.0),
                 steps=opts.get("steps", 1000),
+                thermostat=opts.get("thermostat", "LANGEVIN"),
                 friction=opts.get("friction", 0.001),
+                bussi_tau=opts.get("bussi_tau", 1000.0),
+                nhc_tdamp=opts.get("nhc_tdamp", 100.0),
+                nhc_tchain=opts.get("nhc_tchain", 3),
+                nhc_tloop=opts.get("nhc_tloop", 1),
                 save_interval=opts.get("save_interval", 10),
                 # NVE is energy-conserving: pre-relaxing first moves the
                 # structure to a 0 K minimum and changes the conserved-energy

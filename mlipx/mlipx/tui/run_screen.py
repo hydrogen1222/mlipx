@@ -153,17 +153,27 @@ class RunScreen(Screen):
                     options[key] = value
         elif calc_type == "md":
             for key in (
-                "ensemble", "temperature", "timestep", "friction",
+                "ensemble", "temperature", "timestep", "steps",
                 "save_interval", "pre_relax", "pre_relax_steps",
                 "pre_relax_fmax", "velocity_policy", "fmax_abort", "seed",
             ):
                 value = self.app.get_config(key)
                 if value is not None:
                     options[key] = value
-            # TUI stores the value under ``md_steps``; the CLI flag is --steps.
-            md_steps = self.app.get_config("md_steps")
-            if md_steps is not None:
-                options["steps"] = md_steps
+            if str(options.get("ensemble", "NVT")).upper() == "NVT":
+                thermostat = str(
+                    self.app.get_config("thermostat", "LANGEVIN")
+                ).upper()
+                options["thermostat"] = thermostat
+                active_keys = {
+                    "LANGEVIN": ("friction",),
+                    "BUSSI": ("bussi_tau",),
+                    "NHC": ("nhc_tdamp", "nhc_tchain", "nhc_tloop"),
+                }[thermostat]
+                for key in active_keys:
+                    value = self.app.get_config(key)
+                    if value is not None:
+                        options[key] = value
 
         return build_mlipx_command(
             calc_type=calc_type,

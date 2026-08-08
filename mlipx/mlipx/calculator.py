@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING
 from fairchem.core import FAIRChemCalculator
 from fairchem.core.units.mlip_unit import load_predict_unit
 from fairchem.core.units.mlip_unit.api.inference import guess_inference_settings
+from fairchem.core.units.mlip_unit.api.inference import UMATask
 
 from mlipx.base_calculator import BaseMLIPCalculator
 from mlipx.gpu_compat import arch_supports_device
@@ -42,7 +43,10 @@ class UMACalculator(BaseMLIPCalculator):
         >>> energy = atoms.get_potential_energy()
     """
 
-    VALID_TASKS: ClassVar[set[str]] = {"omat", "omol", "oc20", "oc25", "odac", "omc"}
+    # Keep the UI/wrapper boundary tied to the installed fairchem-core API.
+    # This version's UMATask enum does not expose OC22; individual checkpoints
+    # are subsequently validated by FAIRChemCalculator against their datasets.
+    VALID_TASKS: ClassVar[set[str]] = {task.value for task in UMATask}
     VALID_DEVICES: ClassVar[set[str]] = {"cpu", "cuda", "gpu"}
     VALID_INFERENCE_MODES: ClassVar[set[str]] = {"default", "turbo"}
 

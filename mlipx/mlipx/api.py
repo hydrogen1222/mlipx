@@ -320,7 +320,12 @@ def run_md(
     temperature: float | None = None,
     timestep: float | None = None,
     steps: int | None = None,
+    thermostat: str | None = None,
     friction: float | None = None,
+    bussi_tau: float | None = None,
+    nhc_tdamp: float | None = None,
+    nhc_tchain: int | None = None,
+    nhc_tloop: int | None = None,
     save_interval: int | None = None,
     pre_relax: bool | None = None,
     verbose: bool = True,
@@ -334,7 +339,8 @@ def run_md(
 ) -> dict[str, Any]:
     """Run molecular dynamics simulation.
 
-    Runs MD simulation using NVT (Langevin) or NVE (Velocity Verlet) ensemble.
+    Runs MD simulation using NVT (Langevin, Bussi/CSVR, or Nose-Hoover chain)
+    or NVE (Velocity Verlet).
     Optional pre-relaxation reduces large initial atomic forces by optimizing
     positions only; it does not relax the cell or generally eliminate stress.
     All defaults are drawn from ``resolve_config()``.
@@ -352,7 +358,12 @@ def run_md(
         temperature: Temperature in Kelvin.
         timestep: Time step in femtoseconds.
         steps: Number of MD steps.
-        friction: Friction coefficient for NVT (1/fs).
+        thermostat: NVT thermostat (LANGEVIN, BUSSI, or NHC).
+        friction: Langevin friction coefficient (1/fs).
+        bussi_tau: Bussi/CSVR coupling time in femtoseconds.
+        nhc_tdamp: Nose-Hoover-chain damping time in femtoseconds.
+        nhc_tchain: Nose-Hoover chain length.
+        nhc_tloop: Nose-Hoover thermostat integration substeps.
         save_interval: Interval for saving trajectory frames.
         pre_relax: Whether to perform pre-relaxation before MD.
         verbose: Whether to print progress messages.
@@ -391,7 +402,12 @@ def run_md(
         ("temperature", temperature),
         ("timestep", timestep),
         ("steps", steps),
+        ("thermostat", thermostat),
         ("friction", friction),
+        ("bussi_tau", bussi_tau),
+        ("nhc_tdamp", nhc_tdamp),
+        ("nhc_tchain", nhc_tchain),
+        ("nhc_tloop", nhc_tloop),
         ("save_interval", save_interval),
         ("pre_relax", pre_relax),
     ):

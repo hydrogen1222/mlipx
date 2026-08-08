@@ -65,7 +65,8 @@ async def test_md_ensemble_and_options_persisted(tmp_path: Path) -> None:
     assert app.get_config("activation_checkpointing") is False
     assert app.get_config("timestep") == 2.5
     assert app.get_config("save_interval") == 25
-    assert app.get_config("friction") == 0.004
+    # NVE hides and ignores thermostat-specific fields.
+    assert app.get_config("friction") == 0.001
     assert app.get_config("pre_relax_steps") == 12
     assert app.get_config("pre_relax_fmax") == 0.08
     assert app.get_config("seed") == 42
@@ -103,7 +104,7 @@ async def test_md_values_loaded_from_config() -> None:
     app.update_config("ensemble", "NVE")
     app.update_config("temperature", 400.0)
     app.update_config("timestep", 2.0)
-    app.update_config("md_steps", 2000)
+    app.update_config("steps", 2000)
     app.update_config("save_interval", 5)
     app.update_config("pre_relax", False)
 
@@ -209,7 +210,7 @@ async def test_run_command_contains_tui_resource_and_md_options() -> None:
             "ensemble": "NVE",
             "temperature": 500.0,
             "timestep": 0.5,
-            "md_steps": 10,
+            "steps": 10,
             "friction": 0.002,
             "save_interval": 2,
             "pre_relax": False,
@@ -243,6 +244,141 @@ async def test_run_command_contains_tui_resource_and_md_options() -> None:
         "--no-pre-relax",
     ):
         assert expected in command
+    assert "--thermostat" not in command
+    assert "--friction" not in command
+
+
+@pytest.mark.asyncio
+async def test_run_command_contains_only_active_nhc_options() -> None:
+    app = MlipxApp()
+    app.config.update(
+        {
+            "calc_type": "md",
+            "structure_file": "/tmp/structure.vasp",
+            "model_file": "/tmp/model.pt",
+            "model_type": "mace",
+            "task": "bulk",
+            "device": "cpu",
+            "output_dir": "/tmp/out",
+            "ensemble": "NVT",
+            "thermostat": "NHC",
+            "steps": 5,
+            "friction": 0.003,
+            "bussi_tau": 700.0,
+            "nhc_tdamp": 120.0,
+            "nhc_tchain": 4,
+            "nhc_tloop": 2,
+        }
+    )
+
+    async with app.run_test(size=(80, 40)):
+        screen = RunScreen()
+        screen._job_id = "test-nhc"
+        command = screen._build_command()
+
+    assert command[command.index("--thermostat") + 1] == "NHC"
+    assert command[command.index("--nhc-tdamp") + 1] == "120.0"
+    assert command[command.index("--nhc-tchain") + 1] == "4"
+    assert command[command.index("--nhc-tloop") + 1] == "2"
+    assert "--friction" not in command
+    assert "--bussi-tau" not in command
+
+
+@pytest.mark.asyncio
+async def test_md_thermostat_controls_are_dynamic_and_task_label_is_accurate() -> None:
+    app = MlipxApp()
+    app.update_config("calc_type", "md")
+
+    async with app.run_test(size=(100, 100)) as pilot:
+        screen = ConfigScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+
+        assert "Task Type" in str(screen.query_one("#task-type-label").render())
+        assert screen.query_one("#friction-input").display is True
+        assert screen.query_one("#bussi-tau-input").display is False
+        assert screen.query_one("#nhc-tdamp-input").display is False
+
+        screen.query_one("#thermostat-select").value = "BUSSI"
+        await pilot.pause()
+        assert screen.query_one("#friction-input").display is False
+        assert screen.query_one("#bussi-tau-input").display is True
+
+        screen.query_one("#thermostat-select").value = "NHC"
+        await pilot.pause()
+        assert screen.query_one("#bussi-tau-input").display is False
+        assert screen.query_one("#nhc-tdamp-input").display is True
+        assert screen.query_one("#nhc-tchain-input").display is True
+        assert screen.query_one("#nhc-tloop-input").display is True
+
+        screen.query_one("#nve").value = True
+        await pilot.pause()
+        assert screen.query_one("#thermostat-select").display is False
+        assert screen.query_one("#nhc-tdamp-input").display is False
+
+        screen.query_one("#model-type-select").value = "dpa"
+        await pilot.pause()
+        assert "System Type" in str(screen.query_one("#task-type-label").render())
+        assert "TensorFlow" in str(
+            screen.query_one("#engine-options-note").render()
+        )
+
+
+@pytest.mark.asyncio
+async def test_md_invalid_numeric_inputs_block_submission(tmp_path: Path) -> None:
+    structure = tmp_path / "structure.cif"
+    model = tmp_path / "model.pt"
+    structure.write_text("")
+    model.write_text("")
+    app = MlipxApp()
+    app.update_config("calc_type", "md")
+
+    async with app.run_test(size=(100, 100)) as pilot:
+        screen = ConfigScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#structure-input").value = str(structure)
+        screen.query_one("#model-input").value = str(model)
+        screen.notify = Mock()
+        app.push_screen = Mock()
+
+        cases = [
+            ("LANGEVIN", "#temp-input", "bad"),
+            ("LANGEVIN", "#timestep-input", "0"),
+            ("LANGEVIN", "#steps-input", "1.5"),
+            ("LANGEVIN", "#save-interval-input", "0"),
+            ("LANGEVIN", "#friction-input", "0"),
+            ("BUSSI", "#bussi-tau-input", "bad"),
+            ("NHC", "#nhc-tdamp-input", "0"),
+            ("NHC", "#nhc-tchain-input", "0"),
+            ("NHC", "#nhc-tloop-input", "bad"),
+            ("LANGEVIN", "#pre-relax-steps-input", "bad"),
+            ("LANGEVIN", "#pre-relax-fmax-input", "nan"),
+            ("LANGEVIN", "#fmax-abort-input", "bad"),
+        ]
+        defaults = {
+            "#temp-input": "300",
+            "#timestep-input": "1",
+            "#steps-input": "5",
+            "#save-interval-input": "1",
+            "#friction-input": "0.001",
+            "#bussi-tau-input": "1000",
+            "#nhc-tdamp-input": "100",
+            "#nhc-tchain-input": "3",
+            "#nhc-tloop-input": "1",
+            "#pre-relax-steps-input": "50",
+            "#pre-relax-fmax-input": "0.1",
+            "#fmax-abort-input": "20",
+        }
+        for thermostat, selector, invalid in cases:
+            for input_selector, value in defaults.items():
+                screen.query_one(input_selector).value = value
+            screen.query_one("#thermostat-select").value = thermostat
+            screen.query_one(selector).value = invalid
+            screen._save_and_run()
+            app.push_screen.assert_not_called()
+            assert screen.notify.called
+            screen.notify.reset_mock()
 
 
 @pytest.mark.asyncio

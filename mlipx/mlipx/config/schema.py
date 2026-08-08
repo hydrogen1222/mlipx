@@ -165,7 +165,10 @@ _SPECS: list[OptionSpec] = [
         "torch_num_threads", int, frozenset({"calculator"}),
         aliases={"TORCH_NUM_THREADS", "CPU_THREADS", "cpu_threads"},
         minimum=1,
-        description="Backend CPU intra-op threads (legacy canonical field name).",
+        description=(
+            "Backend CPU intra-op threads (PyTorch for UMA/MACE/DPA .pt; "
+            "TensorFlow for GRACE; legacy canonical field name)."
+        ),
     ),
     OptionSpec(
         "activation_checkpointing", bool, frozenset({"calculator"}),
@@ -244,10 +247,40 @@ _SPECS: list[OptionSpec] = [
         description="Number of MD steps.",
     ),
     OptionSpec(
+        "thermostat", str, frozenset({"md"}),
+        aliases={"THERMOSTAT"},
+        choices=("LANGEVIN", "BUSSI", "NHC"),
+        description="NVT thermostat (Langevin, Bussi/CSVR, or Nose-Hoover chain).",
+    ),
+    OptionSpec(
         "friction", float, frozenset({"md"}),
         aliases={"FRICTION", "friction_per_fs"},
         minimum=0.0,
-        description="Friction coefficient for NVT (1/fs).",
+        description="Langevin friction coefficient (1/fs).",
+    ),
+    OptionSpec(
+        "bussi_tau", float, frozenset({"md"}),
+        aliases={"BUSSI_TAU"},
+        minimum=0.0,
+        description="Bussi/CSVR coupling time in femtoseconds.",
+    ),
+    OptionSpec(
+        "nhc_tdamp", float, frozenset({"md"}),
+        aliases={"NHC_TDAMP"},
+        minimum=0.0,
+        description="Nose-Hoover-chain damping time in femtoseconds.",
+    ),
+    OptionSpec(
+        "nhc_tchain", int, frozenset({"md"}),
+        aliases={"NHC_TCHAIN"},
+        minimum=1,
+        description="Number of Nose-Hoover thermostat variables.",
+    ),
+    OptionSpec(
+        "nhc_tloop", int, frozenset({"md"}),
+        aliases={"NHC_TLOOP"},
+        minimum=1,
+        description="Nose-Hoover thermostat integration substeps.",
     ),
     OptionSpec(
         "save_interval", int, frozenset({"md"}),

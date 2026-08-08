@@ -67,7 +67,12 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "temperature": 300.0,
         "timestep": 1.0,
         "steps": 1000,
+        "thermostat": "LANGEVIN",
         "friction": 0.001,
+        "bussi_tau": 1000.0,
+        "nhc_tdamp": 100.0,
+        "nhc_tchain": 3,
+        "nhc_tloop": 1,
         "save_interval": 10,
         # ``pre_relax`` has NO built-in default here: its default is
         # ensemble-aware (off for NVE, on for NVT) and is applied by the
@@ -178,7 +183,12 @@ def build_incar_default(calc_type: str) -> str:
         lines.append(f"TEMPERATURE = {md['temperature']}")
         lines.append(f"TIMESTEP = {md['timestep']}")
         lines.append(f"STEPS = {md['steps']}")
+        lines.append(f"THERMOSTAT = {md['thermostat']}")
         lines.append(f"FRICTION = {md['friction']}")
+        lines.append(f"BUSSI_TAU = {md['bussi_tau']}")
+        lines.append(f"NHC_TDAMP = {md['nhc_tdamp']}")
+        lines.append(f"NHC_TCHAIN = {md['nhc_tchain']}")
+        lines.append(f"NHC_TLOOP = {md['nhc_tloop']}")
         lines.append(f"SAVE_INTERVAL = {md['save_interval']}")
         lines.append("")
 

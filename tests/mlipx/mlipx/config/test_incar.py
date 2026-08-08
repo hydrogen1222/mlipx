@@ -60,6 +60,14 @@ def test_validate_ensemble_error_message_quotes_value() -> None:
     assert "Invalid MD_ENSEMBLE 'npt'. " in errors[0], errors[0]
 
 
+def test_validate_md_thermostat_names() -> None:
+    for thermostat in ("LANGEVIN", "BUSSI", "NHC"):
+        cfg = IncarConfig.from_string(f"THERMOSTAT = {thermostat}\n")
+        assert cfg.validate() == []
+    errors = IncarConfig.from_string("THERMOSTAT = BERENDSEN\n").validate()
+    assert "Invalid THERMOSTAT 'berendsen'" in errors[0]
+
+
 def test_validate_invalid_task() -> None:
     cfg = IncarConfig.from_string("TASK = not_a_task\n")
     errors = cfg.validate()

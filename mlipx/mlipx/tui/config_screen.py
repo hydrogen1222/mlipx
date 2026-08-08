@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from pathlib import Path
@@ -125,7 +126,7 @@ class ConfigScreen(Screen):
                     id="model-type-select",
                 )
 
-                yield Label("Task Type:")
+                yield Label("Task Type:", id="task-type-label")
                 yield Select(
                     options=self._task_options(),
                     value=self._default_task_value(),
@@ -333,7 +334,7 @@ class ConfigScreen(Screen):
 
             yield Label("Steps:")
             yield Input(
-                value=str(self.app.get_config("md_steps", 1000)),
+                value=str(self.app.get_config("steps", 1000)),
                 id="steps-input",
             )
 
@@ -343,10 +344,43 @@ class ConfigScreen(Screen):
                 id="save-interval-input",
             )
 
-            yield Label("NVT Friction (1/fs):")
+            yield Label("Thermostat:", id="thermostat-label")
+            yield Select(
+                options=[
+                    ("Langevin", "LANGEVIN"),
+                    ("Bussi-CSVR", "BUSSI"),
+                    ("Nosé-Hoover Chain", "NHC"),
+                ],
+                value=self.app.get_config("thermostat", "LANGEVIN"),
+                id="thermostat-select",
+            )
+
+            yield Label("Friction γ (fs^-1):", id="friction-label")
             yield Input(
                 value=str(self.app.get_config("friction", 0.001)),
                 id="friction-input",
+            )
+
+            yield Label("Coupling time τT (fs):", id="bussi-tau-label")
+            yield Input(
+                value=str(self.app.get_config("bussi_tau", 1000.0)),
+                id="bussi-tau-input",
+            )
+
+            yield Label("Thermostat time tdamp (fs):", id="nhc-tdamp-label")
+            yield Input(
+                value=str(self.app.get_config("nhc_tdamp", 100.0)),
+                id="nhc-tdamp-input",
+            )
+            yield Label("Chain length:", id="nhc-tchain-label")
+            yield Input(
+                value=str(self.app.get_config("nhc_tchain", 3)),
+                id="nhc-tchain-input",
+            )
+            yield Label("Thermostat substeps:", id="nhc-tloop-label")
+            yield Input(
+                value=str(self.app.get_config("nhc_tloop", 1)),
+                id="nhc-tloop-input",
             )
 
             yield Horizontal(
@@ -446,6 +480,13 @@ class ConfigScreen(Screen):
             self._update_engine_option_states()
         elif event.select.id == "task-select":
             self._update_molecular_option_states()
+        elif event.select.id == "thermostat-select":
+            self._update_thermostat_option_states()
+
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        """Refresh thermostat controls when NVT/NVE changes."""
+        if event.radio_set.id == "ensemble-radio":
+            self._update_thermostat_option_states()
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Handle live path validation on input change."""
@@ -460,6 +501,8 @@ class ConfigScreen(Screen):
         self._validate_path("structure-input", structure_input.value)
         self._validate_path("model-input", model_input.value)
         self._update_engine_option_states()
+        if self.app.get_config("calc_type") == "md":
+            self._update_thermostat_option_states()
 
     def _update_engine_option_states(self) -> None:
         """Show only controls consumed by the selected backend."""
@@ -467,6 +510,9 @@ class ConfigScreen(Screen):
         is_uma = model_type == "uma"
         is_mace = model_type == "mace"
         has_head = model_type in {"mace", "dpa"}
+
+        task_label = self.query_one("#task-type-label", Label)
+        task_label.update("Task Type:" if is_uma else "System Type:")
 
         for selector in ("#dtype-label", "#dtype-select"):
             self.query_one(selector).display = is_mace
@@ -500,10 +546,16 @@ class ConfigScreen(Screen):
                 "UMA inference mode and activation checkpointing are shown below. "
                 "CPU Threads controls PyTorch intra-op threads."
             )
-        elif model_type in {"mace", "dpa"}:
+        elif model_type == "mace":
             note.update(
-                f"Only {model_type.upper()} options are shown below. CPU Threads "
-                "controls PyTorch intra-op threads."
+                "Only MACE options are shown below. CPU Threads controls "
+                "PyTorch intra-op threads."
+            )
+        elif model_type == "dpa":
+            note.update(
+                "Only DPA options are shown below. CPU Threads controls "
+                "PyTorch intra-op threads for PyTorch models; legacy TensorFlow "
+                ".pb models use their TensorFlow backend settings."
             )
         else:
             note.update(
@@ -511,6 +563,38 @@ class ConfigScreen(Screen):
                 "TensorFlow intra-op threads."
             )
         self._update_molecular_option_states()
+
+    def _update_thermostat_option_states(self) -> None:
+        """Show only the coupling parameters active for this MD method."""
+        ensemble_radio = self.query_one("#ensemble-radio", RadioSet)
+        pressed = ensemble_radio.pressed_button
+        is_nvt = pressed is None or pressed.id == "nvt"
+        thermostat_select = self.query_one("#thermostat-select", Select)
+        thermostat = str(thermostat_select.value or "LANGEVIN").upper()
+
+        for selector in ("#thermostat-label", "#thermostat-select"):
+            self.query_one(selector).display = is_nvt
+        thermostat_select.disabled = not is_nvt
+
+        groups = {
+            "LANGEVIN": ("#friction-label", "#friction-input"),
+            "BUSSI": ("#bussi-tau-label", "#bussi-tau-input"),
+            "NHC": (
+                "#nhc-tdamp-label",
+                "#nhc-tdamp-input",
+                "#nhc-tchain-label",
+                "#nhc-tchain-input",
+                "#nhc-tloop-label",
+                "#nhc-tloop-input",
+            ),
+        }
+        for name, selectors in groups.items():
+            active = is_nvt and thermostat == name
+            for selector in selectors:
+                widget = self.query_one(selector)
+                widget.display = active
+                if isinstance(widget, Input):
+                    widget.disabled = not active
 
     def _update_molecular_option_states(self) -> None:
         """Show charge/spin controls only for a molecular task."""
@@ -705,33 +789,113 @@ class ConfigScreen(Screen):
 
             try:
                 temp = float(self.query_one("#temp-input", Input).value)
-                self.app.update_config("temperature", temp)
             except ValueError:
-                pass
+                self.notify("Temperature must be a number", severity="error")
+                return
+            if not math.isfinite(temp) or temp < 0:
+                self.notify("Temperature must be a finite value >= 0 K", severity="error")
+                return
+            self.app.update_config("temperature", temp)
 
             try:
                 timestep = float(self.query_one("#timestep-input", Input).value)
-                self.app.update_config("timestep", timestep)
             except ValueError:
-                pass
+                self.notify("Time step must be a number", severity="error")
+                return
+            if not math.isfinite(timestep) or timestep <= 0:
+                self.notify("Time step must be a finite value > 0 fs", severity="error")
+                return
+            self.app.update_config("timestep", timestep)
 
             try:
                 steps = int(self.query_one("#steps-input", Input).value)
-                self.app.update_config("md_steps", steps)
             except ValueError:
-                pass
+                self.notify("Steps must be an integer", severity="error")
+                return
+            if steps < 0:
+                self.notify("Steps must be >= 0", severity="error")
+                return
+            self.app.update_config("steps", steps)
 
             try:
                 save_interval = int(self.query_one("#save-interval-input", Input).value)
-                self.app.update_config("save_interval", save_interval)
             except ValueError:
-                pass
+                self.notify("Save interval must be an integer", severity="error")
+                return
+            if save_interval < 1:
+                self.notify("Save interval must be >= 1", severity="error")
+                return
+            self.app.update_config("save_interval", save_interval)
 
-            try:
-                friction = float(self.query_one("#friction-input", Input).value)
+            thermostat_select = self.query_one("#thermostat-select", Select)
+            thermostat = str(thermostat_select.value).upper()
+            self.app.update_config("thermostat", thermostat)
+
+            if self.app.get_config("ensemble") == "NVT" and thermostat == "LANGEVIN":
+                try:
+                    friction = float(self.query_one("#friction-input", Input).value)
+                except ValueError:
+                    self.notify("Langevin friction must be a number", severity="error")
+                    return
+                if not math.isfinite(friction) or friction <= 0:
+                    self.notify(
+                        "Langevin friction must be a finite value > 0 fs^-1",
+                        severity="error",
+                    )
+                    return
                 self.app.update_config("friction", friction)
-            except ValueError:
-                pass
+            elif self.app.get_config("ensemble") == "NVT" and thermostat == "BUSSI":
+                try:
+                    bussi_tau = float(
+                        self.query_one("#bussi-tau-input", Input).value
+                    )
+                except ValueError:
+                    self.notify("Bussi coupling time must be a number", severity="error")
+                    return
+                if not math.isfinite(bussi_tau) or bussi_tau <= 0:
+                    self.notify(
+                        "Bussi coupling time must be a finite value > 0 fs",
+                        severity="error",
+                    )
+                    return
+                self.app.update_config("bussi_tau", bussi_tau)
+            elif self.app.get_config("ensemble") == "NVT" and thermostat == "NHC":
+                try:
+                    nhc_tdamp = float(
+                        self.query_one("#nhc-tdamp-input", Input).value
+                    )
+                except ValueError:
+                    self.notify("NHC thermostat time must be a number", severity="error")
+                    return
+                if not math.isfinite(nhc_tdamp) or nhc_tdamp <= 0:
+                    self.notify(
+                        "NHC thermostat time must be a finite value > 0 fs",
+                        severity="error",
+                    )
+                    return
+                try:
+                    nhc_tchain = int(
+                        self.query_one("#nhc-tchain-input", Input).value
+                    )
+                except ValueError:
+                    self.notify("NHC chain length must be an integer", severity="error")
+                    return
+                try:
+                    nhc_tloop = int(
+                        self.query_one("#nhc-tloop-input", Input).value
+                    )
+                except ValueError:
+                    self.notify("NHC thermostat substeps must be an integer", severity="error")
+                    return
+                if nhc_tchain < 1:
+                    self.notify("NHC chain length must be >= 1", severity="error")
+                    return
+                if nhc_tloop < 1:
+                    self.notify("NHC thermostat substeps must be >= 1", severity="error")
+                    return
+                self.app.update_config("nhc_tdamp", nhc_tdamp)
+                self.app.update_config("nhc_tchain", nhc_tchain)
+                self.app.update_config("nhc_tloop", nhc_tloop)
 
             pre_relax = self.query_one("#pre-relax", Switch)
             self.app.update_config("pre_relax", pre_relax.value)
@@ -740,17 +904,31 @@ class ConfigScreen(Screen):
                 pre_relax_steps = int(
                     self.query_one("#pre-relax-steps-input", Input).value
                 )
-                self.app.update_config("pre_relax_steps", pre_relax_steps)
             except ValueError:
-                pass
+                self.notify("Pre-relaxation max steps must be an integer", severity="error")
+                return
+            if pre_relax_steps < 0:
+                self.notify("Pre-relaxation max steps must be >= 0", severity="error")
+                return
+            self.app.update_config("pre_relax_steps", pre_relax_steps)
 
             try:
                 pre_relax_fmax = float(
                     self.query_one("#pre-relax-fmax-input", Input).value
                 )
-                self.app.update_config("pre_relax_fmax", pre_relax_fmax)
             except ValueError:
-                pass
+                self.notify(
+                    "Pre-relaxation force threshold must be a number",
+                    severity="error",
+                )
+                return
+            if not math.isfinite(pre_relax_fmax) or pre_relax_fmax < 0:
+                self.notify(
+                    "Pre-relaxation force threshold must be a finite value >= 0",
+                    severity="error",
+                )
+                return
+            self.app.update_config("pre_relax_fmax", pre_relax_fmax)
 
             seed_text = self.query_one("#seed-input", Input).value.strip()
             if seed_text:
@@ -777,9 +955,19 @@ class ConfigScreen(Screen):
 
             try:
                 fmax_abort = float(self.query_one("#fmax-abort-input", Input).value)
-                self.app.update_config("fmax_abort", fmax_abort)
             except ValueError:
-                pass
+                self.notify(
+                    "Large-force warning threshold must be a number",
+                    severity="error",
+                )
+                return
+            if not math.isfinite(fmax_abort) or fmax_abort < 0:
+                self.notify(
+                    "Large-force warning threshold must be a finite value >= 0",
+                    severity="error",
+                )
+                return
+            self.app.update_config("fmax_abort", fmax_abort)
 
         # TUI calculations are launched as persistent background processes.
         self.app.update_config("detach", True)

@@ -64,11 +64,17 @@ def test_build_command_md_options() -> None:
     cmd = build_mlipx_command(
         "md", "s.cif", "m.pt", options={
             "ensemble": "NVT", "temperature": 500.0, "steps": 100,
+            "thermostat": "NHC", "nhc_tdamp": 150.0,
+            "nhc_tchain": 4, "nhc_tloop": 2,
             "pre_relax": False, "seed": 42,
         },
     )
     assert "--temp" in cmd and "500.0" in cmd
     assert "--steps" in cmd and "100" in cmd
+    assert "--thermostat" in cmd and "NHC" in cmd
+    assert "--nhc-tdamp" in cmd and "150.0" in cmd
+    assert "--nhc-tchain" in cmd and "4" in cmd
+    assert "--nhc-tloop" in cmd and "2" in cmd
     assert "--no-pre-relax" in cmd
     assert "--seed" in cmd and "42" in cmd
 

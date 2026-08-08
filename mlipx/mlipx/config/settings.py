@@ -55,7 +55,12 @@ ensemble = NVT
 temperature = 300
 timestep_fs = 1.0
 production_steps = 1000
+thermostat = LANGEVIN
 friction_per_fs = 0.001
+bussi_tau = 1000.0
+nhc_tdamp = 100.0
+nhc_tchain = 3
+nhc_tloop = 1
 velocity_policy = auto
 
 [opt]

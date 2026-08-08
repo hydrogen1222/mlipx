@@ -49,6 +49,16 @@ def test_mace_default_dtype_is_float32() -> None:
     assert BUILTIN_DEFAULTS["calculator.mace"]["default_dtype"] == "float32"
 
 
+def test_md_thermostat_defaults_preserve_legacy_langevin() -> None:
+    md = BUILTIN_DEFAULTS["md"]
+    assert md["thermostat"] == "LANGEVIN"
+    assert md["friction"] == 0.001
+    assert md["bussi_tau"] == 1000.0
+    assert md["nhc_tdamp"] == 100.0
+    assert md["nhc_tchain"] == 3
+    assert md["nhc_tloop"] == 1
+
+
 # ---------------------------------------------------------------------------
 # get_default helper
 # ---------------------------------------------------------------------------

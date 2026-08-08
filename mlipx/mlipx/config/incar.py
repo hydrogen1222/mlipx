@@ -237,7 +237,12 @@ class IncarConfig(dict):
             "TEMPERATURE": "Molecular Dynamics",
             "TIMESTEP": "Molecular Dynamics",
             "STEPS": "Molecular Dynamics",
+            "THERMOSTAT": "Molecular Dynamics",
             "FRICTION": "Molecular Dynamics",
+            "BUSSI_TAU": "Molecular Dynamics",
+            "NHC_TDAMP": "Molecular Dynamics",
+            "NHC_TCHAIN": "Molecular Dynamics",
+            "NHC_TLOOP": "Molecular Dynamics",
         }
 
         current_category = None
@@ -351,6 +356,15 @@ class IncarConfig(dict):
                 errors.append(
                     f"Invalid MD_ENSEMBLE '{ensemble}'. "
                     f"Must be one of: {', '.join(valid_md_ensembles)}"
+                )
+
+        if "THERMOSTAT" in self:
+            thermostat = self.get_str("THERMOSTAT").lower()
+            valid_thermostats = {"langevin", "bussi", "nhc"}
+            if thermostat not in valid_thermostats:
+                errors.append(
+                    f"Invalid THERMOSTAT '{thermostat}'. "
+                    f"Must be one of: {', '.join(valid_thermostats)}"
                 )
 
         # Validate MACE dtype if present.

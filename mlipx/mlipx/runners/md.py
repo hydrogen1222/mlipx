@@ -8,7 +8,7 @@ Modified for the mlipx project: multi-engine MLIP support (UMA/MACE/DPA/GRACE).
 Molecular dynamics runner.
 
 Runs MD simulations using ASE's integrators:
-- NVT ensemble (Langevin dynamics)
+- NVT ensemble (Langevin, Bussi/CSVR, or Nose-Hoover-chain dynamics)
 - NVE ensemble (Velocity Verlet)
 
 Outputs trajectories in multiple formats.
@@ -28,7 +28,9 @@ import numpy as np
 from ase import units
 from ase.constraints import FixCom
 from ase.io.trajectory import TrajectoryWriter as AseTrajectoryWriter
+from ase.md.bussi import Bussi
 from ase.md.langevin import Langevin
+from ase.md.nose_hoover_chain import NoseHooverChainNVT
 from ase.md.velocitydistribution import MaxwellBoltzmannDistribution, Stationary
 from ase.md.verlet import VelocityVerlet
 from ase.optimize import FIRE
@@ -51,7 +53,8 @@ if TYPE_CHECKING:
 class MDRunner(BaseRunner):
     """Run molecular dynamics simulations.
 
-    Supports NVT (Langevin) and NVE (Velocity Verlet) ensembles.
+    Supports NVT (Langevin, Bussi/CSVR, or Nose-Hoover chain) and NVE
+    (Velocity Verlet) ensembles.
     Can optionally reduce large initial atomic forces with a positions-only
     pre-relaxation before MD.
 
@@ -68,6 +71,7 @@ class MDRunner(BaseRunner):
     """
 
     VALID_ENSEMBLES = {"nvt", "nve"}
+    VALID_THERMOSTATS = {"langevin", "bussi", "nhc"}
 
     def __init__(
         self,
@@ -76,7 +80,12 @@ class MDRunner(BaseRunner):
         temperature: float = 300.0,
         timestep: float = 1.0,
         steps: int = 1000,
+        thermostat: str = "LANGEVIN",
         friction: float = 0.001,
+        bussi_tau: float = 1000.0,
+        nhc_tdamp: float = 100.0,
+        nhc_tchain: int = 3,
+        nhc_tloop: int = 1,
         save_interval: int = 10,
         output_dir: Path | str = ".",
         write_outcar: bool = True,
@@ -114,7 +123,12 @@ class MDRunner(BaseRunner):
             temperature: Temperature in Kelvin
             timestep: Time step in femtoseconds
             steps: Number of MD steps
-            friction: Friction coefficient for NVT (1/fs)
+            thermostat: NVT thermostat (LANGEVIN, BUSSI, or NHC)
+            friction: Langevin friction coefficient (1/fs)
+            bussi_tau: Bussi/CSVR coupling time in femtoseconds
+            nhc_tdamp: Nose-Hoover-chain damping time in femtoseconds
+            nhc_tchain: Nose-Hoover chain length
+            nhc_tloop: Nose-Hoover thermostat integration substeps
             save_interval: Interval for saving trajectory frames
             output_dir: Directory for output files
             write_outcar: Whether to write OUTCAR file
@@ -146,7 +160,12 @@ class MDRunner(BaseRunner):
         self.temperature = temperature
         self.timestep = timestep * units.fs  # Convert to ASE units
         self.steps = steps
+        self.thermostat = str(thermostat).lower()
         self.friction = friction / units.fs  # Convert to ASE units
+        self.bussi_tau = bussi_tau * units.fs
+        self.nhc_tdamp = nhc_tdamp * units.fs
+        self.nhc_tchain = int(nhc_tchain)
+        self.nhc_tloop = int(nhc_tloop)
         self.save_interval = save_interval
         self.write_outcar = write_outcar
         self.write_forces = write_forces
@@ -195,10 +214,25 @@ class MDRunner(BaseRunner):
             raise ValueError("steps must be >= 0")
         if self.save_interval <= 0:
             raise ValueError("save_interval must be > 0")
-        if self.ensemble == "nvt" and self.friction <= 0:
-            raise ValueError(
-                "friction must be > 0 fs^-1 for NVT Langevin dynamics"
-            )
+        if self.ensemble == "nvt":
+            if self.thermostat not in self.VALID_THERMOSTATS:
+                raise ValueError(
+                    f"Unknown thermostat: {thermostat}. Use one of: "
+                    f"{', '.join(sorted(self.VALID_THERMOSTATS))}"
+                )
+            if self.thermostat == "langevin" and self.friction <= 0:
+                raise ValueError(
+                    "friction must be > 0 fs^-1 for NVT Langevin dynamics"
+                )
+            if self.thermostat == "bussi" and self.bussi_tau <= 0:
+                raise ValueError("bussi_tau must be > 0 fs for NVT Bussi dynamics")
+            if self.thermostat == "nhc":
+                if self.nhc_tdamp <= 0:
+                    raise ValueError("nhc_tdamp must be > 0 fs for NVT NHC dynamics")
+                if self.nhc_tchain < 1:
+                    raise ValueError("nhc_tchain must be >= 1 for NVT NHC dynamics")
+                if self.nhc_tloop < 1:
+                    raise ValueError("nhc_tloop must be >= 1 for NVT NHC dynamics")
         # pre_relax_mode / equil_steps are declared in the schema as Phase-3
         # vocabulary. They must NOT be silently ignored (plan section 5.2): a
         # non-default value raises an explicit, loud "not yet implemented"
@@ -415,6 +449,133 @@ class MDRunner(BaseRunner):
             return
         atoms.set_constraint([*atoms.constraints, FixCom()])
 
+    def _build_dynamics(self, atoms: Atoms):
+        """Build the ASE integrator without coupling it to calculator options."""
+        if self.ensemble == "nve":
+            self.log("Setting up NVE (Velocity Verlet)")
+            return VelocityVerlet(atoms, timestep=self.timestep)
+
+        if self.thermostat == "langevin":
+            friction_fs = self.friction * units.fs
+            self.log(
+                "Setting up NVT Langevin dynamics "
+                f"(friction={friction_fs:.4f} fs^-1)"
+            )
+            self.log(
+                "Approx. velocity damping time: "
+                f"{1.0 / friction_fs / 1000.0:.6g} ps"
+            )
+            return Langevin(
+                atoms,
+                timestep=self.timestep,
+                temperature_K=self.temperature,
+                friction=self.friction,
+                rng=self.rng,
+                fixcm=False,
+            )
+
+        if self.thermostat == "bussi":
+            if np.isclose(atoms.get_kinetic_energy(), 0.0, rtol=0.0, atol=1e-12):
+                raise ValueError(
+                    "Bussi/CSVR requires non-zero initial kinetic energy. "
+                    "Use a positive temperature with velocity_policy='initialize', "
+                    "or provide non-zero velocities."
+                )
+            self.log(
+                "Setting up NVT Bussi/CSVR dynamics "
+                f"(coupling time={self.bussi_tau / units.fs:.6g} fs)"
+            )
+            return Bussi(
+                atoms,
+                timestep=self.timestep,
+                temperature_K=self.temperature,
+                taut=self.bussi_tau,
+                rng=self.rng,
+            )
+
+        if self.thermostat == "nhc":
+            self.log(
+                "Setting up NVT Nose-Hoover-chain dynamics "
+                f"(tdamp={self.nhc_tdamp / units.fs:.6g} fs, "
+                f"chain={self.nhc_tchain}, substeps={self.nhc_tloop})"
+            )
+            return NoseHooverChainNVT(
+                atoms,
+                timestep=self.timestep,
+                temperature_K=self.temperature,
+                tdamp=self.nhc_tdamp,
+                tchain=self.nhc_tchain,
+                tloop=self.nhc_tloop,
+            )
+
+        raise ValueError(f"Unknown thermostat: {self.thermostat}")
+
+    def _md_provenance(self) -> dict[str, Any]:
+        """Return canonical MD settings, including only the active coupling."""
+        provenance: dict[str, Any] = {
+            "ensemble": self.ensemble.upper(),
+            "thermostat": self.thermostat.upper()
+            if self.ensemble == "nvt"
+            else None,
+            "temperature": self.temperature,
+            "timestep": float(self.timestep / units.fs),
+            "steps": self.steps,
+            "seed": self.seed,
+            "velocity_policy": self.velocity_policy,
+        }
+        if self.ensemble == "nvt" and self.thermostat == "langevin":
+            friction_fs = float(self.friction * units.fs)
+            provenance.update(
+                {
+                    "friction_fs^-1": friction_fs,
+                    "approx_velocity_damping_time_ps": 1.0
+                    / friction_fs
+                    / 1000.0,
+                }
+            )
+        elif self.ensemble == "nvt" and self.thermostat == "bussi":
+            provenance["bussi_tau_fs"] = float(self.bussi_tau / units.fs)
+        elif self.ensemble == "nvt" and self.thermostat == "nhc":
+            provenance.update(
+                {
+                    "nhc_tdamp_fs": float(self.nhc_tdamp / units.fs),
+                    "nhc_tchain": self.nhc_tchain,
+                    "nhc_tloop": self.nhc_tloop,
+                }
+            )
+        return provenance
+
+    def _outcar_md_settings(self) -> dict[str, Any]:
+        """Translate canonical provenance to human-readable OUTCAR labels."""
+        provenance = self._md_provenance()
+        settings: dict[str, Any] = {
+            "Ensemble": provenance["ensemble"],
+            "Thermostat": provenance["thermostat"],
+            "Target temperature (K)": provenance["temperature"],
+            "Time step (fs)": provenance["timestep"],
+            "MD steps": provenance["steps"],
+            "Save interval (steps)": self.save_interval,
+            "Random seed": provenance["seed"],
+            "Velocity policy": provenance["velocity_policy"],
+            "Pre-relaxed": self.pre_relax,
+        }
+        if "friction_fs^-1" in provenance:
+            settings["Friction (1/fs)"] = provenance["friction_fs^-1"]
+            settings["Approx. velocity damping time (ps)"] = provenance[
+                "approx_velocity_damping_time_ps"
+            ]
+        elif "bussi_tau_fs" in provenance:
+            settings["Bussi coupling time (fs)"] = provenance["bussi_tau_fs"]
+        elif "nhc_tdamp_fs" in provenance:
+            settings.update(
+                {
+                    "NHC damping time (fs)": provenance["nhc_tdamp_fs"],
+                    "NHC chain length": provenance["nhc_tchain"],
+                    "NHC thermostat substeps": provenance["nhc_tloop"],
+                }
+            )
+        return settings
+
     def _pre_relax_structure(self, atoms: Atoms) -> Atoms:
         """Perform a short positions-only relaxation to reduce large forces.
 
@@ -522,6 +683,10 @@ class MDRunner(BaseRunner):
 
         # Print settings
         self.log(f"Ensemble:         {self.ensemble.upper()}")
+        self.log(
+            "Thermostat:       "
+            + (self.thermostat.upper() if self.ensemble == "nvt" else "none")
+        )
         self.log(f"Temperature:      {self.temperature} K")
         self.log(f"Time step:        {self.timestep / units.fs} fs")
         self.log(f"Steps:            {self.steps}")
@@ -553,26 +718,14 @@ class MDRunner(BaseRunner):
         # Initialize a thermal velocity distribution for both NVT and NVE.
         self._initialize_velocities(atoms)
 
-        # Setup integrator
+        # Setup integrator. Thermostat settings stay in MDRunner and are never
+        # forwarded to the backend calculator.
         if self.ensemble == "nvt":
-            self.log(
-                f"Setting up Langevin dynamics (friction={self.friction * units.fs:.4f} fs^-1)"
-            )
             self.log(
                 "Note: under NVT the total energy E = PE + KE is NOT conserved "
                 "(the thermostat exchanges heat); monitor T instead."
             )
-            dyn = Langevin(
-                atoms,
-                timestep=self.timestep,
-                temperature_K=self.temperature,
-                friction=self.friction,
-                rng=self.rng,
-                fixcm=False,
-            )
-        else:  # nve
-            self.log("Setting up NVE (Velocity Verlet)")
-            dyn = VelocityVerlet(atoms, timestep=self.timestep)
+        dyn = self._build_dynamics(atoms)
 
         # Streaming trajectory outputs (plan section 5.5):
         #   * full frames  -> raw/trajectory.traj (lossless ASE source)
@@ -601,18 +754,7 @@ class MDRunner(BaseRunner):
                 self.vasp_dir / "OUTCAR",
                 task_name=self.calculator.task,
                 metadata=self.calculator.info(),
-                settings={
-                    "Ensemble": self.ensemble.upper(),
-                    "Target temperature (K)": self.temperature,
-                    "Time step (fs)": self.timestep / units.fs,
-                    "MD steps": self.steps,
-                    "Save interval (steps)": self.save_interval,
-                    "Friction (1/fs)": self.friction * units.fs
-                    if self.ensemble == "nvt"
-                    else "n/a",
-                    "Random seed": self.seed,
-                    "Pre-relaxed": self.pre_relax,
-                },
+                settings=self._outcar_md_settings(),
             )
         # Run MD
         self.log("\nStarting MD simulation...")
@@ -842,6 +984,13 @@ class MDRunner(BaseRunner):
             "timestep_fs": float(self.timestep / units.fs),
             "save_interval": self.save_interval,
             "ensemble": self.ensemble.upper(),
+            "thermostat": self.thermostat.upper()
+            if self.ensemble == "nvt"
+            else None,
+            "target_temperature": self.temperature,
+            "seed": self.seed,
+            "velocity_policy": self.velocity_policy,
+            "md_provenance": self._md_provenance(),
             "time": md_time,
             "trajectory": trajectory_summary,
             "trajectory_path": str(traj_path) if self.write_trajectory else None,

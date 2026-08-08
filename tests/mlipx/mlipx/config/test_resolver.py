@@ -32,6 +32,26 @@ def test_builtin_md_defaults() -> None:
     # MD auto-seeds
     assert "seed" in rc.run_options
     assert rc.sources["seed"].source == "auto-generated"
+    assert rc.run_options["thermostat"] == "LANGEVIN"
+    assert rc.run_options["friction"] == 0.001
+
+
+def test_md_thermostat_options_are_run_options_only() -> None:
+    values = {
+        "thermostat": "NHC",
+        "friction": 0.002,
+        "bussi_tau": 800.0,
+        "nhc_tdamp": 120.0,
+        "nhc_tchain": 4,
+        "nhc_tloop": 2,
+    }
+    for model_type in ("uma", "mace", "dpa", "grace"):
+        rc = resolve_config(
+            calc_type="md",
+            cli={"model_type": model_type, **values},
+        )
+        assert values.items() <= rc.run_options.items()
+        assert set(values).isdisjoint(rc.calculator_options)
 
 
 def test_builtin_opt_defaults() -> None:

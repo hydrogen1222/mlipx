@@ -17,7 +17,7 @@ import pytest
 from mlipx.base_calculator import BaseMLIPCalculator
 from mlipx.calculator import UMACalculator
 from mlipx.calculators.dpa_calc import DPACalculatorWrapper
-from mlipx.calculators.factory import SUPPORTED_TYPES, CalculatorFactory
+from mlipx.calculators.factory import _CALC_KEYS, SUPPORTED_TYPES, CalculatorFactory
 from mlipx.calculators.grace_calc import GRACECalculatorWrapper
 from mlipx.calculators.mace_calc import MACECalculatorWrapper
 from mlipx.engine import EngineConfig
@@ -48,6 +48,23 @@ class TestCalculatorFactory:
     def test_supported_types(self):
         assert "uma" in SUPPORTED_TYPES
         assert {"mace", "dpa", "grace"}.issubset(SUPPORTED_TYPES)
+
+    def test_md_thermostat_options_are_never_calculator_keys(self):
+        thermostat_keys = {
+            "thermostat",
+            "friction",
+            "bussi_tau",
+            "nhc_tdamp",
+            "nhc_tchain",
+            "nhc_tloop",
+        }
+        assert all(thermostat_keys.isdisjoint(keys) for keys in _CALC_KEYS.values())
+
+    def test_uma_tasks_match_installed_fairchem_api(self):
+        from fairchem.core.units.mlip_unit.api.inference import UMATask
+
+        assert {task.value for task in UMATask} == UMACalculator.VALID_TASKS
+        assert "oc22" not in UMACalculator.VALID_TASKS
 
     def test_uma_creates_umacalculator(self, tmp_path):
         """UMA engine produces a UMACalculator that is a BaseMLIPCalculator."""
