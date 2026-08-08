@@ -2,12 +2,11 @@
 
 Covers:
 * A1 - MACE ``--head`` is forwarded as ``head=`` (singular string), not ``heads=``.
-* A2 - ``calculate_adsorption_energy`` scores the gas molecule with a molecular task.
 * A3 - MD temperature DOF uses the real constraint removed-DOF count (FixAtoms).
 * B1 - MACE ``info()`` reads the correct MACE attributes.
 * B2 - runners abort on NaN/inf energy/forces instead of writing "successful" NaN.
 * B3 - NVE defaults to no pre-relaxation; NVT keeps it; explicit override wins.
-* B4 - MACE dtype default is float32 for all calc types (P0-1).
+* B4 - MACE dtype default is float64 for all calc types (accuracy first).
 * B5 - stress is skipped for non-periodic systems even when ``has_stress`` is True.
 """
 
@@ -93,13 +92,13 @@ def test_mace_info_reads_correct_attributes(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# B4: MACE dtype default is float32 for all calc types (engine level, P0-1)
+# B4: MACE dtype default is float64 for all calc types
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     "calc_type, expected_dtype",
-    [("sp", "float32"), ("opt", "float32"), ("md", "float32")],
+    [("sp", "float64"), ("opt", "float64"), ("md", "float64")],
 )
-def test_mace_dtype_default_is_float32_all_calc_types(calc_type, expected_dtype):
+def test_mace_dtype_default_is_float64_all_calc_types(calc_type, expected_dtype):
     from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
 
     config = EngineConfig(
@@ -154,7 +153,7 @@ def test_mace_dtype_explicit_override_wins():
     ):
         engine._create_calculator()
 
-    assert captured["default_dtype"] == "float64"  # explicit, not overridden to float32
+    assert captured["default_dtype"] == "float64"
 
 
 # ---------------------------------------------------------------------------
@@ -432,75 +431,3 @@ def test_singlepoint_rejects_periodic_without_cell(tmp_path):
     runner = SinglePointRunner(wrapper, output_dir=tmp_path, verbose=False)
     with pytest.raises(ValueError, match="Invalid cell"):
         runner.run(atoms)
-
-
-# ---------------------------------------------------------------------------
-# A2: adsorption energy scores gas with a molecular task
-# ---------------------------------------------------------------------------
-def test_adsorption_energy_uses_molecular_task_for_gas(monkeypatch):
-    from mlipx import api  # noqa: PLC0415
-
-    seen = []
-
-    def fake_calculate_energy(structure, model_path, **kwargs):
-        seen.append(kwargs.get("task"))
-        return -1.0
-
-    monkeypatch.setattr(api, "calculate_energy", fake_calculate_energy)
-
-    api.calculate_adsorption_energy(
-        adsorbed_structure="ads.cif",
-        gas_structure="co2.xyz",
-        surface_structure="slab.cif",
-        model_path="uma-s-1.pt",
-        task="oc20",
-        verbose=False,
-    )
-    # adsorbed + surface keep the periodic task; gas uses omol.
-    assert seen == ["oc20", "omol", "oc20"]
-
-
-def test_adsorption_energy_explicit_gas_task_wins(monkeypatch):
-    from mlipx import api  # noqa: PLC0415
-
-    seen = []
-
-    def fake_calculate_energy(structure, model_path, **kwargs):
-        seen.append(kwargs.get("task"))
-        return -1.0
-
-    monkeypatch.setattr(api, "calculate_energy", fake_calculate_energy)
-
-    api.calculate_adsorption_energy(
-        adsorbed_structure="ads.cif",
-        gas_structure="co2.xyz",
-        surface_structure="slab.cif",
-        model_path="uma-s-1.pt",
-        task="oc20",
-        gas_task="omol",
-        verbose=False,
-    )
-    assert seen[1] == "omol"
-
-
-def test_adsorption_energy_generic_engine_uses_molecule(monkeypatch):
-    from mlipx import api  # noqa: PLC0415
-
-    seen = []
-
-    def fake_calculate_energy(structure, model_path, **kwargs):
-        seen.append(kwargs.get("task"))
-        return -1.0
-
-    monkeypatch.setattr(api, "calculate_energy", fake_calculate_energy)
-
-    api.calculate_adsorption_energy(
-        adsorbed_structure="ads.cif",
-        gas_structure="co2.xyz",
-        surface_structure="slab.cif",
-        model_path="mace.model",
-        model_type="mace",
-        task="bulk",
-        verbose=False,
-    )
-    assert seen == ["bulk", "molecule", "bulk"]

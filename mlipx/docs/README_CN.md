@@ -30,13 +30,15 @@
 - [13. 性能指南](#13-性能指南)
 - [14. 使用示例](#14-使用示例)
 - [15. 许可证](#15-许可证)
-- [MD 后处理专题：基础分析、kinisi 与 GEMDAT](ANALYSIS_CN.md)
 
 ---
 
 ## 1. 简介
 
 mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）计算工具，提供类似 VASP 的用户体验。它支持多种 MLIP 后端：
+
+高级轨迹后处理功能已在 Analysis v1 后主动冻结，目前不属于受支持范围；
+当前 mlipx 专注于可靠的 MLIP 单点计算、结构优化和 MLMD 原始轨迹生成。
 
 | 引擎 | `MODEL_TYPE` | 后端包 |
 |------|--------------|--------|
@@ -697,8 +699,8 @@ mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --
 # ── MACE head：只能选择模型实际列出的 head
 .venv-mace/bin/mlipx sp bulk.cif --model mace-mpa-0-medium.model --model-type mace --task bulk --head default
 
-# ── MACE dtype（所有计算类型均默认 float32）
-.venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float64
+# ── MACE dtype（所有计算类型均默认 float64；追求速度时显式选择 float32）
+.venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float32
 
 # ── DPA (DeepMD) ── 在隔离环境中进行周期结构优化
 .venv-dpa/bin/mlipx opt bulk.vasp --model dpa.pt --model-type dpa --task bulk --fmax 0.01 --optimizer LBFGS
@@ -712,14 +714,13 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 | 选项 | 说明 |
 |------|------|
 | `--head HEAD` | 选择模型中实际存在的 head；单 head 模型应省略。head 名称取决于具体模型及版本。 |
-| `--dtype float32\|float64` | 计算精度。**SP、优化和 MD 均默认 `float32`**；仅在模型兼容且确需高精度能量差时显式选择 `float64`。 |
+| `--dtype float32\|float64` | 计算精度。**SP、优化和 MD 均默认 `float64`**；追求速度时可显式选择 `float32`。 |
 
 > ⚠️ `--head` 接受单个字符串。虽然 mace-torch 对未知名称可能只告警并
 > 回退，但 mlipx 会直接拒绝，因为静默换 head 等于更换势能面。当前随仓库
 > 提供的 `models/mace/mace-mpa-0-medium.model` 只有 `default`。
-> 该本地文件以 float64 保存；使用默认 `float32` 时 mace-torch 会在加载时
-> 转换并给出提示。若保留原始精度比显存和吞吐更重要，请显式使用
-> `--dtype float64`。
+> 默认 `float64` 保持准确性优先。只有明确接受精度/性能权衡时才传入
+> `--dtype float32`。
 
 ### 引擎故障排除
 
@@ -898,17 +899,16 @@ mlipx md CONTCAR \
 │   ├── XDATCAR               # VASP 语法兼容、未折回分数坐标
 │   ├── CONTCAR               # VASP POSCAR/CONTCAR 语法
 │   └── OUTCAR                # 明确标注的 VASP-like MD 子集
-├── analysis/                 # 按任务/参数哈希保存后处理结果与 provenance
 ├── artifacts.json            # 输出契约、单位、帧信息和文件索引
 ├── resolved_config.json
 └── run.log
 ```
 
-`raw/trajectory.traj` 是后处理的首选输入。`vasp/XDATCAR` 面向 OVITO、ASE
+`raw/trajectory.traj` 是外部后处理的首选输入。`vasp/XDATCAR` 面向 OVITO、ASE
 及其他 VASP 生态工具，使用 VASP 的固定列宽和
 `Direct configuration=` 语法，并保留跨周期的连续坐标。
-后处理命令、结果契约及固态电解质工作流见
-[MD 后处理专题](ANALYSIS_CN.md)。
+当前不提供内置高级轨迹后处理命令。需要平衡/生产分段时，请分别运行独立的
+MD 任务；本轮不自动管理 `equil_steps`。
 
 ### 5.4 批量处理
 
@@ -972,7 +972,7 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --inference-mode MODE UMA 推理预设：default|turbo
   --[no-]activation-checkpointing
                         UMA 显存/速度覆盖；省略则跟随推理预设
-  --dtype DTYPE         MACE 精度 float32|float64 [默认: float32]
+  --dtype DTYPE         MACE 精度 float32|float64 [默认: float64]
   --head HEAD           MACE head 或 DeepMD/DPA 多任务分支
   --output DIR, -o DIR  输出目录 [默认: .]
   --name NAME, -n NAME  任务名称（输出至 DIR/NAME）
@@ -1013,7 +1013,7 @@ mlipx md STRUCTURE --model MODEL [选项]
   --pre-relax           MD 前预弛豫 [默认: NVT 开 / NVE 关]
   --pre-relax-steps N   预弛豫最大步数 [默认: 50]
   --pre-relax-fmax F    预弛豫力收敛阈值 eV/Å [默认: 0.1]
-  --fmax-abort F        大力告警阈值 eV/Å [默认: 20.0]
+  --fmax-abort F        力安全中止阈值 eV/Å [默认: 20.0]
 ```
 
 ##### `mlipx batch` — 批量处理
@@ -1131,7 +1131,7 @@ Batch 当前仅能通过 CLI 运行。
 选择某个引擎后，只显示该引擎实际使用的后端控件；例如选择 UMA 时不会再显示
 DPA branch。电荷/自旋仅在分子任务下出现，周期任务不会携带上一次的分子设置。
 OPT 还可设置晶胞优化和保持晶体对称性；MD 可设置系综、温度、时间步、
-步数/保存间隔、NVT 摩擦系数、预弛豫、随机种子、速度策略和大力告警阈值。
+步数/保存间隔、NVT 摩擦系数、预弛豫、随机种子、速度策略和力安全中止阈值。
 路径支持实时验证和视觉反馈：
 
 ```
@@ -1159,7 +1159,7 @@ OPT 还可设置晶胞优化和保持晶体对称性；MD 可设置系综、温�
 
 ```python
 from mlipx.api import run_single_point, run_optimization, run_md
-from mlipx.api import calculate_energy, calculate_adsorption_energy
+from mlipx.api import calculate_energy
 
 # 单点能
 results = run_single_point(
@@ -1196,18 +1196,6 @@ print(f"最终温度: {results['temperature']:.1f} K")
 energy = calculate_energy("structure.cif", "uma-s-1.pt")
 print(f"能量: {energy:.4f} eV")
 
-# 吸附能
-# task 指定周期性 slab/吸附体系的任务；孤立气体分子会自动用分子任务评分
-# （UMA 周期任务 -> omol；通用引擎 -> molecule），无需为气体单独指定。
-ads_results = calculate_adsorption_energy(
-    adsorbed_structure="adsorbed.cif",
-    gas_structure="co2.xyz",
-    surface_structure="slab.cif",
-    model_path="uma-s-1.pt",
-    task="oc20",          # slab/吸附体系用周期任务
-    # gas_task="omol",    # 可选：显式指定气体分子的任务（默认按引擎自动派生）
-)
-print(f"吸附能: {ads_results['adsorption_energy']:.4f} eV")
 ```
 
 完整 API 参考：
@@ -1218,7 +1206,6 @@ print(f"吸附能: {ads_results['adsorption_energy']:.4f} eV")
 | `run_optimization(structure, model_path, ...)` | `dict` | OPT 含收敛信息 |
 | `run_md(structure, model_path, ...)` | `dict` | MD 含轨迹和温度 |
 | `calculate_energy(structure, model_path, ...)` | `float` | 快速获取能量值 |
-| `calculate_adsorption_energy(ads, gas, surf, ...)` | `dict` | E吸附 = E吸附体系 - E气体 - E表面；气体分子自动用分子任务评分（`gas_task` 可覆盖） |
 
 ---
 
@@ -1245,7 +1232,7 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `CHARGE` | 整数 | 未设置（UMA omol 使用 `0`） | 分子总电荷；覆盖结构的 `atoms.info["charge"]` |
 | `SPIN` | 整数 | 未设置（UMA omol 使用 `1`） | 分子自旋元数据；UMA omol 中为自旋多重度 |
 | `INFERENCE_MODE` | 字符串 | `default` | 推理模式：`default`、`turbo` |
-| `DEFAULT_DTYPE` | 字符串 | `float32` | 所有计算类型的 MACE 精度默认值。仅 MACE。 |
+| `DEFAULT_DTYPE` | 字符串 | `float64` | 所有计算类型的 MACE 精度默认值。仅 MACE。 |
 | `HEAD` | 字符串 | - | MACE head 或 DeepMD/DPA 多任务分支。 |
 
 #### 输出控制
@@ -1285,6 +1272,11 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `PRE_RELAX` | 布尔 | NVT=`.TRUE.`/NVE=`.FALSE.` | MD 前预弛豫（系综相关默认值） |
 | `PRE_RELAX_STEPS` | 整数 | `50` | 预弛豫最大步数 |
 | `PRE_RELAX_FMAX` | 浮点数 | `0.1` | 预弛豫力收敛阈值 (eV/Å) |
+
+`SAVE_INTERVAL` 只控制包含位置、速度、力等完整构型的轨迹保存间隔。
+`run.log` 中的能量和温度是轻量热力学记录，当前每个 MD step 输出一次；例如
+400000 步会产生 400001 条 step 日志，但 `SAVE_INTERVAL=200` 时仍只有
+2001 个轨迹构型。任务开头会分别打印这两个间隔。
 
 ### 7.2 模板示例
 
@@ -1356,9 +1348,8 @@ SAVE_INTERVAL = 10
 | `mlipx_results.json` | SP, OPT | JSON | 机器可读结果，含所有计算量 |
 | `raw/mlipx_results.json` | MD | JSON | MD 机器可读结果摘要和规范化数据路径 |
 | `raw/trajectory.traj` | MD | 二进制 | 不丢失坐标、速度、力等信息的 ASE 轨迹 |
-| `raw/md.csv` | MD | CSV | 逐帧热力学标量、应力和压力 |
+| `raw/md.csv` | MD | CSV | 逐帧热力学标量、构型/总应力及对应压力；仅完整 3D PBC 报告应力/压力 |
 | `artifacts.json` | MD | JSON | 版本化输出契约、单位、帧间隔和文件索引 |
-| `analysis/<task>/<hash>/metadata.json` | ANALYZE | JSON | 输入校验和、参数、软件版本、告警和输出索引 |
 | `optimization.log` | OPT | 文本 | ASE 优化器日志 |
 | `run.log` | 所有 | 文本 | 实时刷新日志；CLI 与 TUI 启动时显示其路径 |
 | `batch_summary.json` | BATCH | JSON | 批量处理所有结果的汇总 |
@@ -1665,20 +1656,7 @@ uv run mlipx batch candidates/ --model uma-s-1.pt \
   --model-type uma --task omat --calc-type sp --pattern "*.cif"
 ```
 
-### 14.5 Python API 吸附能
-
-```python
-from mlipx.api import calculate_adsorption_energy
-result = calculate_adsorption_energy(
-    adsorbed_structure="CO_on_Pt.cif",
-    gas_structure="CO.xyz",
-    surface_structure="Pt_slab.cif",
-    model_path="uma-s-1.pt", task="oc20", device="cuda",
-)
-print(f"吸附能: {result['adsorption_energy']:.4f} eV")
-```
-
-### 14.6 状态方程 (EOS)
+### 14.5 状态方程 (EOS)
 
 计算能量随体积变化的曲线：
 

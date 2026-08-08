@@ -16,7 +16,7 @@ branch here; Runners/Writers/CLI/TUI stay untouched.
 Phase 1 changes (plan section 11.1 / 17.2):
 
 * MACE receives its full backend-specific options (``default_dtype`` with a
-  factory-level float32 fallback, and ``head``) so the dtype chosen on the
+  factory-level float64 fallback, and ``head``) so the dtype chosen on the
   CLI/INCAR/API actually reaches ``MACECalculator``.
 * ``cuda:0`` style device strings are accepted and forwarded unchanged.
 * Unknown / misspelled engine-specific options are rejected (or warned about)
@@ -124,7 +124,7 @@ class CalculatorFactory:
                 warning (plan section 10 / 17.2).
             **kwargs: Engine-specific options. UMA accepts ``inference_mode``,
                 ``torch_num_threads`` and ``activation_checkpointing``; MACE
-                accepts ``default_dtype`` (factory fallback ``float32``) and
+                accepts ``default_dtype`` (factory fallback ``float64``) and
                 ``head``; DPA accepts ``head`` for multi-task branches; GRACE
                 accepts ``cpu_threads`` for TensorFlow intra-op parallelism.
 
@@ -152,15 +152,13 @@ class CalculatorFactory:
         elif m_type == "mace":
             from mlipx.calculators.mace_calc import MACECalculatorWrapper  # noqa: PLC0415
 
-            # Dtype fallback for *direct* factory construction is float32, the
-            # documented MACE default (matches BUILTIN_DEFAULTS["calculator.mace"]).
-            # The engine applies the same float32 default when nothing in the
-            # config layer already set default_dtype; --dtype float64 overrides it.
+            # Accuracy-first fallback for direct construction. Users must opt
+            # in explicitly to float32 when throughput matters more.
             return MACECalculatorWrapper(
                 model_path=model_path,
                 device=device,
                 task=task,
-                default_dtype=kwargs.get("default_dtype", "float32"),
+                default_dtype=kwargs.get("default_dtype", "float64"),
                 head=kwargs.get("head"),
             )
         elif m_type == "dpa":

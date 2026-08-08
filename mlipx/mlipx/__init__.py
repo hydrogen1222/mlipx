@@ -22,7 +22,6 @@ __all__ = [
     "ProgressEvent",
     "SinglePointRunner",
     "UMACalculator",
-    "calculate_adsorption_energy",
     "calculate_energy",
     "run_md",
     "run_optimization",
@@ -47,7 +46,6 @@ def __getattr__(name: str):
         "run_optimization": ".api",
         "run_md": ".api",
         "calculate_energy": ".api",
-        "calculate_adsorption_energy": ".api",
     }
     if name in _imports:
         import importlib  # noqa: PLC0415

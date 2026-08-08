@@ -46,7 +46,7 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
         self,
         model_path: str | Path,
         device: str = "cpu",
-        default_dtype: str = "float32",
+        default_dtype: str = "float64",
         task: str = "bulk",
         head: str | None = None,
     ):
@@ -57,8 +57,8 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
             model_path: Path to a MACE model file (``.model`` / ``.pt``).
             device: Device for calculation (``cpu``, ``cuda`` or ``cuda:N``).
             default_dtype: Model dtype (``float32`` or ``float64``). Defaults to
-            ``float32`` (the documented MACE default); use ``float64`` for
-            high-precision sp/opt energy differences.
+            ``float64`` for accuracy-first calculations. Users may explicitly
+            request ``float32`` for performance.
             task: PBC hint (``bulk`` or ``molecule``); not consumed by MACE.
             head: Optional MACE foundation-model head name. Forwarded to
                 ``MACECalculator`` as ``head=`` (a single string) when not

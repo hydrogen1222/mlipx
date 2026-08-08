@@ -79,7 +79,7 @@ fix_symmetry = false
 ; [engine:mace]
 ; task = bulk
 ; device = cuda:0
-; default_dtype = float32
+; default_dtype = float64
 
 ; [engine:uma]
 ; task = omat
@@ -94,7 +94,7 @@ fix_symmetry = false
 ; engine = mace
 ; path = /home/storm/models/mace/mace-mpa-0-medium.model
 ; task = bulk
-; dtype = float32
+; dtype = float64
 
 ; ------------------------------------------------------------
 ; Reusable profiles

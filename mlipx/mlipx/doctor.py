@@ -224,6 +224,39 @@ def run_diagnostics(
         )
         return checks, failures
 
+    if uma_installed:
+        fairchem_torch_requirement = None
+        try:
+            fairchem_requirements = metadata.requires("fairchem-core") or []
+        except metadata.PackageNotFoundError:
+            fairchem_requirements = []
+        for raw_requirement in fairchem_requirements:
+            requirement = Requirement(raw_requirement)
+            if requirement.name.lower() == "torch" and (
+                not requirement.marker or requirement.marker.evaluate()
+            ):
+                fairchem_torch_requirement = requirement
+                break
+        if (
+            fairchem_torch_requirement is not None
+            and fairchem_torch_requirement.specifier
+            and torch_ver not in fairchem_torch_requirement.specifier
+        ):
+            checks.append(
+                {
+                    "name": "UMA dependency profile",
+                    "value": "legacy GPU compatibility override",
+                    "status": "warn",
+                    "detail": (
+                        f"Installed torch {torch_ver} does not satisfy FairChem's "
+                        f"declared requirement {fairchem_torch_requirement}. The "
+                        "workspace override supports legacy GPUs but is not the "
+                        "FairChem reference environment. Runtime versions are "
+                        "recorded in MD artifacts.json; do not hide this mismatch."
+                    ),
+                }
+            )
+
     # 4. CUDA
     cuda_available = torch.cuda.is_available()
     cuda_suffix = (

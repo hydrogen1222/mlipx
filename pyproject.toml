@@ -17,11 +17,14 @@ members = [
     "mlipx",
 ]
 
+# LEGACY GPU COMPATIBILITY PROFILE — not the FairChem reference environment.
 # PyTorch 2.7+ removed sm_50/sm_60 from its pre-built CUDA wheels, so Pascal GPUs
 # (sm_61: GTX 10xx, P104-100) have no kernel and --device cuda fails with
 # "no kernel image". sm_60 kernels are binary-compatible with sm_61, so we pin
 # torch 2.6.0+cu124 (which still ships sm_60) from the PyTorch cu124 index.
-# Override fairchem-core's `torch~=2.8.0` pin; see `uv run mlipx doctor`.
+# This deliberately overrides fairchem-core's declared `torch~=2.8.0` pin.
+# Treat the resulting environment as a compatibility compromise; use FairChem's
+# declared dependencies for a reference environment. See `uv run mlipx doctor`.
 [tool.uv]
 override-dependencies = [
     "torch==2.6.0+cu124",
@@ -53,3 +56,7 @@ fairchem-demo-ocpapi = { workspace = true }
 fairchem-lammps = { workspace = true }
 mlipx = { workspace = true }
 torch = { index = "pytorch-cu124" }
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["archive"]

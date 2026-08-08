@@ -321,11 +321,10 @@ def test_python_api_forwards_all_thermostat_options(monkeypatch):
 
 
 class TestMaceDtypeDefaults:
-    """Plan section 4.1 / 12: MACE default dtype is float32 for every calc type,
-    and an explicit --dtype float64 is never silently overridden by the task default."""
+    """MACE defaults to accuracy-first float64 for every calculation type."""
 
     @pytest.mark.parametrize("calc_type", ["sp", "opt", "md"])
-    def test_mace_default_dtype_is_float32_for_all_calc_types(self, calc_type):
+    def test_mace_default_dtype_is_float64_for_all_calc_types(self, calc_type):
         from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
 
         config = EngineConfig(
@@ -348,7 +347,7 @@ class TestMaceDtypeDefaults:
             side_effect=fake_create,
         ):
             engine._create_calculator()
-        assert captured.get("default_dtype") == "float32"
+        assert captured.get("default_dtype") == "float64"
 
     def test_mace_explicit_dtype_float64_not_overridden(self):
         from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415

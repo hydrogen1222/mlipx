@@ -165,8 +165,11 @@ class ConfigScreen(Screen):
 
                 yield Label("MACE Precision:", id="dtype-label")
                 yield Select(
-                    options=[("float32 (faster)", "float32"), ("float64", "float64")],
-                    value=self.app.get_config("default_dtype", "float32"),
+                    options=[
+                        ("float64 (accuracy default)", "float64"),
+                        ("float32 (faster)", "float32"),
+                    ],
+                    value=self.app.get_config("default_dtype", "float64"),
                     id="dtype-select",
                 )
 
@@ -423,7 +426,7 @@ class ConfigScreen(Screen):
                 id="velocity-policy-select",
             )
 
-            yield Label("Large-force Warning Threshold (eV/Å):")
+            yield Label("Force-safety Abort Threshold (eV/Å):")
             yield Input(
                 value=str(self.app.get_config("fmax_abort", 20.0)),
                 id="fmax-abort-input",
@@ -957,13 +960,13 @@ class ConfigScreen(Screen):
                 fmax_abort = float(self.query_one("#fmax-abort-input", Input).value)
             except ValueError:
                 self.notify(
-                    "Large-force warning threshold must be a number",
+                    "Force-safety abort threshold must be a number",
                     severity="error",
                 )
                 return
-            if not math.isfinite(fmax_abort) or fmax_abort < 0:
+            if not math.isfinite(fmax_abort) or fmax_abort <= 0:
                 self.notify(
-                    "Large-force warning threshold must be a finite value >= 0",
+                    "Force-safety abort threshold must be a finite value > 0",
                     severity="error",
                 )
                 return

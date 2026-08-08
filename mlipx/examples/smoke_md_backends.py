@@ -24,7 +24,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--task", default=None)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--head", default=None)
-    parser.add_argument("--dtype", default="float32", choices=["float32", "float64"])
+    parser.add_argument("--dtype", default="float64", choices=["float32", "float64"])
     parser.add_argument("--steps", type=int, default=5)
     parser.add_argument("--output", type=Path, default=Path("md-backend-smoke"))
     parser.add_argument("--system", choices=["bulk", "molecule"], default="bulk")

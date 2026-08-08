@@ -30,13 +30,16 @@
 - [13. Performance Guide](#13-performance-guide)
 - [14. Examples](#14-examples)
 - [15. License](#15-license)
-- [MD analysis guide: core tasks, kinisi, and GEMDAT](ANALYSIS_EN.md)
 
 ---
 
 ## 1. Introduction
 
 mlipx (MLIP eXtended) is a multi-engine machine-learning interatomic potential (MLIP) computation tool that provides a VASP-like user experience. It supports multiple MLIP backends behind one unified interface:
+
+Advanced trajectory post-processing was intentionally frozen after Analysis
+v1 and is not part of the supported scope. mlipx currently focuses on reliable
+MLIP single-point calculations, optimization, and raw MLMD trajectory generation.
 
 | Engine | `MODEL_TYPE` | Backend package |
 |-------|--------------|-----------------|
@@ -717,8 +720,8 @@ mlipx opt Li2O.cif --model uma-s-1.pt --model-type uma --task omat --cell-opt --
 # -- MACE head selection: use a head actually listed by the loaded model
 .venv-mace/bin/mlipx sp bulk.cif --model mace-mpa-0-medium.model --model-type mace --task bulk --head default
 
-# -- MACE dtype (float32 by default for every calculation type)
-.venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float64
+# -- MACE dtype (float64 by default; opt into float32 for speed)
+.venv-mace/bin/mlipx opt bulk.cif --model mace.model --model-type mace --task bulk --dtype float32
 
 # -- DPA (DeepMD) -- periodic optimization in its isolated environment
 .venv-dpa/bin/mlipx opt bulk.vasp --model dpa.pt --model-type dpa --task bulk --fmax 0.01 --optimizer LBFGS
@@ -732,16 +735,14 @@ mlipx batch structures/ --model grace_model/ --model-type grace --task bulk --ca
 | Option | Description |
 |--------|-------------|
 | `--head HEAD` | Select a head that is actually present in the model. Omit it for a single-head model. Head names are model/version-specific. |
-| `--dtype float32\|float64` | Compute precision. The default is **`float32` for SP, optimization, and MD**. Opt into `float64` when a compatible model and high-precision energy differences require it. |
+| `--dtype float32\|float64` | Compute precision. The accuracy-first default is **`float64` for SP, optimization, and MD**. Opt into `float32` explicitly for speed. |
 
 > ⚠️ `--head` takes one string. Although mace-torch itself may warn and fall
 > back for an unknown name, mlipx rejects that case: silently changing heads
 > changes the potential-energy surface. The bundled
 > `models/mace/mace-mpa-0-medium.model` currently exposes only `default`.
-> That local file stores float64 weights; the default `float32` setting makes
-> mace-torch convert it at load time (and emit a warning). Use
-> `--dtype float64` when preserving the stored precision matters more than
-> memory and throughput.
+> The default `float64` setting is accuracy-first. Use `--dtype float32` only
+> when the precision/performance tradeoff is explicitly acceptable.
 
 ### Engine Troubleshooting
 
@@ -931,18 +932,18 @@ The real-backend interface smoke test uses four atoms, CPU by default, and
 │   ├── XDATCAR               # VASP syntax, unwrapped direct coordinates
 │   ├── CONTCAR               # VASP POSCAR/CONTCAR syntax
 │   └── OUTCAR                # explicitly labelled VASP-like MD subset
-├── analysis/                 # task/hash analysis results with provenance
 ├── artifacts.json            # output contract, units, frame metadata, file index
 ├── resolved_config.json
 └── run.log
 ```
 
-Use `raw/trajectory.traj` as the preferred post-processing input.
+Use `raw/trajectory.traj` as the preferred input for external post-processing.
 `vasp/XDATCAR` targets OVITO, ASE, and other VASP ecosystem tools. It uses
 VASP fixed-width fields and `Direct configuration=` records while retaining
 continuous coordinates across periodic boundaries.
-See the [MD analysis guide](ANALYSIS_EN.md) for commands, result contracts,
-and solid-electrolyte workflows.
+Built-in advanced trajectory post-processing is not currently provided. For
+equilibration/production separation, run independent MD jobs; mlipx does not
+automatically manage `equil_steps` in the current scope.
 
 ### 5.4 Batch Processing
 
@@ -1007,7 +1008,7 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --inference-mode MODE UMA inference preset: default|turbo
   --[no-]activation-checkpointing
                         UMA memory/speed override; omitted: follow inference preset
-  --dtype DTYPE         MACE dtype float32|float64 [default: float32]
+  --dtype DTYPE         MACE dtype float32|float64 [default: float64]
   --head HEAD           MACE head or DeepMD/DPA multi-task branch
   --output DIR, -o DIR  Output directory [default: .]
   --name NAME, -n NAME  Job name (output goes to DIR/NAME)
@@ -1048,7 +1049,7 @@ mlipx md STRUCTURE --model MODEL [options]
   --pre-relax           Pre-relax before MD [default: on for NVT, off for NVE]
   --pre-relax-steps N   Max pre-relaxation steps [default: 50]
   --pre-relax-fmax F    Pre-relaxation force threshold eV/Å [default: 0.1]
-  --fmax-abort F        Large-force warning threshold eV/Å [default: 20.0]
+  --fmax-abort F        Force-safety abort threshold eV/Å [default: 20.0]
 ```
 
 ##### `mlipx batch` — Batch Processing
@@ -1171,7 +1172,7 @@ only for molecular tasks and are cleared when switching back to a periodic
 task. OPT also exposes cell optimization and symmetry
 preservation. MD exposes the ensemble, temperature, timestep, step/save counts,
 NVT friction, pre-relaxation controls, random seed, velocity policy, and
-large-force warning threshold. Paths support live validation with visual
+force-safety abort threshold. Paths support live validation with visual
 feedback:
 
 ```
@@ -1199,7 +1200,7 @@ For scripting and workflow integration, import `mlipx.api`:
 
 ```python
 from mlipx.api import run_single_point, run_optimization, run_md
-from mlipx.api import calculate_energy, calculate_adsorption_energy
+from mlipx.api import calculate_energy
 
 # Single point energy
 results = run_single_point(
@@ -1236,19 +1237,6 @@ print(f"Final temperature: {results['temperature']:.1f} K")
 energy = calculate_energy("structure.cif", "uma-s-1.pt")
 print(f"Energy: {energy:.4f} eV")
 
-# Adsorption energy
-# `task` sets the task for the periodic slab/adsorbed system; the isolated
-# gas molecule is scored automatically with a molecular task (UMA periodic
-# task -> omol; generic engine -> molecule) -- no need to set it separately.
-ads_results = calculate_adsorption_energy(
-    adsorbed_structure="adsorbed.cif",
-    gas_structure="co2.xyz",
-    surface_structure="slab.cif",
-    model_path="uma-s-1.pt",
-    task="oc20",          # periodic task for slab/adsorbed system
-    # gas_task="omol",    # optional: override the gas molecule's task
-)
-print(f"Adsorption energy: {ads_results['adsorption_energy']:.4f} eV")
 ```
 
 Full API reference:
@@ -1259,7 +1247,6 @@ Full API reference:
 | `run_optimization(structure, model_path, ...)` | `dict` | OPT with convergence info |
 | `run_md(structure, model_path, ...)` | `dict` | MD with trajectory and temperature |
 | `calculate_energy(structure, model_path, ...)` | `float` | Quick energy value |
-| `calculate_adsorption_energy(ads, gas, surf, ...)` | `dict` | E_ads = E_adsorbed - E_gas - E_surface; gas scored with a molecular task automatically (`gas_task` overrides) |
 
 ---
 
@@ -1286,7 +1273,7 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `CHARGE` | int | unset (UMA omol uses `0`) | Total molecular charge; overrides `atoms.info["charge"]` |
 | `SPIN` | int | unset (UMA omol uses `1`) | Molecular spin metadata; spin multiplicity for UMA omol |
 | `INFERENCE_MODE` | string | `default` | Inference mode: `default`, `turbo` |
-| `DEFAULT_DTYPE` | string | `float32` | MACE dtype for every calculation type. MACE only. |
+| `DEFAULT_DTYPE` | string | `float64` | MACE dtype for every calculation type. MACE only. |
 | `HEAD` | string | - | MACE head or DeepMD/DPA multi-task branch. |
 
 #### Output Control
@@ -1326,6 +1313,13 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `PRE_RELAX` | bool | NVT=`.TRUE.`/NVE=`.FALSE.` | Pre-relax before MD (ensemble-aware default) |
 | `PRE_RELAX_STEPS` | int | `50` | Max pre-relaxation steps |
 | `PRE_RELAX_FMAX` | float | `0.1` | Pre-relaxation force threshold (eV/Å) |
+
+`SAVE_INTERVAL` controls only full trajectory frames containing positions,
+velocities, forces, and related frame data. Energy and temperature lines in
+`run.log` are lightweight thermodynamic records and are currently emitted at
+every MD step. For example, 400000 steps produce 400001 step log records, while
+`SAVE_INTERVAL=200` still produces only 2001 trajectory frames. Both intervals
+are printed separately at the start of a run.
 
 ### 7.2 Template Examples
 
@@ -1397,9 +1391,8 @@ The following are all recognized as `TRUE` and `FALSE` (case-insensitive):
 | `mlipx_results.json` | SP, OPT | JSON | Machine-readable results with all computed quantities |
 | `raw/mlipx_results.json` | MD | JSON | MD result summary and canonical data paths |
 | `raw/trajectory.traj` | MD | Binary | Lossless ASE trajectory retaining positions, velocities, forces, and more |
-| `raw/md.csv` | MD | CSV | Per-frame thermodynamic scalars, stress, and pressure |
+| `raw/md.csv` | MD | CSV | Per-frame thermodynamic scalars plus configurational/total stress and pressure; stress/pressure only for full 3D PBC |
 | `artifacts.json` | MD | JSON | Versioned output contract, units, frame interval, and file index |
-| `analysis/<task>/<hash>/metadata.json` | ANALYZE | JSON | Input checksums, parameters, software versions, warnings, output index |
 | `optimization.log` | OPT | Text | ASE optimizer log |
 | `run.log` | All | Text | Continuously flushed live log; its path is shown by CLI and TUI |
 | `batch_summary.json` | BATCH | JSON | Summary of all structures processed in batch |
@@ -1977,25 +1970,7 @@ for r in data["results"]:
         print(f"{r['filename']}: {r['energy']:.4f} eV")
 ```
 
-### 14.5 Adsorption Energy via Python API
-
-```python
-from mlipx.api import calculate_adsorption_energy
-
-result = calculate_adsorption_energy(
-    adsorbed_structure="CO_on_Pt.cif",
-    gas_structure="CO.xyz",
-    surface_structure="Pt_slab.cif",
-    model_path="uma-s-1.pt",
-    task="oc20",
-    device="cuda",
-)
-print(f"Adsorption energy: {result['adsorption_energy']:.4f} eV")
-# E_ads = E(CO+Pt) - E(CO) - E(Pt)
-# Negative = favorable adsorption
-```
-
-### 14.6 Workflow with INCAR File
+### 14.5 Workflow with INCAR File
 
 ```bash
 # 1. Generate template

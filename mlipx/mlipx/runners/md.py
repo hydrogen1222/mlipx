@@ -50,6 +50,21 @@ if TYPE_CHECKING:
     from mlipx.protocols import ProgressCallback
 
 
+class ForceSafetyAbort(RuntimeError):
+    """Raised after checkpointing an MD frame that exceeds ``fmax_abort``."""
+
+    def __init__(self, *, step: int, max_force: float, atom_index: int, threshold: float):
+        self.step = step
+        self.max_force = max_force
+        self.atom_index = atom_index
+        self.threshold = threshold
+        super().__init__(
+            f"Force safety abort at MD step {step}: atom {atom_index} has "
+            f"|F|={max_force:.6g} eV/Angstrom, exceeding "
+            f"fmax_abort={threshold:.6g} eV/Angstrom"
+        )
+
+
 class MDRunner(BaseRunner):
     """Run molecular dynamics simulations.
 
@@ -72,6 +87,8 @@ class MDRunner(BaseRunner):
 
     VALID_ENSEMBLES = {"nvt", "nve"}
     VALID_THERMOSTATS = {"langevin", "bussi", "nhc"}
+    LOG_INTERVAL_STEPS = 1
+    PROGRESS_INTERVAL_STEPS = 100
 
     def __init__(
         self,
@@ -103,11 +120,8 @@ class MDRunner(BaseRunner):
         # Reproducibility / velocity policy (plan section 5.2 / 5.3).
         seed: int | None = None,
         velocity_policy: str = "auto",
-        equil_steps: int = 0,
         pre_relax_mode: str = "none",
-        # Explosion-guard threshold for finite (but suspiciously large) forces.
-        # Sourced from the safety defaults so it is not a magic literal
-        # (plan section 5.7). Warnings never abort the run.
+        # Explosion-guard threshold for finite (but unsafe) forces.
         fmax_abort: float = BUILTIN_DEFAULTS["safety"]["fmax_abort"],
         log_fn: Any | None = None,
         progress_callback: ProgressCallback | None = None,
@@ -174,15 +188,11 @@ class MDRunner(BaseRunner):
         self.write_trajectory = write_trajectory
         self.write_json = write_json
 
-        # MD output contract.  ``raw`` is the lossless internal source of
-        # truth, ``vasp`` is a syntax-compatible interoperability view, and
-        # ``analysis`` is reserved for derived data.  Keeping these separate
-        # prevents a formatted export from silently becoming the analysis
-        # input in future workflows.
+        # MD output contract: ``raw`` is the lossless internal source of truth
+        # and ``vasp`` is a syntax-compatible interoperability view.
         self.raw_dir = self.output_dir / "raw"
         self.vasp_dir = self.output_dir / "vasp"
-        self.analysis_dir = self.output_dir / "analysis"
-        for directory in (self.raw_dir, self.vasp_dir, self.analysis_dir):
+        for directory in (self.raw_dir, self.vasp_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
         # NEW: Pre-relaxation settings
@@ -197,7 +207,6 @@ class MDRunner(BaseRunner):
         # does not make an NVT trajectory reproducible.
         self.rng = np.random.default_rng(seed)
         self.velocity_policy = str(velocity_policy).lower()
-        self.equil_steps = int(equil_steps)
         self.pre_relax_mode = str(pre_relax_mode).lower()
         self.fmax_abort = float(fmax_abort)
 
@@ -214,6 +223,8 @@ class MDRunner(BaseRunner):
             raise ValueError("steps must be >= 0")
         if self.save_interval <= 0:
             raise ValueError("save_interval must be > 0")
+        if self.fmax_abort <= 0:
+            raise ValueError("fmax_abort must be > 0 eV/Angstrom")
         if self.ensemble == "nvt":
             if self.thermostat not in self.VALID_THERMOSTATS:
                 raise ValueError(
@@ -233,23 +244,13 @@ class MDRunner(BaseRunner):
                     raise ValueError("nhc_tchain must be >= 1 for NVT NHC dynamics")
                 if self.nhc_tloop < 1:
                     raise ValueError("nhc_tloop must be >= 1 for NVT NHC dynamics")
-        # pre_relax_mode / equil_steps are declared in the schema as Phase-3
-        # vocabulary. They must NOT be silently ignored (plan section 5.2): a
-        # non-default value raises an explicit, loud "not yet implemented"
-        # error instead of a silent no-op.
+        # pre_relax_mode is future vocabulary and must not be silently ignored.
         if self.pre_relax_mode != "none":
             raise NotImplementedError(
                 f"pre_relax_mode={self.pre_relax_mode!r} is not yet implemented "
                 "(Phase 3). Use the legacy pre_relax=True/False (positions-only) "
                 "for now."
             )
-        if self.equil_steps > 0:
-            raise NotImplementedError(
-                f"equil_steps={self.equil_steps} is not yet implemented "
-                "(Phase 3). Run equilibration as a separate short MD and restart "
-                "from it."
-            )
-
         # Validate ensemble
         if self.ensemble not in self.VALID_ENSEMBLES:
             raise ValueError(
@@ -267,17 +268,49 @@ class MDRunner(BaseRunner):
                 level="warning",
             )
 
-    def _stress_for_saved_frame(self, atoms: Atoms) -> np.ndarray | None:
-        """Return ASE-Voigt stress when requested and supported."""
-        if not self.write_stress or not getattr(self.calculator, "has_stress", False):
-            return None
-        return np.asarray(atoms.get_stress(voigt=True), dtype=float)
+    def _stress_observables(self, atoms: Atoms) -> dict[str, Any]:
+        """Return explicitly named 3D-bulk stress and pressure observables.
+
+        Calculator/configurational stress excludes the kinetic ideal-gas term;
+        total MD stress includes it via ASE. Scalar bulk pressure is only
+        physically exposed for fully periodic systems. Molecules and partial-PBC
+        systems return unavailable values instead of vacuum-dependent numbers.
+        """
+        unavailable = {
+            "configurational_stress": None,
+            "total_stress": None,
+            "configurational_pressure_gpa": None,
+            "total_pressure_gpa": None,
+        }
+        if (
+            not self.write_stress
+            or not getattr(self.calculator, "has_stress", False)
+            or not bool(np.asarray(atoms.pbc, dtype=bool).all())
+        ):
+            return unavailable
+
+        configurational = np.asarray(
+            atoms.get_stress(voigt=True, include_ideal_gas=False), dtype=float
+        )
+        total = np.asarray(
+            atoms.get_stress(voigt=True, include_ideal_gas=True), dtype=float
+        )
+        factor = MDOutcarWriter.EV_A3_TO_GPA
+        return {
+            "configurational_stress": configurational,
+            "total_stress": total,
+            "configurational_pressure_gpa": (
+                -float(np.sum(configurational[:3])) / 3.0 * factor
+            ),
+            "total_pressure_gpa": -float(np.sum(total[:3])) / 3.0 * factor,
+        }
 
     def _write_artifacts_manifest(
         self,
         *,
         status: str,
         frames: list[dict[str, Any]],
+        error: dict[str, Any] | None = None,
     ) -> None:
         """Describe the versioned MD output contract without parsing files."""
         artifacts: dict[str, dict[str, Any]] = {}
@@ -308,14 +341,22 @@ class MDRunner(BaseRunner):
             mlipx_version = "unknown"
 
         dependency_versions = {}
-        for distribution in ("ase", "numpy"):
+        for distribution in (
+            "ase",
+            "numpy",
+            "torch",
+            "fairchem-core",
+            "mace-torch",
+            "deepmd-kit",
+            "tensorpotential",
+        ):
             try:
                 dependency_versions[distribution] = version(distribution)
             except PackageNotFoundError:
                 dependency_versions[distribution] = "unknown"
 
         manifest = {
-            "schema": "mlipx.md-artifacts/1",
+            "schema": "mlipx.md-artifacts/2",
             "status": status,
             "producer": {"name": "mlipx", "version": mlipx_version},
             "runtime": {"packages": dependency_versions},
@@ -323,7 +364,6 @@ class MDRunner(BaseRunner):
             "layout": {
                 "raw": "Lossless canonical trajectory and machine-readable data",
                 "vasp": "VASP-syntax-compatible interoperability exports",
-                "analysis": "Reserved for derived post-processing results",
             },
             "trajectory": {
                 "frames": len(frames),
@@ -343,8 +383,17 @@ class MDRunner(BaseRunner):
                 "stress": "eV/angstrom^3",
                 "temperature": "K",
             },
+            "observables": {
+                "configurational_stress": "ASE calculator stress; kinetic term excluded",
+                "total_stress": "configurational stress plus ASE ideal-gas kinetic term",
+                "configurational_pressure_gpa": "-trace(configurational_stress)/3",
+                "total_pressure_gpa": "-trace(total_stress)/3; reported only for 3D PBC",
+                "non_3d_pbc_policy": "stress and scalar bulk pressure unavailable",
+            },
             "artifacts": artifacts,
         }
+        if error is not None:
+            manifest["error"] = error
         (self.output_dir / "artifacts.json").write_text(
             json.dumps(manifest, indent=2, default=str) + "\n",
             encoding="utf-8",
@@ -640,11 +689,27 @@ class MDRunner(BaseRunner):
             if optimizer.converged():
                 self.log("✓ Pre-relaxation converged")
             else:
-                self.log("! Pre-relaxation did not fully converge, but continuing...")
+                forces = atoms.get_forces()
+                final_fmax = float(np.max(np.linalg.norm(forces, axis=1)))
+                raise RuntimeError(
+                    "Pre-relaxation did not converge after "
+                    f"{optimizer.nsteps} steps (final fmax={final_fmax:.6g} "
+                    "eV/Angstrom); production MD was not started. Increase "
+                    "pre_relax_steps, loosen pre_relax_fmax with scientific "
+                    "justification, or disable pre_relax explicitly."
+                )
 
         except CancellationRequested:
             self.log("Pre-relaxation cancelled by user")
             raise  # Re-raise to stop the entire MD run
+        except RuntimeError as e:
+            if "Pre-relaxation did not converge" in str(e):
+                raise
+            raise RuntimeError(
+                "Pre-relaxation failed at step "
+                f"{optimizer.nsteps}; MD was not started because the structure "
+                "may be unsafe."
+            ) from e
         except Exception as e:
             raise RuntimeError(
                 "Pre-relaxation failed at step "
@@ -690,7 +755,10 @@ class MDRunner(BaseRunner):
         self.log(f"Temperature:      {self.temperature} K")
         self.log(f"Time step:        {self.timestep / units.fs} fs")
         self.log(f"Steps:            {self.steps}")
-        self.log(f"Save interval:    {self.save_interval}")
+        self.log(
+            f"Save interval:    {self.save_interval} steps (trajectory frames)"
+        )
+        self.log(f"Thermodynamic log interval: {self.LOG_INTERVAL_STEPS} step")
         self.log(f"Pre-relaxation:   {'Yes' if self.pre_relax else 'No'}")
 
         # Copy atoms to prevent mutating the caller's object. Pre-relaxation
@@ -792,40 +860,19 @@ class MDRunner(BaseRunner):
             forces_chk = atoms.get_forces()
             self._check_finite(atoms, pe, forces=forces_chk, context=f"MD step {step}")
 
-            # Explosion guard: warn on suspiciously large (but finite) forces.
-            # _check_finite above already aborts on NaN/inf; this catches a run
-            # that is diverging while still producing finite numbers. The
-            # threshold comes from the safety default (fmax_abort, 20 eV/Å by
-            # default) -- configurable via the ``fmax_abort`` parameter (plan
-            # section 5.7) -- and never aborts, only warns. max_force is
-            # computed every step because forces_chk is already available
-            # (free), but the warning is only logged every 100 steps to avoid
-            # flooding the log.
-            max_force = float(np.max(np.linalg.norm(forces_chk, axis=1)))
-            if max_force > self.fmax_abort and (
-                step > 0 and (step % 100 == 0 or step == self.steps)
-            ):
-                self.log(
-                    f"⚠️ WARNING: Large forces detected ({max_force:.1f} eV/Å)",
-                    level="warning",
-                )
-                self.log("   Structure may be unstable. Consider:")
-                self.log("   - Lowering temperature")
-                self.log("   - Relaxing the positions more carefully before MD")
-                self.log("   - Checking initial structure")
+            force_magnitudes = np.linalg.norm(forces_chk, axis=1)
+            atom_index = int(np.argmax(force_magnitudes))
+            max_force = float(force_magnitudes[atom_index])
+            force_abort = max_force > self.fmax_abort
 
-            # Save trajectory frame (streamed to disk; only scalars in RAM)
-            if step % self.save_interval == 0:
+            # Save regular trajectory frames and always checkpoint the unsafe
+            # frame before raising a force-safety abort.
+            if step % self.save_interval == 0 or force_abort:
                 time_fs = float(step * self.timestep / units.fs)
-                stress = self._stress_for_saved_frame(atoms)
+                stress_data = self._stress_observables(atoms)
+                configurational_stress = stress_data["configurational_stress"]
+                total_stress = stress_data["total_stress"]
                 volume = float(atoms.get_volume())
-                pressure_gpa = None
-                if stress is not None:
-                    pressure_gpa = (
-                        -float(np.sum(stress[:3]))
-                        / 3.0
-                        * MDOutcarWriter.EV_A3_TO_GPA
-                    )
                 frame_data = {
                     "step": step,
                     "time_fs": time_fs,
@@ -834,8 +881,7 @@ class MDRunner(BaseRunner):
                     "total_energy": total_e,
                     "temperature": temp,
                     "volume": volume,
-                    "stress": stress,
-                    "pressure_gpa": pressure_gpa,
+                    **stress_data,
                 }
                 trajectory_summary.append(frame_data)
 
@@ -857,16 +903,30 @@ class MDRunner(BaseRunner):
                             "total_energy_eV",
                             "temperature_K",
                             "volume_A3",
-                            "stress_xx_eV_A3",
-                            "stress_yy_eV_A3",
-                            "stress_zz_eV_A3",
-                            "stress_yz_eV_A3",
-                            "stress_xz_eV_A3",
-                            "stress_xy_eV_A3",
-                            "pressure_GPa",
+                            "configurational_stress_xx_eV_A3",
+                            "configurational_stress_yy_eV_A3",
+                            "configurational_stress_zz_eV_A3",
+                            "configurational_stress_yz_eV_A3",
+                            "configurational_stress_xz_eV_A3",
+                            "configurational_stress_xy_eV_A3",
+                            "total_stress_xx_eV_A3",
+                            "total_stress_yy_eV_A3",
+                            "total_stress_zz_eV_A3",
+                            "total_stress_yz_eV_A3",
+                            "total_stress_xz_eV_A3",
+                            "total_stress_xy_eV_A3",
+                            "configurational_pressure_GPa",
+                            "total_pressure_GPa",
                         ]
                     )
-                stress_values = stress.tolist() if stress is not None else [""] * 6
+                configurational_values = (
+                    configurational_stress.tolist()
+                    if configurational_stress is not None
+                    else [""] * 6
+                )
+                total_values = (
+                    total_stress.tolist() if total_stress is not None else [""] * 6
+                )
                 md_csv_writer.writerow(
                     [
                         step,
@@ -876,8 +936,14 @@ class MDRunner(BaseRunner):
                         total_e,
                         temp,
                         volume,
-                        *stress_values,
-                        pressure_gpa if pressure_gpa is not None else "",
+                        *configurational_values,
+                        *total_values,
+                        stress_data["configurational_pressure_gpa"]
+                        if stress_data["configurational_pressure_gpa"] is not None
+                        else "",
+                        stress_data["total_pressure_gpa"]
+                        if stress_data["total_pressure_gpa"] is not None
+                        else "",
                     ]
                 )
                 md_csv_file.flush()
@@ -899,13 +965,32 @@ class MDRunner(BaseRunner):
                         total_energy=float(total_e),
                         temperature=float(temp),
                         forces=forces_chk if self.write_forces else None,
-                        stress=stress,
+                        configurational_stress=configurational_stress,
+                        total_stress=total_stress,
                     )
 
                 if traj_writer is not None:
                     traj_writer.write(atoms)
-            # Print progress every 100 steps
-            if step % 100 == 0 or step == self.steps:
+
+            if force_abort:
+                raise ForceSafetyAbort(
+                    step=step,
+                    max_force=max_force,
+                    atom_index=atom_index,
+                    threshold=self.fmax_abort,
+                )
+            # Persist a scalar thermodynamic log record every MD step. This is
+            # intentionally independent of save_interval: the latter controls
+            # full trajectory frames, not lightweight E/T diagnostics.
+            if step % self.LOG_INTERVAL_STEPS == 0 or step == self.steps:
+                self.log(
+                    f"Step {step:6d}/{self.steps}: "
+                    f"E = {total_e:12.4f} eV, T = {temp:6.1f} K"
+                )
+
+            # Keep UI/progress-callback updates throttled; emitting hundreds
+            # of thousands of render events would not add useful information.
+            if step % self.PROGRESS_INTERVAL_STEPS == 0 or step == self.steps:
                 self._emit_progress(
                     "running",
                     f"Step {step:6d}/{self.steps}: E = {total_e:12.4f} eV, T = {temp:6.1f} K",
@@ -917,15 +1002,38 @@ class MDRunner(BaseRunner):
                         "total_energy": float(total_e),
                     },
                 )
-                self.log(
-                    f"Step {step:6d}/{self.steps}: "
-                    f"E = {total_e:12.4f} eV, T = {temp:6.1f} K"
-                )
 
         dyn.attach(print_progress, interval=1)
 
         try:
             dyn.run(self.steps)
+        except ForceSafetyAbort as exc:
+            self.log(f"\nMD aborted by force safety threshold: {exc}", level="error")
+            if traj_writer is not None:
+                traj_writer.close()
+            if md_csv_file is not None:
+                md_csv_file.close()
+            ContcarWriter().write_with_energy(
+                atoms,
+                self.vasp_dir / "CONTCAR",
+                energy=float(atoms.get_potential_energy()),
+                forces=atoms.get_forces(),
+            )
+            if md_outcar_writer is not None:
+                md_outcar_writer.finalize(status="aborted")
+            self._write_artifacts_manifest(
+                status="aborted",
+                frames=trajectory_summary,
+                error={
+                    "type": "force_safety_abort",
+                    "message": str(exc),
+                    "step": exc.step,
+                    "atom_index": exc.atom_index,
+                    "max_force_eV_A": exc.max_force,
+                    "fmax_abort_eV_A": exc.threshold,
+                },
+            )
+            raise
         except CancellationRequested:
             self.log("\n⚠️ MD simulation cancelled by user")
             # Save what we have before returning
@@ -965,7 +1073,7 @@ class MDRunner(BaseRunner):
         # Final energy
         final_energy = atoms.get_potential_energy()
         final_forces = atoms.get_forces()
-        final_stress = self._stress_for_saved_frame(atoms)
+        final_stress_data = self._stress_observables(atoms)
         self._check_finite(
             atoms, final_energy, final_forces, context="MD final structure"
         )
@@ -978,7 +1086,7 @@ class MDRunner(BaseRunner):
         results = {
             "energy": final_energy,
             "forces": final_forces,
-            "stress": final_stress,
+            **final_stress_data,
             "temperature": final_temp,
             "md_steps": self.steps,
             "timestep_fs": float(self.timestep / units.fs),

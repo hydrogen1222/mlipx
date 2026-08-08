@@ -94,13 +94,9 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "activation_checkpointing": None,
     },
     "calculator.mace": {
-        # float32 is the documented performance-oriented default.  Some model
-        # files (including the bundled mace-mpa-0-medium.model) store float64
-        # weights and mace-torch will explicitly report their conversion.
-        # The engine applies one default for every calc type; users can preserve
-        # a float64 model / request higher-precision energy differences via
-        # --dtype float64 / DEFAULT_DTYPE.
-        "default_dtype": "float32",
+        # Accuracy is the scientific default. Users may explicitly opt into
+        # float32 with --dtype float32 / DEFAULT_DTYPE=float32 for throughput.
+        "default_dtype": "float64",
         "head": None,
     },
     "calculator.dpa": {},

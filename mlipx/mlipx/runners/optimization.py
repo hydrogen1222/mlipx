@@ -139,19 +139,15 @@ class OptimizationRunner(BaseRunner):
 
         # Check cell_opt requirements
         if cell_opt and calculator.task in {"omol", "molecule"}:
-            self.log(
+            raise ValueError(
                 "Cell optimization is not physically defined for an isolated "
-                "molecule; cell optimization disabled.",
-                level="warning",
+                "molecule. Use positions-only optimization."
             )
-            self.cell_opt = False
         elif cell_opt and not calculator.has_stress:
-            self.log(
-                "Warning: Stress not supported for this task, "
-                "cell optimization disabled",
-                level="warning",
+            raise ValueError(
+                "Cell optimization requires calculator stress support; use "
+                "positions-only optimization for this model/task."
             )
-            self.cell_opt = False
 
     def run(self, atoms: Atoms) -> dict[str, Any]:
         """Run geometry optimization.
@@ -162,6 +158,14 @@ class OptimizationRunner(BaseRunner):
         Returns:
             Dictionary with results including converged status and steps
         """
+        if self.cell_opt and not bool(np.asarray(atoms.pbc, dtype=bool).all()):
+            raise ValueError(
+                "Cell optimization currently requires full 3D periodicity "
+                "(pbc=True in all directions). Partial-PBC and non-periodic "
+                "cell relaxation are not supported; use positions-only "
+                "optimization."
+            )
+
         self.print_header("GEOMETRY OPTIMIZATION")
         self._emit_progress("loading_model", "Loading model and preparing structure...")
 

@@ -403,7 +403,7 @@ class MDOutcarWriter:
             "=" * 100,
             "",
             f"Generated:          {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
-            "Format contract:    mlipx.vasp-like-outcar.md/1",
+            "Format contract:    mlipx.vasp-like-outcar.md/2",
             f"Formula:            {atoms.get_chemical_formula()}",
             f"Number of ions:     {len(atoms)}",
             f"Ion counts:         {summary}",
@@ -427,8 +427,10 @@ class MDOutcarWriter:
                 "",
                 "Units: positions=Angstrom, forces=eV/Angstrom, energy=eV, ",
                 "       stress=eV/Angstrom^3 and GPa, time=fs",
-                "Stress convention: ASE Voigt order xx yy zz yz xz xy; ",
-                "                   pressure = -trace(stress)/3",
+                "Stress convention: ASE Voigt order xx yy zz yz xz xy.",
+                "  configurational = calculator stress (no kinetic term)",
+                "  total MD stress = configurational + ideal-gas kinetic term",
+                "  scalar pressures = -trace(stress)/3 (3D PBC only)",
                 "",
             ]
         )
@@ -445,7 +447,8 @@ class MDOutcarWriter:
         total_energy: float,
         temperature: float,
         forces: np.ndarray | None,
-        stress: np.ndarray | None,
+        configurational_stress: np.ndarray | None,
+        total_stress: np.ndarray | None,
     ) -> None:
         """Append one saved ionic configuration and its observables."""
         if self.output_path is None:
@@ -502,32 +505,41 @@ class MDOutcarWriter:
             ]
         )
 
-        if stress is not None:
-            voigt = np.asarray(stress, dtype=float).reshape(6)
-            stress_gpa = voigt * self.EV_A3_TO_GPA
-            pressure = -float(np.sum(stress_gpa[:3])) / 3.0
-            tensor = np.array(
-                [
-                    [voigt[0], voigt[5], voigt[4]],
-                    [voigt[5], voigt[1], voigt[3]],
-                    [voigt[4], voigt[3], voigt[2]],
-                ]
-            )
+        if configurational_stress is not None and total_stress is not None:
+            for label, stress in (
+                ("configurational", configurational_stress),
+                ("total MD", total_stress),
+            ):
+                voigt = np.asarray(stress, dtype=float).reshape(6)
+                stress_gpa = voigt * self.EV_A3_TO_GPA
+                pressure = -float(np.sum(stress_gpa[:3])) / 3.0
+                tensor = np.array(
+                    [
+                        [voigt[0], voigt[5], voigt[4]],
+                        [voigt[5], voigt[1], voigt[3]],
+                        [voigt[4], voigt[3], voigt[2]],
+                    ]
+                )
+                lines.extend(
+                    [
+                        "",
+                        f"  {label} stress tensor (ASE convention, eV/Angstrom^3):",
+                        *[
+                            "    " + "".join(f"{value:16.9f}" for value in row)
+                            for row in tensor
+                        ],
+                        f"  {label} stress Voigt xx yy zz yz xz xy (GPa):",
+                        "    " + "".join(f"{value:16.8f}" for value in stress_gpa),
+                        f"  {label} pressure = {pressure:16.8f} GPa",
+                    ]
+                )
+        else:
             lines.extend(
                 [
                     "",
-                    "  stress tensor (ASE convention, eV/Angstrom^3):",
-                    *[
-                        "    " + "".join(f"{value:16.9f}" for value in row)
-                        for row in tensor
-                    ],
-                    "  stress Voigt xx yy zz yz xz xy (GPa):",
-                    "    " + "".join(f"{value:16.8f}" for value in stress_gpa),
-                    f"  external pressure (from ASE stress) = {pressure:16.8f} GPa",
+                    "  3D bulk stress/pressure: unavailable or disabled",
                 ]
             )
-        else:
-            lines.extend(["", "  stress: unavailable or disabled"])
         lines.append("")
 
         with self.output_path.open("a", encoding="utf-8") as handle:

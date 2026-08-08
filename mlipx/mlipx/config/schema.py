@@ -119,7 +119,7 @@ _SPECS: list[OptionSpec] = [
         "fmax_abort", float, frozenset({"safety"}),
         aliases={"FMAX_ABORT"},
         minimum=0.0,
-        description="MD large-force warning threshold in eV/Angstrom.",
+        description="MD force-safety abort threshold in eV/Angstrom.",
     ),
     # --- model / device (calculator scope) ---
     OptionSpec(
@@ -154,7 +154,7 @@ _SPECS: list[OptionSpec] = [
         "default_dtype", str, frozenset({"calculator.mace"}),
         aliases={"DEFAULT_DTYPE", "dtype"},
         choices=("float32", "float64"),
-        description="MACE model dtype (float32 recommended for long MD).",
+        description="MACE model dtype (accuracy-first default: float64).",
     ),
     OptionSpec(
         "head", str, frozenset({"calculator.mace", "calculator.dpa"}),
@@ -319,13 +319,6 @@ _SPECS: list[OptionSpec] = [
         choices=("auto", "initialize", "preserve"),
         default="auto",
         description="Velocity initialisation policy (plan section 13.5; Phase 3).",
-    ),
-    OptionSpec(
-        "equil_steps", int, frozenset({"md"}),
-        aliases={"EQUIL_STEPS"},
-        minimum=0,
-        default=0,
-        description="Equilibration steps (plan section 13.7; Phase 3).",
     ),
     OptionSpec(
         "seed", int, frozenset({"md", "general"}),

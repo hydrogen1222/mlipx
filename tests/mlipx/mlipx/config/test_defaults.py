@@ -44,9 +44,9 @@ def test_device_per_calc_type() -> None:
     assert DEFAULT_DEVICE_BY_CALC_TYPE["md"] == "cuda"
 
 
-def test_mace_default_dtype_is_float32() -> None:
-    """Plan section 12: MACE default dtype is float32."""
-    assert BUILTIN_DEFAULTS["calculator.mace"]["default_dtype"] == "float32"
+def test_mace_default_dtype_is_float64() -> None:
+    """Accuracy-first MACE default is float64."""
+    assert BUILTIN_DEFAULTS["calculator.mace"]["default_dtype"] == "float64"
 
 
 def test_md_thermostat_defaults_preserve_legacy_langevin() -> None:

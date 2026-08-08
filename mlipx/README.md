@@ -1,8 +1,13 @@
 # mlipx - MLIP eXtended
 
-A CLI / TUI / Python API for machine-learning interatomic potentials and
-VASP-oriented workflows (UMA, MACE, DPA, GRACE). Built upon code originally
-developed by Meta FAIR as part of the FAIRChem project.
+A VASP-like CLI / TUI / Python API for reliable machine-learning
+interatomic-potential calculations and molecular dynamics with UMA, MACE, DPA,
+and GRACE. Built upon code originally developed by Meta FAIR as part of the
+FAIRChem project.
+
+Advanced trajectory post-processing was intentionally frozen after Analysis
+v1 and is not part of the supported scope. mlipx currently focuses on reliable
+MLIP single-point calculations, optimization, and MLMD trajectory generation.
 
 ## Quick Start
 
@@ -71,7 +76,7 @@ interpreter, for example DPA:
 > | Blackwell (RTX 50) | sm_100/120 | `torch==2.8.0+cu128` |
 > | Kepler (GTX 700/600) | sm_30/37 | not supported |
 >
-> Why: PyTorch 2.7+ dropped `sm_50`/`sm_60` from its prebuilt CUDA wheels, so old cards (Maxwell/Pascal) must stay on `torch 2.6.0+cu124`; its `sm_50`/`sm_60` kernels are binary-compatible with `sm_52`/`sm_61`. The workspace already pins `torch==2.6.0+cu124` by default, so `uv sync` works out of the box for Maxwell–Hopper; only Blackwell needs an override. If the download fails, enable a proxy first: `clashctl on`.
+> Why: PyTorch 2.7+ dropped `sm_50`/`sm_60` from its prebuilt CUDA wheels, so old cards (Maxwell/Pascal) must stay on `torch 2.6.0+cu124`; its `sm_50`/`sm_60` kernels are binary-compatible with `sm_52`/`sm_61`. The workspace pin is a **legacy GPU compatibility compromise**, not FairChem's declared reference environment. `mlipx doctor` reports the mismatch and MD provenance records installed package versions. If the download fails, enable a proxy first: `clashctl on`.
 
 ## 使用方法 / Usage
 
@@ -175,7 +180,7 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 |-----------|-----------|----------|
 | **CLI** | 使用上表中对应引擎的命令前缀 | Scripts, HPC jobs, automation |
 | **TUI** | 在对应引擎命令前缀后加 `tui` | Interactive SP/OPT/MD |
-| **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
+| **Python API** | `from mlipx.api import ...` | Calculation workflows |
 
 ## Documentation
 
@@ -195,9 +200,8 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 - **Resource control in TUI and CLI:** indexed GPU selection, backend CPU
   threads, and UMA activation checkpointing/inference mode
 - **Live progress:** Structured progress events, indeterminate spinner for SP, step counter for OPT/MD
-- **Layered MD analysis:** normalized trajectories; MSD/RDF/RMSD/density/VACF;
-  optional native kinisi and GEMDAT solid-electrolyte adapters with cached
-  provenance ([中文](docs/ANALYSIS_CN.md) / [English](docs/ANALYSIS_EN.md))
+- **Reproducible MLMD data:** lossless ASE trajectories, raw thermodynamic
+  records, explicit stress/pressure semantics, seeds, and provenance
 
 ## Package Structure
 
@@ -216,7 +220,6 @@ mlipx/
 │   ├── runners/                      # SinglePoint, Optimization, MD, Batch
 │   ├── tui/                          # Textual TUI (app, screens)
 │   ├── writers/                      # OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
-│   ├── analysis/                     # trajectory/core/kinisi/GEMDAT post-processing
 │   ├── api.py                        # Python API functions
 │   ├── cli.py                        # CLI (argparse; sp/opt/md/batch/run/queue/...)
 │   ├── doctor.py                     # mlipx doctor diagnostics

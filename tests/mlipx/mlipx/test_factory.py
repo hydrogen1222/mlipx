@@ -188,13 +188,13 @@ class TestGenericWrappers:
         assert isinstance(w, DPACalculatorWrapper)
         assert w._head == "Domains_SSE_PBE"
 
-    def test_factory_mace_default_dtype_is_float32(self, tmp_path):
-        """Direct factory construction with no dtype defaults to float32 (docs)."""
+    def test_factory_mace_default_dtype_is_float64(self, tmp_path):
+        """Direct factory construction defaults to accuracy-first float64."""
         model = tmp_path / "mace.model"
         model.write_text("x")
         w = CalculatorFactory.create("mace", model, task="bulk")
         assert isinstance(w, MACECalculatorWrapper)
-        assert w._default_dtype == "float32"
+        assert w._default_dtype == "float64"
 
 
 class TestDpaGraceDevice:

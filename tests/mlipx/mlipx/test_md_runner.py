@@ -18,8 +18,9 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase.constraints import FixCom
 from ase.io import Trajectory, read
+
 from mlipx.config.defaults import BUILTIN_DEFAULTS
-from mlipx.runners.md import MDRunner
+from mlipx.runners.md import ForceSafetyAbort, MDRunner
 
 
 class _CalculatorStub:
@@ -145,13 +146,6 @@ def test_md_restart_momenta_reject_position_changing_pre_relax(tmp_path, policy)
         runner.run(atoms)
 
 
-def test_md_rejects_equil_steps(tmp_path):
-    """Plan section 5.2: equil_steps must not be silently ignored."""
-    with pytest.raises(NotImplementedError, match="equil_steps"):
-        MDRunner(_CalculatorStub(), output_dir=tmp_path, pre_relax=False,
-                verbose=False, equil_steps=100)
-
-
 def test_md_rejects_pre_relax_mode(tmp_path):
     """Plan section 5.2: pre_relax_mode must not be silently ignored."""
     with pytest.raises(NotImplementedError, match="pre_relax_mode"):
@@ -254,10 +248,35 @@ def test_all_backends_share_every_md_integrator_path(
     assert np.isfinite(results["energy"])
     assert np.isfinite(results["temperature"])
     assert len(Trajectory(out / "raw" / "trajectory.traj")) == 3
+    assert np.isfinite(results["temperature"])
     assert (out / "vasp" / "XDATCAR").is_file()
     assert results["thermostat"] == (
         thermostat if ensemble == "NVT" else None
     )
+
+
+def test_short_nve_has_finite_stable_total_energy(tmp_path):
+    """Catch catastrophic timestep/unit mistakes with a conservative toy system."""
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        ensemble="NVE",
+        temperature=300.0,
+        timestep=0.5,
+        steps=10,
+        save_interval=1,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
+    )
+
+    results = runner.run(_bulk_atoms(n=4))
+    total_energies = np.asarray(
+        [frame["total_energy"] for frame in results["trajectory"]]
+    )
+
+    assert np.all(np.isfinite(total_energies))
+    assert np.ptp(total_energies) < 1.0e-10
 
 
 @pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
@@ -281,7 +300,101 @@ def test_all_backends_support_basic_molecule_md_path(tmp_path, model_type):
     results = runner.run(atoms)
 
     assert np.isfinite(results["energy"])
-    assert results["stress"] is None
+    assert results["configurational_stress"] is None
+    assert results["total_stress"] is None
+    assert results["configurational_pressure_gpa"] is None
+    assert results["total_pressure_gpa"] is None
+
+
+def test_bulk_total_stress_includes_kinetic_contribution(tmp_path):
+    atoms = _bulk_atoms(n=4)
+    atoms.calc = _FiniteCalc()
+    runner = MDRunner(
+        _RunWrapper(atoms.calc),
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+    )
+
+    atoms.set_momenta(np.zeros((len(atoms), 3)))
+    zero = runner._stress_observables(atoms)
+    assert zero["total_stress"] == pytest.approx(zero["configurational_stress"])
+
+    atoms.set_momenta(np.arange(1, 13, dtype=float).reshape(4, 3))
+    moving = runner._stress_observables(atoms)
+    assert not np.allclose(
+        moving["total_stress"], moving["configurational_stress"]
+    )
+    assert moving["total_pressure_gpa"] != pytest.approx(
+        moving["configurational_pressure_gpa"]
+    )
+
+
+@pytest.mark.parametrize("pbc", [False, [True, True, False]])
+def test_non_3d_periodic_md_never_queries_or_reports_bulk_stress(tmp_path, pbc):
+    atoms = _bulk_atoms(n=4)
+    atoms.pbc = pbc
+    atoms.calc = _FiniteCalc()
+
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("stress must not be queried for non-3D PBC")
+
+    atoms.get_stress = fail_if_called
+    runner = MDRunner(
+        _RunWrapper(atoms.calc),
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+    )
+    observables = runner._stress_observables(atoms)
+    assert all(value is None for value in observables.values())
+
+
+def test_timestep_and_saved_time_metadata_are_consistent(tmp_path):
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        ensemble="NVE",
+        timestep=0.5,
+        steps=4,
+        save_interval=2,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=4,
+    )
+    results = runner.run(_bulk_atoms(n=4))
+    assert [frame["time_fs"] for frame in results["trajectory"]] == [0.0, 1.0, 2.0]
+    manifest = json.loads((tmp_path / "artifacts.json").read_text())
+    assert manifest["trajectory"]["timestep_fs"] == 0.5
+    assert manifest["trajectory"]["saved_interval_fs"] == 1.0
+
+
+def test_pre_relax_nonconvergence_stops_before_md(tmp_path, monkeypatch):
+    class NeverConvergedFIRE:
+        def __init__(self, atoms, logfile=None):
+            self.atoms = atoms
+            self.nsteps = 0
+
+        def attach(self, callback, interval=1):
+            self.callback = callback
+
+        def run(self, fmax, steps):
+            self.nsteps = steps
+
+        def converged(self):
+            return False
+
+    monkeypatch.setattr("mlipx.runners.md.FIRE", NeverConvergedFIRE)
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        output_dir=tmp_path,
+        pre_relax=True,
+        pre_relax_steps=2,
+        verbose=False,
+    )
+    with pytest.raises(RuntimeError, match="did not converge"):
+        runner.run(_bulk_atoms(n=4))
+    assert not (tmp_path / "raw" / "trajectory.traj").exists()
 
 
 @pytest.mark.parametrize(
@@ -419,8 +532,10 @@ def test_md_streams_trajectory_to_disk(tmp_path):
             "total_energy",
             "temperature",
             "volume",
-            "stress",
-            "pressure_gpa",
+            "configurational_stress",
+            "total_stress",
+            "configurational_pressure_gpa",
+            "total_pressure_gpa",
         }
     # Full frames are on disk in trajectory.traj.
     assert results["trajectory_path"] == str(tmp_path / "raw" / "trajectory.traj")
@@ -439,9 +554,20 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     assert rows[0] == [
         "step", "time_fs", "potential_energy_eV", "kinetic_energy_eV",
         "total_energy_eV", "temperature_K", "volume_A3",
-        "stress_xx_eV_A3", "stress_yy_eV_A3", "stress_zz_eV_A3",
-        "stress_yz_eV_A3", "stress_xz_eV_A3", "stress_xy_eV_A3",
-        "pressure_GPa",
+        "configurational_stress_xx_eV_A3",
+        "configurational_stress_yy_eV_A3",
+        "configurational_stress_zz_eV_A3",
+        "configurational_stress_yz_eV_A3",
+        "configurational_stress_xz_eV_A3",
+        "configurational_stress_xy_eV_A3",
+        "total_stress_xx_eV_A3",
+        "total_stress_yy_eV_A3",
+        "total_stress_zz_eV_A3",
+        "total_stress_yz_eV_A3",
+        "total_stress_xz_eV_A3",
+        "total_stress_xy_eV_A3",
+        "configurational_pressure_GPa",
+        "total_pressure_GPa",
     ]
     assert len(rows) == nframes + 1
     assert results["md_csv_path"] == str(tmp_path / "raw" / "md.csv")
@@ -454,12 +580,43 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     assert outcar.count("MLIPX-TOTEN") == nframes
     assert "stress tensor" in outcar
     assert len(read(tmp_path / "vasp" / "CONTCAR", format="vasp")) == 8
-    assert (tmp_path / "analysis").is_dir()
+    assert not (tmp_path / "analysis").exists()
     manifest = json.loads((tmp_path / "artifacts.json").read_text())
-    assert manifest["schema"] == "mlipx.md-artifacts/1"
+    assert manifest["schema"] == "mlipx.md-artifacts/2"
     assert manifest["status"] == "completed"
     assert manifest["trajectory"]["frames"] == nframes
     assert manifest["artifacts"]["xdatcar"]["path"] == "vasp/XDATCAR"
+
+
+def test_md_logs_every_step_independently_of_trajectory_interval(tmp_path):
+    logs: list[str] = []
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        ensemble="NVE",
+        temperature=300.0,
+        steps=3,
+        save_interval=2,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
+        log_fn=lambda message, _level: logs.append(message),
+    )
+
+    results = runner.run(_bulk_atoms())
+
+    step_logs = [message for message in logs if "/3: E =" in message]
+    assert len(step_logs) == 4
+    assert any("Step      0/3:" in message for message in step_logs)
+    assert any("Step      1/3:" in message for message in step_logs)
+    assert any("Step      2/3:" in message for message in step_logs)
+    assert any("Step      3/3:" in message for message in step_logs)
+    assert any(
+        "Save interval:    2 steps (trajectory frames)" in message
+        for message in logs
+    )
+    assert any("Thermodynamic log interval: 1 step" in message for message in logs)
+    assert [frame["step"] for frame in results["trajectory"]] == [0, 2]
 
 
 def test_md_long_trajectory_keeps_only_scalars_in_memory(tmp_path):
@@ -501,7 +658,7 @@ def test_md_long_trajectory_keeps_only_scalars_in_memory(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# P1-2: finite-large-force warning threshold sourced from safety (plan 5.7)
+# P1-2: finite-large-force abort threshold sourced from safety
 # ---------------------------------------------------------------------------
 def test_md_fmax_abort_defaults_to_safety():
     """The explosion-guard threshold defaults to safety.fmax_abort, not a
@@ -513,18 +670,27 @@ def test_md_fmax_abort_defaults_to_safety():
     assert runner.fmax_abort == 20.0
 
 
-def test_md_fmax_abort_warning_uses_configured_threshold(tmp_path):
-    """A configurable fmax_abort drives the large-force warning."""
-    logs: list[tuple[str, str]] = []
+def test_md_fmax_abort_checkpoints_and_marks_manifest_aborted(tmp_path):
+    """The named abort threshold must stop, checkpoint, and report the cause."""
     wrapper = _RunWrapper(_FiniteCalc(force_scale=6.0))  # 6 eV/Å > threshold
     runner = MDRunner(
         wrapper, ensemble="NVE", temperature=300.0, steps=100,
         save_interval=1000, output_dir=tmp_path, pre_relax=False,
         verbose=False, seed=1, fmax_abort=5.0,
-        log_fn=lambda msg, lvl: logs.append((msg, lvl)),
     )
-    runner.run(_bulk_atoms())
-    assert any("Large forces" in msg for msg, _ in logs)
+    with pytest.raises(ForceSafetyAbort, match="Force safety abort"):
+        runner.run(_bulk_atoms())
+
+    manifest = json.loads((tmp_path / "artifacts.json").read_text())
+    assert manifest["status"] == "aborted"
+    assert manifest["error"]["type"] == "force_safety_abort"
+    assert manifest["error"]["step"] == 0
+    assert manifest["error"]["max_force_eV_A"] == pytest.approx(6.0)
+    assert manifest["trajectory"]["last_step"] == 0
+    assert (tmp_path / "vasp" / "CONTCAR").is_file()
+    assert "Status:              aborted" in (
+        tmp_path / "vasp" / "OUTCAR"
+    ).read_text()
 
 
 def test_nvt_seed_reproduces_entire_stochastic_trajectory(tmp_path):
@@ -581,6 +747,7 @@ def test_md_uses_explicit_com_constraint_for_consistent_temperature_dof(tmp_path
         ({"timestep": 0.0}, "timestep"),
         ({"steps": -1}, "steps"),
         ({"save_interval": 0}, "save_interval"),
+        ({"fmax_abort": 0.0}, "fmax_abort"),
         ({"ensemble": "NVT", "friction": 0.0}, "friction"),
         ({"ensemble": "NVT", "thermostat": "BUSSI", "bussi_tau": 0.0}, "bussi_tau"),
         ({"ensemble": "NVT", "thermostat": "NHC", "nhc_tdamp": 0.0}, "nhc_tdamp"),

@@ -93,6 +93,10 @@ XDATCAR 或日志也不存在，必须显式提供相邻存帧的时间，而不
 uv run mlipx analyze old-run --mobile Li --frame-interval-fs 100
 ```
 
+注意，`run.log` 中 `Step ...` 行的数量不是轨迹帧数：热力学日志可以每一步
+记录一次，而 `trajectory.traj` / XDATCAR 仍按 `Save interval` 保存完整构型。
+后处理的时间轴以实际轨迹帧和轨迹保存间隔为准。
+
 ## 3. 三层分别做什么
 
 ### 第 1 层：规范化轨迹

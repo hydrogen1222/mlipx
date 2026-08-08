@@ -54,9 +54,6 @@ Examples:
   # Molecular dynamics (NVT)
   mlipx md structure.cif --ensemble NVT --temp 300 --steps 10000
 
-  # Post-process a solid-electrolyte trajectory
-  mlipx analyze results/md-run --mobile Li --framework Ge,P,S
-
   # Batch processing
   mlipx batch structures/ --pattern "*.cif" --output results/
 
@@ -130,7 +127,7 @@ Examples:
             type=str,
             default=None,
             choices=["float32", "float64"],
-            help="MACE model dtype (default: float32 for every calculation type).",
+            help="MACE model dtype (default: float64; use float32 explicitly for speed).",
         )
         p.add_argument(
             "--head",
@@ -451,7 +448,7 @@ Examples:
         "--fmax-abort",
         type=float,
         default=None,
-        help="Large-force warning threshold in eV/Angstrom (default: 20).",
+        help="Large-force abort threshold in eV/Angstrom (default: 20).",
     )
     md_parser.add_argument(
         "--output",
@@ -468,101 +465,6 @@ Examples:
         help="Job name (output will be in OUTPUT/NAME)",
     )
     _add_resolver_args(md_parser)
-
-    # Post-process a completed MD run. Heavy solid-electrolyte algorithms are
-    # optional adapters, while the common tasks depend only on NumPy and ASE.
-    analyze_parser = subparsers.add_parser(
-        "analyze",
-        help="Post-process an MD trajectory",
-        description=(
-            "Run reproducible trajectory analyses. Results are stored below "
-            "RUN/analysis/<task>/<parameter-hash>/ with provenance metadata."
-        ),
-    )
-    analyze_parser.add_argument(
-        "run", help="mlipx run directory, trajectory.traj, or XDATCAR"
-    )
-    analyze_parser.add_argument(
-        "--tasks",
-        nargs="+",
-        choices=[
-            "validate",
-            "thermo",
-            "rmsd",
-            "rdf",
-            "msd",
-            "density",
-            "vacf",
-            "transport",
-            "electrolyte",
-        ],
-        help="Tasks to run (default: validate thermo rmsd rdf msd density)",
-    )
-    analyze_parser.add_argument(
-        "--all",
-        action="store_true",
-        help="Run all tasks, including optional kinisi/GEMDAT adapters",
-    )
-    analyze_parser.add_argument("--mobile", help="Mobile element, e.g. Li or Na")
-    analyze_parser.add_argument(
-        "--framework", help="Comma-separated framework elements for drift removal"
-    )
-    analyze_parser.add_argument(
-        "--rdf-pair",
-        action="append",
-        default=[],
-        metavar="A-B",
-        help="Partial RDF pair; repeat for more pairs (default: mobile-mobile and mobile-host)",
-    )
-    analyze_parser.add_argument("--rdf-rmax", type=float, default=8.0)
-    analyze_parser.add_argument("--rdf-bins", type=int, default=200)
-    analyze_parser.add_argument("--start", type=int, default=0)
-    analyze_parser.add_argument("--stop", type=int)
-    analyze_parser.add_argument("--stride", type=int, default=1)
-    analyze_parser.add_argument(
-        "--frame-interval-fs",
-        type=float,
-        help="Stored-frame interval when it cannot be inferred from run metadata",
-    )
-    analyze_parser.add_argument(
-        "--wrapped",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help="Whether input positions need minimum-image unwrapping",
-    )
-    analyze_parser.add_argument(
-        "--dimensions", default="xyz", help="Diffusion dimensions, e.g. xyz or xy"
-    )
-    analyze_parser.add_argument("--fit-start-ps", type=float)
-    analyze_parser.add_argument("--fit-stop-ps", type=float)
-    analyze_parser.add_argument(
-        "--grid", type=int, nargs=3, default=(40, 40, 40), metavar=("NX", "NY", "NZ")
-    )
-    analyze_parser.add_argument("--temperature", type=float, help="Temperature in K")
-    analyze_parser.add_argument(
-        "--charge",
-        type=float,
-        default=1.0,
-        help="Mobile-ion charge in elementary charge",
-    )
-    analyze_parser.add_argument("--kinisi-samples", type=int, default=1000)
-    analyze_parser.add_argument("--kinisi-walkers", type=int, default=32)
-    analyze_parser.add_argument("--kinisi-burn", type=int, default=500)
-    analyze_parser.add_argument("--kinisi-thin", type=int, default=10)
-    analyze_parser.add_argument("--random-seed", type=int, default=0)
-    analyze_parser.add_argument(
-        "--gemdat-resolution", type=float, default=0.5, metavar="ANGSTROM"
-    )
-    analyze_parser.add_argument("--sites", help="Known migration-site structure")
-    analyze_parser.add_argument("--background-level", type=float, default=0.1)
-    analyze_parser.add_argument("--site-radius", type=float)
-    analyze_parser.add_argument("--minimal-residence", type=int, default=0)
-    analyze_parser.add_argument("--percolation", default="xyz")
-    analyze_parser.add_argument(
-        "--plots", action=argparse.BooleanOptionalAction, default=True
-    )
-    analyze_parser.add_argument("--force", action="store_true", help="Ignore cache")
-    analyze_parser.add_argument("--json", action="store_true", help="Print JSON result")
 
     # batch command
     batch_parser = subparsers.add_parser(
@@ -1119,7 +1021,6 @@ def cmd_sp(args: argparse.Namespace) -> int:
 
     config, resolved, _settings = _resolve_engine_config(args, "sp")
 
-    print_header()
     print(f"System: reading from {structure_path}")
 
     try:
@@ -1152,7 +1053,6 @@ def cmd_opt(args: argparse.Namespace) -> int:
 
     config, resolved, _settings = _resolve_engine_config(args, "opt")
 
-    print_header()
     print(f"Reading structure from: {structure_path}")
 
     try:
@@ -1185,7 +1085,6 @@ def cmd_md(args: argparse.Namespace) -> int:
 
     config, resolved, _settings = _resolve_engine_config(args, "md")
 
-    print_header()
     print(f"Reading structure from: {structure_path}")
 
     try:
@@ -1218,8 +1117,6 @@ def cmd_batch(args: argparse.Namespace) -> int:
 
     config, resolved, _settings = _resolve_engine_config(args, "batch")
     pattern = resolved.run_options.get("pattern")
-
-    print_header()
 
     try:
         _emit_resolved_config(
@@ -1618,74 +1515,6 @@ def cmd_clean(args: argparse.Namespace) -> int:
     return 0
 
 
-def cmd_analyze(args: argparse.Namespace) -> int:
-    """Post-process an MD trajectory through the layered analysis API."""
-    import json  # noqa: PLC0415
-
-    from mlipx.analysis.runner import ALL_TASKS, AnalysisRunner  # noqa: PLC0415
-
-    try:
-        pairs: list[tuple[str, str]] | None = None
-        if args.rdf_pair:
-            pairs = []
-            for value in args.rdf_pair:
-                fields = value.replace(":", "-").split("-")
-                if len(fields) != 2 or not all(fields):
-                    raise ValueError(f"Invalid RDF pair {value!r}; use A-B, e.g. Li-O")
-                pairs.append((fields[0], fields[1]))
-        runner = AnalysisRunner(
-            args.run,
-            frame_interval_fs=args.frame_interval_fs,
-            assume_wrapped=args.wrapped,
-            plots=args.plots,
-            force=args.force,
-        )
-        mobile = args.mobile
-        if mobile is None:
-            mobile = (
-                "Li" if "Li" in runner.dataset.symbols else runner.dataset.symbols[0]
-            )
-        tasks = ALL_TASKS if args.all else args.tasks
-        result = runner.run(
-            tasks=tasks,
-            mobile=mobile,
-            framework=args.framework,
-            rdf_pairs=pairs,
-            rdf_rmax=args.rdf_rmax,
-            rdf_bins=args.rdf_bins,
-            start=args.start,
-            stop=args.stop,
-            stride=args.stride,
-            dimensions=args.dimensions,
-            fit_start_ps=args.fit_start_ps,
-            fit_stop_ps=args.fit_stop_ps,
-            grid=tuple(args.grid),
-            temperature=args.temperature,
-            charge=args.charge,
-            kinisi_samples=args.kinisi_samples,
-            kinisi_walkers=args.kinisi_walkers,
-            kinisi_burn=args.kinisi_burn,
-            kinisi_thin=args.kinisi_thin,
-            random_seed=args.random_seed,
-            gemdat_resolution=args.gemdat_resolution,
-            sites=args.sites,
-            background_level=args.background_level,
-            site_radius=args.site_radius,
-            minimal_residence=args.minimal_residence,
-            percolation=args.percolation,
-        )
-    except (FileNotFoundError, ImportError, ValueError) as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        return 1
-    if args.json:
-        print(json.dumps(result, indent=2, sort_keys=True))
-    else:
-        for task, item in result.items():
-            state = "cached" if item["cached"] else "written"
-            print(f"{task:<12} {state:<7} {item['path']}")
-    return 0
-
-
 def main(argv: list[str] | None = None) -> int:
     """Main entry point."""
     run_started_at = time.perf_counter()
@@ -1725,7 +1554,6 @@ def main(argv: list[str] | None = None) -> int:
     suppress_banner = (
         (args.command == "setup" and getattr(args, "json", False))
         or args.command == "config"
-        or (args.command == "analyze" and getattr(args, "json", False))
     )
     if not suppress_banner:
         print_header()
@@ -1736,7 +1564,6 @@ def main(argv: list[str] | None = None) -> int:
         "sp": cmd_sp,
         "opt": cmd_opt,
         "md": cmd_md,
-        "analyze": cmd_analyze,
         "batch": cmd_batch,
         "config": cmd_config,
         "template": cmd_template,

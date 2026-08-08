@@ -244,13 +244,10 @@ class CalculationEngine:
             and self.config.torch_num_threads is not None
         ):
             calc_opts.setdefault("cpu_threads", self.config.torch_num_threads)
-        # MACE dtype default is float32 (the documented MACE default, matching
-        # BUILTIN_DEFAULTS["calculator.mace"]). Applied for every calc type only
-        # when nothing higher in the config layer (settings/INCAR/CLI) already set
-        # default_dtype -- so an explicit --dtype float64 is never silently
-        # overridden by the task default (plan section 4.1 / 12).
+        # MACE uses an accuracy-first float64 default for every calculation type.
+        # A higher config layer may explicitly opt into float32 for performance.
         if self.config.model_type.lower() == "mace":
-            calc_opts.setdefault("default_dtype", "float32")
+            calc_opts.setdefault("default_dtype", "float64")
         return CalculatorFactory.create(
             model_type=self.config.model_type,
             model_path=self.config.model_path,
@@ -331,7 +328,6 @@ class CalculationEngine:
                 pre_relax_fmax=opts.get("pre_relax_fmax", 0.1),
                 seed=opts.get("seed"),
                 velocity_policy=opts.get("velocity_policy", "auto"),
-                equil_steps=opts.get("equil_steps", 0),
                 pre_relax_mode=opts.get("pre_relax_mode", "none"),
                 fmax_abort=opts.get(
                     "fmax_abort", BUILTIN_DEFAULTS["safety"]["fmax_abort"]

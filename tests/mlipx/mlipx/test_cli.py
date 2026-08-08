@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
 from mlipx.cli import create_parser, main
 
 # ---------------------------------------------------------------------------
@@ -272,6 +273,38 @@ def test_md_temp_alias() -> None:
         "md", "s.xyz", "--model", "m.pt", "--temp", "400"
     ])
     assert args.temp == 400.0
+
+
+def test_md_prints_banner_once(tmp_path, monkeypatch, capsys) -> None:
+    """The dispatcher owns the banner; calculation handlers must not repeat it."""
+    structure = _write_poscar(tmp_path)
+    model = tmp_path / "model.pt"
+    model.touch()
+
+    class DummyEngine:
+        def run(self, atoms, **kwargs):
+            return {}
+
+    monkeypatch.setattr(
+        "mlipx.cli.CalculationEngine.from_config",
+        lambda config: DummyEngine(),
+    )
+
+    rc = main(
+        [
+            "md",
+            str(structure),
+            "--model",
+            str(model),
+            "--steps",
+            "0",
+            "--output",
+            str(tmp_path / "results"),
+        ]
+    )
+
+    assert rc == 0
+    assert capsys.readouterr().out.count("(mlipx - MLIP eXtended)") == 1
 
 
 def test_batch_parser_basic_flags() -> None:

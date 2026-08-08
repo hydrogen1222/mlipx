@@ -41,11 +41,28 @@ class _ZeroCalculator(Calculator):
         }
 
 
-def test_cell_optimization_is_disabled_for_isolated_molecule(tmp_path):
-    runner = OptimizationRunner(
-        _Wrapper(), cell_opt=True, output_dir=tmp_path, verbose=False
+def test_cell_optimization_rejects_isolated_molecule(tmp_path):
+    with pytest.raises(ValueError, match="isolated molecule"):
+        OptimizationRunner(
+            _Wrapper(), cell_opt=True, output_dir=tmp_path, verbose=False
+        )
+
+
+def test_cell_optimization_rejects_partial_pbc(tmp_path):
+    class _BulkWrapper(_Wrapper):
+        task = "bulk"
+
+    atoms = Atoms(
+        "Si2",
+        scaled_positions=[[0, 0, 0], [0.25, 0.25, 0.25]],
+        cell=np.eye(3) * 5,
+        pbc=[True, True, False],
     )
-    assert runner.cell_opt is False
+    runner = OptimizationRunner(
+        _BulkWrapper(), cell_opt=True, output_dir=tmp_path, verbose=False
+    )
+    with pytest.raises(ValueError, match="full 3D periodicity"):
+        runner.run(atoms)
 
 
 def test_fix_symmetry_does_not_discard_existing_constraints(tmp_path):

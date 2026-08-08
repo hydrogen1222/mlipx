@@ -184,7 +184,7 @@ class MlipxApp(App):
             "inference_mode": "default",
             "torch_num_threads": None,
             "activation_checkpointing": None,
-            "default_dtype": "float32",
+            "default_dtype": "float64",
             "head": None,
             "output_dir": "./results",
             "job_name": None,

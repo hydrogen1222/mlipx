@@ -162,6 +162,19 @@ class JsonWriter:
         # Remove None values
         output_results = {k: v for k, v in output_results.items() if v is not None}
 
+        if mode == "md":
+            for key in ("configurational_stress", "total_stress"):
+                value = results.get(key)
+                if value is not None:
+                    output_results[key] = np.asarray(value).tolist()
+            for key in (
+                "configurational_pressure_gpa",
+                "total_pressure_gpa",
+            ):
+                value = results.get(key)
+                if value is not None:
+                    output_results[key] = float(value)
+
         # Force statistics
         if results.get("forces") is not None:
             forces = results["forces"]
@@ -173,7 +186,7 @@ class JsonWriter:
             }
 
         # Pressure from stress
-        if results.get("stress") is not None:
+        if mode != "md" and results.get("stress") is not None:
             stress = results["stress"]
             pressure = -(stress[0] + stress[1] + stress[2]) / 3.0 * 160.2177
             output_results["pressure_gpa"] = float(pressure)
@@ -218,6 +231,12 @@ class JsonWriter:
                 "velocity_policy": results.get("velocity_policy"),
                 "trajectory_path": results.get("trajectory_path"),
                 "thermodynamics_path": results.get("md_csv_path"),
+                "stress_pressure_contract": {
+                    "configurational_stress": "calculator stress without kinetic term",
+                    "total_stress": "configurational plus ideal-gas kinetic term",
+                    "total_pressure_gpa": "-trace(total_stress)/3 for 3D PBC only",
+                    "non_3d_pbc": "unavailable",
+                },
             }
             provenance = results.get("md_provenance") or {}
             for key in (
