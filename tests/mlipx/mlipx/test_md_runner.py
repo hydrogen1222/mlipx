@@ -479,6 +479,9 @@ def test_nve_provenance_has_null_thermostat_and_no_coupling_parameters(tmp_path)
         "temperature",
         "timestep",
         "steps",
+        "equilibration_steps",
+        "production_steps",
+        "total_steps",
         "seed",
         "velocity_policy",
     }
@@ -527,6 +530,7 @@ def test_md_streams_trajectory_to_disk(tmp_path):
         assert set(f) == {
             "step",
             "time_fs",
+            "phase",
             "energy",
             "kinetic_energy",
             "total_energy",
@@ -552,7 +556,7 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     with open(tmp_path / "raw" / "md.csv", newline="") as fh:
         rows = list(csv.reader(fh))
     assert rows[0] == [
-        "step", "time_fs", "potential_energy_eV", "kinetic_energy_eV",
+        "step", "time_fs", "phase", "potential_energy_eV", "kinetic_energy_eV",
         "total_energy_eV", "temperature_K", "volume_A3",
         "configurational_stress_xx_eV_A3",
         "configurational_stress_yy_eV_A3",
@@ -585,6 +589,7 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     assert manifest["schema"] == "mlipx.md-artifacts/2"
     assert manifest["status"] == "completed"
     assert manifest["trajectory"]["frames"] == nframes
+    assert manifest["trajectory"]["positions_convention"] == "unwrapped"
     assert manifest["artifacts"]["xdatcar"]["path"] == "vasp/XDATCAR"
 
 
@@ -617,6 +622,48 @@ def test_md_logs_every_step_independently_of_trajectory_interval(tmp_path):
     )
     assert any("Thermodynamic log interval: 1 step" in message for message in logs)
     assert [frame["step"] for frame in results["trajectory"]] == [0, 2]
+
+
+def test_md_equilibration_and_production_phase_metadata(tmp_path):
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        ensemble="NVE",
+        temperature=300.0,
+        equilibration_steps=2,
+        steps=3,
+        save_interval=1,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
+    )
+
+    results = runner.run(_bulk_atoms())
+
+    assert results["equilibration_steps"] == 2
+    assert results["production_steps"] == 3
+    assert results["md_steps"] == 5
+    assert [frame["phase"] for frame in results["trajectory"]] == [
+        "equilibration",
+        "equilibration",
+        "production",
+        "production",
+        "production",
+        "production",
+    ]
+    with (tmp_path / "raw" / "md.csv").open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert [row["phase"] for row in rows] == [
+        "equilibration",
+        "equilibration",
+        "production",
+        "production",
+        "production",
+        "production",
+    ]
+    manifest = json.loads((tmp_path / "artifacts.json").read_text())
+    assert manifest["trajectory"]["production_start_step"] == 2
+    assert manifest["trajectory"]["production_start_frame"] == 2
 
 
 def test_md_long_trajectory_keeps_only_scalars_in_memory(tmp_path):

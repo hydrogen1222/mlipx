@@ -16,5 +16,13 @@ from mlipx.tui.app import MlipxApp
 from mlipx.tui.config_screen import ConfigScreen
 from mlipx.tui.main_screen import MainScreen, TemplateScreen
 from mlipx.tui.run_screen import RunScreen
+from mlipx.tui.analysis_screen import AnalysisScreen
 
-__all__ = ["MlipxApp", "MainScreen", "ConfigScreen", "TemplateScreen", "RunScreen"]
+__all__ = [
+    "AnalysisScreen",
+    "ConfigScreen",
+    "MainScreen",
+    "MlipxApp",
+    "RunScreen",
+    "TemplateScreen",
+]

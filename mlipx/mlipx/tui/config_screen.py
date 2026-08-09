@@ -335,10 +335,16 @@ class ConfigScreen(Screen):
                 id="timestep-input",
             )
 
-            yield Label("Steps:")
+            yield Label("Production Steps:")
             yield Input(
                 value=str(self.app.get_config("steps", 1000)),
                 id="steps-input",
+            )
+
+            yield Label("Equilibration Steps (same ensemble):")
+            yield Input(
+                value=str(self.app.get_config("equilibration_steps", 0)),
+                id="equilibration-steps-input",
             )
 
             yield Label("Save Interval:")
@@ -819,6 +825,18 @@ class ConfigScreen(Screen):
                 self.notify("Steps must be >= 0", severity="error")
                 return
             self.app.update_config("steps", steps)
+
+            try:
+                equilibration_steps = int(
+                    self.query_one("#equilibration-steps-input", Input).value
+                )
+            except ValueError:
+                self.notify("Equilibration steps must be an integer", severity="error")
+                return
+            if equilibration_steps < 0:
+                self.notify("Equilibration steps must be >= 0", severity="error")
+                return
+            self.app.update_config("equilibration_steps", equilibration_steps)
 
             try:
                 save_interval = int(self.query_one("#save-interval-input", Input).value)

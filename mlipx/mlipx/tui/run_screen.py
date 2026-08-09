@@ -82,7 +82,7 @@ class RunScreen(Screen):
                 f"Follow live output: tail -f {shlex.quote(str(log_path))}"
             )
             self.log_widget.write_line(
-                "The queue scheduler starts it when a slot is free; ", 
+                "The queue scheduler starts it when a slot is free; "
                 "if it is not running, start it with: mlipx queue start"
             )
             self.status.update("Queued (PENDING) — safe to go Back or exit TUI")
@@ -154,6 +154,7 @@ class RunScreen(Screen):
         elif calc_type == "md":
             for key in (
                 "ensemble", "temperature", "timestep", "steps",
+                "equilibration_steps",
                 "save_interval", "pre_relax", "pre_relax_steps",
                 "pre_relax_fmax", "velocity_policy", "fmax_abort", "seed",
             ):

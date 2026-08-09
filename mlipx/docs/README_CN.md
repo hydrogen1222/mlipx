@@ -37,8 +37,10 @@
 
 mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）计算工具，提供类似 VASP 的用户体验。它支持多种 MLIP 后端：
 
-高级轨迹后处理功能已在 Analysis v1 后主动冻结，目前不属于受支持范围；
-当前 mlipx 专注于可靠的 MLIP 单点计算、结构优化和 MLMD 原始轨迹生成。
+Analysis v2 已恢复面向固态离子输运的、与计算器后端解耦的轨迹分析。
+它使用显式的时间、PBC、阶段、单位与 provenance 数据契约，且不会导入
+archive 中的 Analysis v1。详见 [ANALYSIS.md](ANALYSIS.md) 与
+[TRANSPORT.md](TRANSPORT.md)。
 
 | 引擎 | `MODEL_TYPE` | 后端包 |
 |------|--------------|--------|

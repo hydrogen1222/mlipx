@@ -162,6 +162,11 @@ models/
 # Calculation output artifacts
 results/
 /OUTPUT/
+/resolved_config.json
+/sp_stress_crosscheck/
+
+# Local development specifications (not project documentation)
+/mlipx_analysis_v2_unfreeze_development_plan.md
 
 # Superpowers working directory
 .superpowers/

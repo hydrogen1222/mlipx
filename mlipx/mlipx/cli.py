@@ -369,7 +369,17 @@ Examples:
         "--steps",
         type=int,
         default=None,
-        help="Number of MD steps (default: 1000).",
+        help="Number of production MD steps (default: 1000).",
+    )
+    md_parser.add_argument(
+        "--equilibration-steps",
+        "--equil-steps",
+        dest="equilibration_steps",
+        type=int,
+        default=None,
+        help=(
+            "Same-ensemble equilibration steps before production (default: 0)."
+        ),
     )
     md_parser.add_argument(
         "--thermostat",
@@ -639,6 +649,200 @@ Examples:
         help="Output file (default: <input>.vasp)",
     )
 
+    # Analysis v2: explicit scientific subcommands rather than a monolithic
+    # list of loosely coupled tasks.
+    analyze_parser = subparsers.add_parser(
+        "analyze",
+        help="Run validated trajectory analysis",
+        description="Analyze an mlipx run, ASE trajectory, or XDATCAR.",
+    )
+    analyze_parser.add_argument(
+        "run",
+        type=str,
+        help="mlipx run directory or trajectory file",
+    )
+    analyze_sub = analyze_parser.add_subparsers(
+        dest="analysis_task", required=True
+    )
+
+    def _analysis_source_options(p: argparse.ArgumentParser) -> None:
+        p.add_argument(
+            "--positions-convention",
+            choices=["wrapped", "unwrapped", "unknown"],
+            default=None,
+            help="Explicit coordinate convention for imported trajectories.",
+        )
+        p.add_argument(
+            "--frame-interval-fs",
+            type=float,
+            default=None,
+            help="Explicit saved-frame interval when trajectory metadata lacks time.",
+        )
+        p.add_argument(
+            "--force", action="store_true", help="Recompute an existing analysis ID."
+        )
+
+    def _analysis_range_options(p: argparse.ArgumentParser) -> None:
+        _analysis_source_options(p)
+        p.add_argument(
+            "--include-equilibration",
+            action="store_true",
+            help="Include equilibration frames (production-only is the default).",
+        )
+        p.add_argument("--start-frame", type=int, default=None)
+        p.add_argument("--stop-frame", type=int, default=None)
+
+    validate_parser = analyze_sub.add_parser(
+        "validate", help="Validate trajectory semantics and task eligibility"
+    )
+    _analysis_source_options(validate_parser)
+
+    thermo_parser = analyze_sub.add_parser(
+        "thermo", help="Thermodynamic diagnostics and NVE energy drift"
+    )
+    _analysis_range_options(thermo_parser)
+    thermo_parser.add_argument("--block-size-frames", type=int, default=None)
+
+    rdf_parser = analyze_sub.add_parser("rdf", help="Bulk partial RDF and coordination")
+    _analysis_range_options(rdf_parser)
+    rdf_parser.add_argument("--center", dest="center_species", required=True)
+    rdf_parser.add_argument("--neighbor", dest="neighbor_species", required=True)
+    rdf_parser.add_argument("--rmax", dest="r_max_A", type=float, default=None)
+    rdf_parser.add_argument("--bins", type=int, default=200)
+    rdf_parser.add_argument("--cn-cutoff", dest="cn_cutoff_A", type=float, default=None)
+    rdf_parser.add_argument("--stride", type=int, default=1)
+
+    rmsd_parser = analyze_sub.add_parser(
+        "rmsd", help="Periodic-displacement RMSD/RMSF crystal diagnostic"
+    )
+    _analysis_range_options(rmsd_parser)
+    rmsd_parser.add_argument("--species", default=None)
+    rmsd_parser.add_argument(
+        "--drift-reference",
+        choices=["none", "nonmobile", "indices"],
+        default="none",
+    )
+    rmsd_parser.add_argument("--drift-indices", default=None)
+
+    msd_parser = analyze_sub.add_parser("msd", help="Directional windowed MSD")
+    _analysis_range_options(msd_parser)
+    msd_parser.add_argument("--mobile", dest="mobile_species", required=True)
+    msd_parser.add_argument(
+        "--axes", default="xyz", help="One or comma-separated x/y/z/xy/xz/yz/xyz"
+    )
+    msd_parser.add_argument(
+        "--drift-reference",
+        choices=["none", "nonmobile", "indices"],
+        default="none",
+    )
+    msd_parser.add_argument("--drift-indices", default=None)
+    msd_parser.add_argument("--method", choices=["fft", "direct"], default="fft")
+    msd_parser.add_argument("--fit-start-ps", type=float, default=None)
+    msd_parser.add_argument("--fit-stop-ps", type=float, default=None)
+
+    transport_parser = analyze_sub.add_parser(
+        "transport", help="kinisi tracer diffusion and NE conductivity"
+    )
+    _analysis_source_options(transport_parser)
+    transport_parser.add_argument("--mobile", dest="mobile_species", required=True)
+    transport_parser.add_argument(
+        "--charge", dest="ionic_charge_e", type=float, required=True
+    )
+    transport_parser.add_argument("--fit-start-ps", type=float, required=True)
+    transport_parser.add_argument("--dimensions", default="xyz")
+    transport_parser.add_argument(
+        "--drift-reference",
+        choices=["none", "nonmobile", "indices"],
+        default="none",
+    )
+    transport_parser.add_argument("--drift-indices", default=None)
+    transport_parser.add_argument("--temperature-K", type=float, default=None)
+    transport_parser.add_argument(
+        "--collective-conductivity", action="store_true"
+    )
+    transport_parser.add_argument("--random-seed", type=int, default=0)
+    transport_parser.add_argument("--n-samples", type=int, default=1000)
+    transport_parser.add_argument("--n-walkers", type=int, default=32)
+    transport_parser.add_argument("--n-burn", type=int, default=500)
+    transport_parser.add_argument("--n-thin", type=int, default=10)
+
+    density_parser = analyze_sub.add_parser(
+        "density", help="Periodic 3-D mobile-ion density map"
+    )
+    _analysis_range_options(density_parser)
+    density_parser.add_argument("--mobile", dest="mobile_species", required=True)
+    density_parser.add_argument("--spacing", dest="spacing_A", type=float, default=0.25)
+    density_parser.add_argument(
+        "--smoothing-sigma-A", type=float, default=None
+    )
+    density_parser.add_argument("--stride", type=int, default=1)
+
+    arrhenius_parser = analyze_sub.add_parser(
+        "arrhenius", help="Fit independent multi-temperature diffusion results"
+    )
+    _analysis_source_options(arrhenius_parser)
+    arrhenius_parser.add_argument(
+        "--temperature", dest="temperatures_K", type=float, action="append", required=True
+    )
+    arrhenius_parser.add_argument(
+        "--diffusivity", dest="diffusivities_m2_s", type=float, action="append", required=True
+    )
+    arrhenius_parser.add_argument(
+        "--diffusivity-std", dest="diffusivity_std_m2_s", type=float, action="append"
+    )
+    arrhenius_parser.add_argument(
+        "--extrapolate-temperature",
+        dest="extrapolate_temperatures_K",
+        type=float,
+        action="append",
+        default=[],
+    )
+    arrhenius_parser.add_argument("--source-run-id", dest="source_run_ids", action="append")
+
+    electrolyte_parser = analyze_sub.add_parser(
+        "electrolyte", help="GEMDAT site, jump, and percolation mechanisms"
+    )
+    _analysis_source_options(electrolyte_parser)
+    electrolyte_parser.add_argument("--mobile", dest="mobile_species", required=True)
+    site_group = electrolyte_parser.add_mutually_exclusive_group(required=True)
+    site_group.add_argument("--sites", dest="sites_path", default=None)
+    site_group.add_argument(
+        "--discover-sites-from-density", action="store_true"
+    )
+    electrolyte_parser.add_argument("--temperature-K", type=float, default=None)
+    electrolyte_parser.add_argument("--resolution-A", type=float, default=0.5)
+    electrolyte_parser.add_argument("--background-level", type=float, default=0.1)
+    electrolyte_parser.add_argument("--site-radius-A", type=float, default=None)
+    electrolyte_parser.add_argument("--minimal-residence", type=int, default=0)
+    electrolyte_parser.add_argument("--jump-dimensions", type=int, choices=[1, 2, 3], default=3)
+    electrolyte_parser.add_argument("--percolation-axes", default="xyz")
+
+    for name in ("vacf", "spectrum"):
+        spectral_parser = analyze_sub.add_parser(
+            name,
+            help=(
+                "Velocity autocorrelation"
+                if name == "vacf"
+                else "Qualified VACF-derived velocity spectrum"
+            ),
+        )
+        _analysis_range_options(spectral_parser)
+        spectral_parser.add_argument("--species", default=None)
+        spectral_parser.add_argument(
+            "--method", choices=["fft", "direct"], default="fft"
+        )
+        if name == "spectrum":
+            spectral_parser.add_argument(
+                "--taper",
+                choices=["one-sided-cosine", "none"],
+                default="one-sided-cosine",
+            )
+            spectral_parser.add_argument(
+                "--normalization",
+                choices=["normalized_area", "raw_spectrum"],
+                default="normalized_area",
+            )
+
     # queue command: Slurm-like submission and scheduling of background jobs.
     queue_parser = subparsers.add_parser(
         "queue",
@@ -825,6 +1029,7 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
             "ensemble",
             "timestep",
             "steps",
+            "equilibration_steps",
             "thermostat",
             "friction",
             "bussi_tau",
@@ -1333,6 +1538,84 @@ def cmd_convert_xdatcar(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_index_list(value: str | None) -> list[int] | None:
+    if value is None:
+        return None
+    try:
+        parsed = [int(item.strip()) for item in value.split(",") if item.strip()]
+    except ValueError as exc:
+        raise ValueError("drift indices must be comma-separated integers") from exc
+    if not parsed:
+        raise ValueError("drift indices cannot be empty")
+    return parsed
+
+
+def cmd_analyze(args: argparse.Namespace) -> int:
+    """Execute one explicit Analysis v2 subcommand."""
+
+    from mlipx.analysis.runner import run_analysis  # noqa: PLC0415
+    from mlipx.analysis.schema import AnalysisRequest  # noqa: PLC0415
+
+    excluded = {
+        "command",
+        "settings",
+        "run",
+        "analysis_task",
+        "force",
+        "_run_started_at",
+    }
+    parameters = {
+        key: value
+        for key, value in vars(args).items()
+        if key not in excluded and value is not None
+    }
+    if "start_frame" in parameters:
+        parameters["start"] = parameters.pop("start_frame")
+    if "stop_frame" in parameters:
+        parameters["stop"] = parameters.pop("stop_frame")
+    if "drift_indices" in parameters:
+        try:
+            parameters["drift_indices"] = _parse_index_list(
+                parameters["drift_indices"]
+            )
+        except ValueError as exc:
+            print(f"Error: {exc}")
+            return 1
+    # Argparse store_true defaults are meaningful for scientific semantics,
+    # except the site-source flag which must remain explicit False when a CIF
+    # was selected.
+    try:
+        outcome = run_analysis(
+            AnalysisRequest(
+                task=args.analysis_task,
+                source=args.run,
+                parameters=parameters,
+                force=bool(args.force),
+            )
+        )
+    except Exception as exc:
+        print(f"Error: {exc}")
+        return 1
+    print(f"Analysis {outcome['status']}: {outcome['analysis_id']}")
+    print(f"Output: {outcome['output_dir']}")
+    if outcome.get("reused"):
+        print("Existing completed result reused (pass --force to recompute).")
+    if args.analysis_task == "validate":
+        result = outcome.get("results") or {}
+        time_report = result.get("time", {})
+        print(f"Frames: {result.get('n_frames')}")
+        print(f"Production frames: {result.get('production_frames')}")
+        print(f"3-D PBC: {result.get('three_dimensional_pbc')}")
+        print(f"Fixed cell: {result.get('fixed_cell')}")
+        print(f"Uniform sampling: {time_report.get('uniform')}")
+        print(f"Frame interval (fs): {time_report.get('frame_interval_fs')}")
+        print(f"MSD/transport eligible: {result.get('eligible_for_transport')}")
+        print(f"VACF eligible: {result.get('eligible_for_vacf')}")
+        for warning in result.get("warnings", []):
+            print(f"WARNING: {warning}")
+    return 0
+
+
 def cmd_queue(args: argparse.Namespace) -> int:
     """Execute 'queue' subcommands (submit/start/stop/status)."""
     from mlipx.jobs import JobManager  # noqa: PLC0415
@@ -1553,7 +1836,7 @@ def main(argv: list[str] | None = None) -> int:
     # banner for them too.
     suppress_banner = (
         (args.command == "setup" and getattr(args, "json", False))
-        or args.command == "config"
+        or args.command in {"config", "analyze"}
     )
     if not suppress_banner:
         print_header()
@@ -1570,6 +1853,7 @@ def main(argv: list[str] | None = None) -> int:
         "doctor": cmd_doctor,
         "setup": cmd_setup,
         "convert-xdatcar": cmd_convert_xdatcar,
+        "analyze": cmd_analyze,
         "queue": cmd_queue,
         "jobs": cmd_jobs,
         "kill": cmd_kill,

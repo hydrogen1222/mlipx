@@ -67,6 +67,7 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "temperature": 300.0,
         "timestep": 1.0,
         "steps": 1000,
+        "equilibration_steps": 0,
         "thermostat": "LANGEVIN",
         "friction": 0.001,
         "bussi_tau": 1000.0,
@@ -178,6 +179,7 @@ def build_incar_default(calc_type: str) -> str:
         lines.append(f"MD_ENSEMBLE = {md['ensemble']}")
         lines.append(f"TEMPERATURE = {md['temperature']}")
         lines.append(f"TIMESTEP = {md['timestep']}")
+        lines.append(f"EQUILIBRATION_STEPS = {md['equilibration_steps']}")
         lines.append(f"STEPS = {md['steps']}")
         lines.append(f"THERMOSTAT = {md['thermostat']}")
         lines.append(f"FRICTION = {md['friction']}")

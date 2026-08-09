@@ -5,9 +5,10 @@ interatomic-potential calculations and molecular dynamics with UMA, MACE, DPA,
 and GRACE. Built upon code originally developed by Meta FAIR as part of the
 FAIRChem project.
 
-Advanced trajectory post-processing was intentionally frozen after Analysis
-v1 and is not part of the supported scope. mlipx currently focuses on reliable
-MLIP single-point calculations, optimization, and MLMD trajectory generation.
+mlipx provides MLIP single-point calculations, optimization, NVE/NVT molecular
+dynamics, and validated trajectory analysis for solid-state ion transport.
+Analysis v2 was rebuilt around explicit time, PBC, phase, unit, and provenance
+contracts; the archived Analysis v1 is not imported.
 
 ## Quick Start
 
@@ -26,6 +27,11 @@ uv run mlipx doctor              # comprehensive environment diagnostic
 uv run mlipx --help              # show all commands
 uv run mlipx tui                 # launch interactive TUI
 uv run mlipx template sp         # generate INCAR template
+
+# Validate and analyze an existing MLMD run (no model/backend import needed)
+uv run mlipx analyze results/LGPS-800K validate
+uv run mlipx analyze results/LGPS-800K msd \
+  --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
 ```
 
 Running `uv run ...` before `uv sync` also triggers a project sync implicitly,
@@ -186,12 +192,19 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 
 - 📖 **[English User Manual](docs/README_EN.md)** - Complete wiki-level reference: installation, quick start, architecture, calculation types, CLI/TUI/API, all INCAR keywords, output files, task types, **multi-engine guide**, background jobs, resource control, worked examples, troubleshooting, performance
 - 📖 **[中文用户手册](docs/README_CN.md)** - 完整中文 wiki 级手册：安装、快速开始、架构、计算类型、CLI/TUI/API、全部 INCAR 关键字、输出文件、任务类型、**多引擎指南**、后台任务、资源控制、示例、故障排除、性能指南
+- 📈 **[Analysis v2](docs/ANALYSIS.md)** — trajectory contract, validation, RDF/MSD/density/VACF commands
+- 🚚 **[Transport definitions](docs/TRANSPORT.md)** — tracer diffusion, kinisi uncertainty, Nernst–Einstein units and limitations
+- 🔋 **[Electrolyte mechanisms](docs/ELECTROLYTE.md)** — GEMDAT site/jump/percolation adapter contract
 - 📚 Examples are integrated into both manuals (§14) - covering SP, OPT, MD, batch, EOS, NEB, phonons, formation energy
 
 ## Features
 
 - **Multi-engine support:** UMA (FAIRChem), MACE, DPA (DeepMD-kit), GRACE via a unified ASE Calculator interface
 - **Calculation types:** Single-point (SP), Geometry optimization (OPT, FIRE/BFGS/LBFGS), Molecular dynamics (MD, NVT/NVE), Batch processing
+- **Analysis v2:** production-aware validation, thermo, RDF/coordination,
+  directional MSD, kinisi transport, explicitly named Nernst–Einstein tracer
+  conductivity, Arrhenius fits, density maps, GEMDAT adapters, and qualified
+  VACF-derived velocity spectra
 - **VASP ecosystem output:** syntax-compatible CONTCAR/XDATCAR, documented
   VASP-like OUTCAR, and OSZICAR formats
 - **Background jobs:** Submit, detach, re-attach, kill long-running calculations
@@ -218,6 +231,7 @@ mlipx/
 │   ├── calculators/                  # MACE/DPA/GRACE wrappers + Factory
 │   ├── config/                       # INCAR parser, settings.ini, schema, resolver
 │   ├── runners/                      # SinglePoint, Optimization, MD, Batch
+│   ├── analysis/                     # Calculator-independent Analysis v2
 │   ├── tui/                          # Textual TUI (app, screens)
 │   ├── writers/                      # OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
 │   ├── api.py                        # Python API functions

@@ -15,10 +15,67 @@ import pytest
 if TYPE_CHECKING:
     from pathlib import Path
 from mlipx.jobs import JobManager, JobStatus
+from mlipx.tui.analysis_screen import AnalysisScreen
 from mlipx.tui.app import MlipxApp
 from mlipx.tui.config_screen import ConfigScreen
 from mlipx.tui.jobs_screen import JobDetailScreen, JobsScreen
 from mlipx.tui.run_screen import RunScreen
+
+
+@pytest.mark.asyncio()
+async def test_analysis_screen_progressive_disclosure() -> None:
+    app = MlipxApp()
+    async with app.run_test(size=(100, 100)) as pilot:
+        screen = AnalysisScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+
+        assert screen.query_one("#analysis-mobile-input").display is False
+        assert screen.query_one("#analysis-charge-input").display is False
+        screen.query_one("#analysis-task-select").value = "transport"
+        await pilot.pause()
+        assert screen.query_one("#analysis-mobile-input").display is True
+        assert screen.query_one("#analysis-drift-select").display is True
+        assert screen.query_one("#analysis-charge-input").display is True
+        assert screen.query_one("#analysis-rdf-center-input").display is False
+
+        screen.query_one("#analysis-task-select").value = "electrolyte"
+        await pilot.pause()
+        assert screen.query_one("#analysis-sites-input").display is True
+        assert screen.query_one("#analysis-charge-input").display is False
+
+
+@pytest.mark.asyncio()
+async def test_cpu_tui_run_screen_queues_without_mount_error(tmp_path: Path) -> None:
+    """Regression: the TUI CPU path must mount and enqueue cleanly."""
+    from ase import Atoms
+    from ase.io import write
+
+    structure = tmp_path / "structure.xyz"
+    model = tmp_path / "model.pt"
+    write(structure, Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.74]]))
+    model.write_text("placeholder")
+    app = MlipxApp()
+    app.config.update(
+        {
+            "calc_type": "sp",
+            "structure_file": str(structure),
+            "model_file": str(model),
+            "device": "cpu",
+            "output_dir": str(tmp_path / "results"),
+        }
+    )
+    async with app.run_test(size=(100, 60)) as pilot:
+        screen = RunScreen()
+        screen._job_manager = JobManager(jobs_dir=tmp_path / "jobs")
+        await app.push_screen(screen)
+        await pilot.pause()
+        assert screen._job_id is not None
+        job = screen._job_manager.get_job(screen._job_id)
+        assert job is not None
+        assert job["status"] == "pending"
+        assert job["device"] == "cpu"
+        assert "Failed to queue" not in str(screen.status.render())
 
 
 @pytest.mark.asyncio

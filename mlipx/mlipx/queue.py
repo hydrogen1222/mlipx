@@ -69,6 +69,7 @@ _OPT_FLAGS: dict[str, tuple[str, ...]] = {
     "temperature": ("--temp",),
     "timestep": ("--timestep",),
     "steps": ("--steps",),
+    "equilibration_steps": ("--equilibration-steps",),
     "thermostat": ("--thermostat",),
     "friction": ("--friction",),
     "bussi_tau": ("--bussi-tau",),

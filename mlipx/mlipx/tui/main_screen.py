@@ -50,6 +50,12 @@ class MainScreen(Screen):
                     id="md",
                 ),
                 ListItem(
+                    Static(
+                        "📈 Analyze Existing Run\n   Validated structure and ion transport"
+                    ),
+                    id="analysis",
+                ),
+                ListItem(
                     Static("💼 Background Jobs\n   View/manage running calculations"),
                     id="jobs",
                 ),
@@ -77,6 +83,10 @@ class MainScreen(Screen):
 
         if item_id == "jobs":
             self.app.push_screen("jobs")
+            return
+
+        if item_id == "analysis":
+            self.app.push_screen("analysis")
             return
 
         # Update config and go to config screen.
@@ -181,6 +191,7 @@ DEVICE = cpu
 ENSEMBLE = NVT
 TEMPERATURE = 300.0
 TIMESTEP = 1.0
+EQUILIBRATION_STEPS = 0
 STEPS = 1000
 SAVE_INTERVAL = 10
 

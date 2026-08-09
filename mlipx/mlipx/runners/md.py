@@ -97,6 +97,7 @@ class MDRunner(BaseRunner):
         temperature: float = 300.0,
         timestep: float = 1.0,
         steps: int = 1000,
+        equilibration_steps: int = 0,
         thermostat: str = "LANGEVIN",
         friction: float = 0.001,
         bussi_tau: float = 1000.0,
@@ -136,7 +137,8 @@ class MDRunner(BaseRunner):
             ensemble: MD ensemble (NVT or NVE)
             temperature: Temperature in Kelvin
             timestep: Time step in femtoseconds
-            steps: Number of MD steps
+            steps: Number of production MD steps
+            equilibration_steps: Same-ensemble MD steps before production
             thermostat: NVT thermostat (LANGEVIN, BUSSI, or NHC)
             friction: Langevin friction coefficient (1/fs)
             bussi_tau: Bussi/CSVR coupling time in femtoseconds
@@ -173,7 +175,9 @@ class MDRunner(BaseRunner):
         self.ensemble = ensemble.lower()
         self.temperature = temperature
         self.timestep = timestep * units.fs  # Convert to ASE units
-        self.steps = steps
+        self.steps = int(steps)
+        self.equilibration_steps = int(equilibration_steps)
+        self.total_steps = self.equilibration_steps + self.steps
         self.thermostat = str(thermostat).lower()
         self.friction = friction / units.fs  # Convert to ASE units
         self.bussi_tau = bussi_tau * units.fs
@@ -221,6 +225,8 @@ class MDRunner(BaseRunner):
             raise ValueError("timestep must be > 0 fs")
         if self.steps < 0:
             raise ValueError("steps must be >= 0")
+        if self.equilibration_steps < 0:
+            raise ValueError("equilibration_steps must be >= 0")
         if self.save_interval <= 0:
             raise ValueError("save_interval must be > 0")
         if self.fmax_abort <= 0:
@@ -369,11 +375,29 @@ class MDRunner(BaseRunner):
                 "frames": len(frames),
                 "first_step": frames[0]["step"] if frames else None,
                 "last_step": frames[-1]["step"] if frames else None,
+                "md_timestep_fs": timestep_fs,
+                "frame_stride_steps": self.save_interval,
+                "frame_interval_fs": timestep_fs * self.save_interval,
+                # Legacy aliases remain readable by older consumers. The
+                # explicitly named fields above are authoritative.
                 "timestep_fs": timestep_fs,
                 "save_interval_steps": self.save_interval,
                 "saved_interval_fs": timestep_fs * self.save_interval,
+                "positions_convention": "unwrapped",
                 "positions": "unwrapped Cartesian in trajectory.traj; "
                 "unwrapped direct in XDATCAR",
+                "equilibration_steps": self.equilibration_steps,
+                "production_steps": self.steps,
+                "total_steps": self.total_steps,
+                "production_start_step": self.equilibration_steps,
+                "production_start_frame": next(
+                    (
+                        index
+                        for index, frame in enumerate(frames)
+                        if frame["phase"] == "production"
+                    ),
+                    None,
+                ),
             },
             "units": {
                 "time": "fs",
@@ -569,6 +593,9 @@ class MDRunner(BaseRunner):
             "temperature": self.temperature,
             "timestep": float(self.timestep / units.fs),
             "steps": self.steps,
+            "equilibration_steps": self.equilibration_steps,
+            "production_steps": self.steps,
+            "total_steps": self.total_steps,
             "seed": self.seed,
             "velocity_policy": self.velocity_policy,
         }
@@ -603,6 +630,9 @@ class MDRunner(BaseRunner):
             "Target temperature (K)": provenance["temperature"],
             "Time step (fs)": provenance["timestep"],
             "MD steps": provenance["steps"],
+            "Equilibration steps": provenance["equilibration_steps"],
+            "Production steps": provenance["production_steps"],
+            "Total integrated steps": provenance["total_steps"],
             "Save interval (steps)": self.save_interval,
             "Random seed": provenance["seed"],
             "Velocity policy": provenance["velocity_policy"],
@@ -754,7 +784,9 @@ class MDRunner(BaseRunner):
         )
         self.log(f"Temperature:      {self.temperature} K")
         self.log(f"Time step:        {self.timestep / units.fs} fs")
-        self.log(f"Steps:            {self.steps}")
+        self.log(f"Equilibration:    {self.equilibration_steps} steps")
+        self.log(f"Production:       {self.steps} steps")
+        self.log(f"Total MD steps:   {self.total_steps}")
         self.log(
             f"Save interval:    {self.save_interval} steps (trajectory frames)"
         )
@@ -830,7 +862,7 @@ class MDRunner(BaseRunner):
             "running",
             f"Starting {self.ensemble.upper()} MD simulation...",
             step=0,
-            total_steps=self.steps,
+            total_steps=self.total_steps,
         )
         start_time = time.time()
 
@@ -842,6 +874,11 @@ class MDRunner(BaseRunner):
                 raise CancellationRequested("MD simulation cancelled by user")
 
             step = dyn.nsteps
+            phase = (
+                "equilibration"
+                if step < self.equilibration_steps
+                else "production"
+            )
 
             # Calculate temperature with proper DOF handling
             temp = self._calculate_temperature(atoms)
@@ -876,6 +913,7 @@ class MDRunner(BaseRunner):
                 frame_data = {
                     "step": step,
                     "time_fs": time_fs,
+                    "phase": phase,
                     "energy": pe,
                     "kinetic_energy": ke,
                     "total_energy": total_e,
@@ -898,6 +936,7 @@ class MDRunner(BaseRunner):
                         [
                             "step",
                             "time_fs",
+                            "phase",
                             "potential_energy_eV",
                             "kinetic_energy_eV",
                             "total_energy_eV",
@@ -931,6 +970,7 @@ class MDRunner(BaseRunner):
                     [
                         step,
                         time_fs,
+                        phase,
                         pe,
                         ke,
                         total_e,
@@ -970,6 +1010,9 @@ class MDRunner(BaseRunner):
                     )
 
                 if traj_writer is not None:
+                    atoms.info["mlipx_step"] = int(step)
+                    atoms.info["mlipx_time_fs"] = float(time_fs)
+                    atoms.info["mlipx_phase"] = phase
                     traj_writer.write(atoms)
 
             if force_abort:
@@ -982,20 +1025,23 @@ class MDRunner(BaseRunner):
             # Persist a scalar thermodynamic log record every MD step. This is
             # intentionally independent of save_interval: the latter controls
             # full trajectory frames, not lightweight E/T diagnostics.
-            if step % self.LOG_INTERVAL_STEPS == 0 or step == self.steps:
+            if step % self.LOG_INTERVAL_STEPS == 0 or step == self.total_steps:
                 self.log(
-                    f"Step {step:6d}/{self.steps}: "
-                    f"E = {total_e:12.4f} eV, T = {temp:6.1f} K"
+                    f"Step {step:6d}/{self.total_steps}: "
+                    f"E = {total_e:12.4f} eV, T = {temp:6.1f} K "
+                    f"[{phase}]"
                 )
 
             # Keep UI/progress-callback updates throttled; emitting hundreds
             # of thousands of render events would not add useful information.
-            if step % self.PROGRESS_INTERVAL_STEPS == 0 or step == self.steps:
+            if step % self.PROGRESS_INTERVAL_STEPS == 0 or step == self.total_steps:
                 self._emit_progress(
                     "running",
-                    f"Step {step:6d}/{self.steps}: E = {total_e:12.4f} eV, T = {temp:6.1f} K",
+                    f"Step {step:6d}/{self.total_steps}: "
+                    f"E = {total_e:12.4f} eV, T = {temp:6.1f} K "
+                    f"[{phase}]",
                     step=step,
-                    total_steps=self.steps,
+                    total_steps=self.total_steps,
                     extra={
                         "energy": float(pe),
                         "temperature": float(temp),
@@ -1006,7 +1052,7 @@ class MDRunner(BaseRunner):
         dyn.attach(print_progress, interval=1)
 
         try:
-            dyn.run(self.steps)
+            dyn.run(self.total_steps)
         except ForceSafetyAbort as exc:
             self.log(f"\nMD aborted by force safety threshold: {exc}", level="error")
             if traj_writer is not None:
@@ -1088,7 +1134,18 @@ class MDRunner(BaseRunner):
             "forces": final_forces,
             **final_stress_data,
             "temperature": final_temp,
-            "md_steps": self.steps,
+            "md_steps": self.total_steps,
+            "equilibration_steps": self.equilibration_steps,
+            "production_steps": self.steps,
+            "production_start_step": self.equilibration_steps,
+            "production_start_frame": next(
+                (
+                    index
+                    for index, frame in enumerate(trajectory_summary)
+                    if frame["phase"] == "production"
+                ),
+                None,
+            ),
             "timestep_fs": float(self.timestep / units.fs),
             "save_interval": self.save_interval,
             "ensemble": self.ensemble.upper(),

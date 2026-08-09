@@ -22,6 +22,22 @@ dependencies = [
 # so they cannot coexist in a single environment. Install the backend you
 # need manually (see `mlipx doctor`), e.g.: pip install mace-torch.
 uma = ["fairchem-core"]
+analysis = [
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+]
+transport = [
+    "kinisi>=2.0.5,<3",
+]
+electrolyte = [
+    "gemdat>=1.7.3,<2",
+]
+analysis-all = [
+    "scipy>=1.11",
+    "matplotlib>=3.7",
+    "kinisi>=2.0.5,<3",
+    "gemdat>=1.7.3,<2",
+]
 dev = [
     "pytest",
     "ruff",

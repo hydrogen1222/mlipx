@@ -309,6 +309,7 @@ class CalculationEngine:
                 temperature=opts.get("temperature", 300.0),
                 timestep=opts.get("timestep", 1.0),
                 steps=opts.get("steps", 1000),
+                equilibration_steps=opts.get("equilibration_steps", 0),
                 thermostat=opts.get("thermostat", "LANGEVIN"),
                 friction=opts.get("friction", 0.001),
                 bussi_tau=opts.get("bussi_tau", 1000.0),

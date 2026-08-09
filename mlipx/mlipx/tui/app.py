@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from typing import Any, ClassVar
 
 # Screen imports - done here to avoid circular imports
+from mlipx.tui.analysis_screen import AnalysisScreen
 from mlipx.tui.config_screen import ConfigScreen
 from mlipx.tui.jobs_screen import JobsScreen
 from mlipx.tui.main_screen import MainScreen, TemplateScreen
@@ -199,6 +200,7 @@ class MlipxApp(App):
             "temperature": 300.0,
             "timestep": 1.0,
             "steps": 1000,
+            "equilibration_steps": 0,
             "thermostat": "LANGEVIN",
             "friction": 0.001,
             "bussi_tau": 1000.0,
@@ -235,6 +237,7 @@ class MlipxApp(App):
         "run": RunScreen,
         "template": TemplateScreen,
         "jobs": JobsScreen,
+        "analysis": AnalysisScreen,
     }
 
     def on_mount(self) -> None:

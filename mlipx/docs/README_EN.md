@@ -37,9 +37,10 @@
 
 mlipx (MLIP eXtended) is a multi-engine machine-learning interatomic potential (MLIP) computation tool that provides a VASP-like user experience. It supports multiple MLIP backends behind one unified interface:
 
-Advanced trajectory post-processing was intentionally frozen after Analysis
-v1 and is not part of the supported scope. mlipx currently focuses on reliable
-MLIP single-point calculations, optimization, and raw MLMD trajectory generation.
+Analysis v2 provides validated, calculator-independent trajectory analysis for
+solid-state ion transport. It uses explicit time/PBC/phase/unit contracts and
+does not import the archived Analysis v1. See [ANALYSIS.md](ANALYSIS.md) and
+[TRANSPORT.md](TRANSPORT.md).
 
 | Engine | `MODEL_TYPE` | Backend package |
 |-------|--------------|-----------------|

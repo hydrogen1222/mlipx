@@ -244,7 +244,16 @@ _SPECS: list[OptionSpec] = [
         "steps", int, frozenset({"md"}),
         aliases={"STEPS", "production_steps", "PRODUCTION_STEPS"},
         minimum=0,
-        description="Number of MD steps.",
+        description="Number of production MD steps.",
+    ),
+    OptionSpec(
+        "equilibration_steps", int, frozenset({"md"}),
+        aliases={"EQUIL_STEPS", "EQUILIBRATION_STEPS"},
+        minimum=0,
+        default=0,
+        description=(
+            "Number of same-ensemble equilibration steps before production."
+        ),
     ),
     OptionSpec(
         "thermostat", str, frozenset({"md"}),
