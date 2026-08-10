@@ -49,7 +49,7 @@ _CALC_KEYS: dict[str, set[str]] = {
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
     "dpa": {"head"},
-    "grace": {"cpu_threads"},
+    "grace": {"cpu_threads", "gpu_memory_growth", "gpu_memory_limit_mb"},
 }
 _ALL_CALC_KEYS: set[str] = set().union(*_CALC_KEYS.values())
 
@@ -126,7 +126,8 @@ class CalculatorFactory:
                 ``torch_num_threads`` and ``activation_checkpointing``; MACE
                 accepts ``default_dtype`` (factory fallback ``float64``) and
                 ``head``; DPA accepts ``head`` for multi-task branches; GRACE
-                accepts ``cpu_threads`` for TensorFlow intra-op parallelism.
+                accepts ``cpu_threads`` for TensorFlow intra-op parallelism and
+                GPU memory-growth / hard-limit controls.
 
         Returns:
             A ``BaseMLIPCalculator`` subclass instance.
@@ -178,6 +179,8 @@ class CalculatorFactory:
                 device=device,
                 task=task,
                 cpu_threads=kwargs.get("cpu_threads"),
+                gpu_memory_growth=kwargs.get("gpu_memory_growth", True),
+                gpu_memory_limit_mb=kwargs.get("gpu_memory_limit_mb"),
             )
         else:
             raise ValueError(

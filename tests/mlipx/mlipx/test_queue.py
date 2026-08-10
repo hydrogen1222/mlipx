@@ -94,12 +94,15 @@ def test_build_command_engine_option_isolation() -> None:
     grace = build_mlipx_command(
         "md", "s.cif", "m", model_type="grace",
         options={"inference_mode": "turbo", "activation_checkpointing": True,
-                 "torch_num_threads": 4, "head": "x", "default_dtype": "float64"},
+                 "torch_num_threads": 4, "head": "x", "default_dtype": "float64",
+                 "gpu_memory_growth": True, "gpu_memory_limit_mb": 6144},
     )
     assert "--inference-mode" not in grace
     assert "--activation-checkpointing" not in grace
     assert "--head" not in grace and "--dtype" not in grace
     assert "--cpu-threads" in grace and "4" in grace  # threads apply to all
+    assert "--gpu-memory-growth" in grace
+    assert grace[grace.index("--gpu-memory-limit-mb") + 1] == "6144"
 
     mace = build_mlipx_command(
         "sp", "s.cif", "m", model_type="mace",
@@ -109,6 +112,7 @@ def test_build_command_engine_option_isolation() -> None:
     assert "--dtype" in mace and "float64" in mace
     assert "--head" in mace and "h1" in mace
     assert "--inference-mode" not in mace
+    assert "--gpu-memory-limit-mb" not in mace
 
     dpa = build_mlipx_command(
         "sp", "s.cif", "m", model_type="dpa", options={"head": "branch1"})

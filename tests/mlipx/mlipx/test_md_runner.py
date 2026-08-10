@@ -21,6 +21,11 @@ from ase.io import Trajectory, read
 
 from mlipx.config.defaults import BUILTIN_DEFAULTS
 from mlipx.runners.md import ForceSafetyAbort, MDRunner
+from mlipx.runners.md_output import (
+    AsyncMDOutputWriter,
+    MDOutputError,
+    MDTrajectorySummary,
+)
 
 
 class _CalculatorStub:
@@ -593,7 +598,7 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     assert manifest["artifacts"]["xdatcar"]["path"] == "vasp/XDATCAR"
 
 
-def test_md_logs_every_step_independently_of_trajectory_interval(tmp_path):
+def test_md_throttles_human_log_independently_of_saved_scalars(tmp_path):
     logs: list[str] = []
     runner = MDRunner(
         _RunWrapper(_FiniteCalc()),
@@ -611,16 +616,14 @@ def test_md_logs_every_step_independently_of_trajectory_interval(tmp_path):
     results = runner.run(_bulk_atoms())
 
     step_logs = [message for message in logs if "/3: E =" in message]
-    assert len(step_logs) == 4
+    assert len(step_logs) == 2
     assert any("Step      0/3:" in message for message in step_logs)
-    assert any("Step      1/3:" in message for message in step_logs)
-    assert any("Step      2/3:" in message for message in step_logs)
     assert any("Step      3/3:" in message for message in step_logs)
     assert any(
         "Save interval:    2 steps (trajectory frames)" in message
         for message in logs
     )
-    assert any("Thermodynamic log interval: 1 step" in message for message in logs)
+    assert any("Thermodynamic log interval: 100 steps" in message for message in logs)
     assert [frame["step"] for frame in results["trajectory"]] == [0, 2]
 
 
@@ -666,16 +669,9 @@ def test_md_equilibration_and_production_phase_metadata(tmp_path):
     assert manifest["trajectory"]["production_start_frame"] == 2
 
 
-def test_md_long_trajectory_keeps_only_scalars_in_memory(tmp_path):
-    """Plan 5.5: a long run must not accumulate full atoms frames in RAM.
-
-    Measures the marginal per-frame memory between a short (20-frame) and a
-    long (200-frame) run of the *same* 256-atom system. With the streaming
-    fix each frame adds only a small scalar dict (~hundreds of bytes); the old
-    per-frame ``atoms.copy()`` would add the full positions array (~6 KB for
-    256 atoms) per frame, so a 2 KB/frame cap cleanly separates the two.
-    """
-    def _peak_for(steps, out_dir):
+def test_md_long_trajectory_has_bounded_resident_summary_memory(tmp_path):
+    """Frame summaries are disk-backed and the live queue is strictly bounded."""
+    def _resident_for(steps, out_dir):
         gc.collect()
         tracemalloc.start()
         runner = MDRunner(
@@ -684,24 +680,69 @@ def test_md_long_trajectory_keeps_only_scalars_in_memory(tmp_path):
             pre_relax=False, verbose=False, seed=1,
         )
         res = runner.run(_bulk_atoms(256))
-        _, peak = tracemalloc.get_traced_memory()
+        gc.collect()
+        resident, _ = tracemalloc.get_traced_memory()
         tracemalloc.stop()
-        return peak, res
+        return resident, res
 
-    peak_short, res_short = _peak_for(20, tmp_path / "short")
-    peak_long, res_long = _peak_for(200, tmp_path / "long")
+    resident_short, res_short = _resident_for(20, tmp_path / "short")
+    resident_long, res_long = _resident_for(200, tmp_path / "long")
 
-    # Structural guarantee: no atoms objects retained per frame in either run.
+    assert isinstance(res_short["trajectory"], MDTrajectorySummary)
+    assert isinstance(res_long["trajectory"], MDTrajectorySummary)
+    assert AsyncMDOutputWriter.QUEUE_MAX_FRAMES == 8
     assert all("atoms" not in f for f in res_short["trajectory"])
     assert all("atoms" not in f for f in res_long["trajectory"])
     assert len(res_long["trajectory"]) == 200 + 1
     assert len(res_short["trajectory"]) == 20 + 1
-    # Marginal per-frame memory stays small (not a full atoms copy).
-    marginal_per_frame = (peak_long - peak_short) / (200 - 20)
-    assert marginal_per_frame < 2000, (
-        f"marginal per-frame memory {marginal_per_frame:.0f} B/frame exceeds "
-        "the scalar-only budget; full frames may be accumulating in RAM"
+    # Current retained Python memory does not grow per frame. Peak allocator
+    # memory is unsuitable here because ASE's ULM writer expands its on-disk
+    # offset table geometrically at frame-count thresholds.
+    marginal_per_frame = (resident_long - resident_short) / (200 - 20)
+    assert marginal_per_frame < 256, (
+        f"resident marginal memory {marginal_per_frame:.0f} B/frame exceeds "
+        "the disk-backed-summary budget"
     )
+
+
+def test_md_output_failure_aborts_instead_of_dropping_frames(
+    tmp_path, monkeypatch
+):
+    """A writer-thread error must stop MD and leave failed provenance."""
+
+    class FailingTrajectoryWriter:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def write(self, _atoms):
+            raise OSError("simulated full filesystem")
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "mlipx.runners.md_output.AseTrajectoryWriter",
+        FailingTrajectoryWriter,
+    )
+    runner = MDRunner(
+        _RunWrapper(_FiniteCalc()),
+        ensemble="NVE",
+        steps=10,
+        save_interval=1,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=2,
+        write_outcar=False,
+        write_xdatcar=False,
+    )
+
+    with pytest.raises(MDOutputError, match="simulated full filesystem"):
+        runner.run(_bulk_atoms())
+
+    manifest = json.loads((tmp_path / "artifacts.json").read_text())
+    assert manifest["status"] == "failed"
+    assert manifest["error"]["type"] == "output_error"
 
 
 # ---------------------------------------------------------------------------

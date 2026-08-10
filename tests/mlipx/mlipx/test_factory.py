@@ -14,6 +14,7 @@ from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
 import pytest
+
 from mlipx.base_calculator import BaseMLIPCalculator
 from mlipx.calculator import UMACalculator
 from mlipx.calculators.dpa_calc import DPACalculatorWrapper
@@ -252,6 +253,7 @@ class TestDpaGraceDevice:
 
     def test_grace_honours_cuda_index(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
+        monkeypatch.delenv("TF_FORCE_GPU_ALLOW_GROWTH", raising=False)
 
         class _FakeTPCalc:
             implemented_properties: ClassVar = ["energy", "forces", "stress"]
@@ -261,6 +263,9 @@ class TestDpaGraceDevice:
         mod.TPCalculator = fake_tp_cls
         monkeypatch.setitem(sys.modules, "tensorpotential", MagicMock())
         monkeypatch.setitem(sys.modules, "tensorpotential.calculator", mod)
+        fake_tf = MagicMock()
+        fake_tf.config.list_physical_devices.return_value = ["GPU:0"]
+        monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
         model = tmp_path / "grace_model"
         model.mkdir()
         w = GRACECalculatorWrapper(model, device="cuda:1", task="bulk")
@@ -269,7 +274,13 @@ class TestDpaGraceDevice:
         info = w.info()
         assert info["requested_device"] == "cuda:1"
         assert info["actual_device"] == "unknown"
-        fake_tp_cls.assert_called_once_with(model=str(model))
+        fake_tf.config.experimental.set_memory_growth.assert_called_once_with(
+            "GPU:0", True
+        )
+        assert os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] == "true"
+        fake_tp_cls.assert_called_once_with(
+            model=str(model), enable_uq_if_available=False
+        )
 
     def test_grace_cpu_hides_gpus(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
@@ -308,13 +319,87 @@ class TestDpaGraceDevice:
         wrapper.get_calculator()
 
         set_threads.assert_called_once_with(3)
-        fake_tp_cls.assert_called_once_with(model=str(model))
+        fake_tp_cls.assert_called_once_with(
+            model=str(model), enable_uq_if_available=False
+        )
+
+    def test_grace_hard_gpu_limit_precedes_calculator_creation(
+        self, tmp_path, monkeypatch
+    ):
+        events: list[str] = []
+        fake_tf = MagicMock()
+        fake_tf.config.list_physical_devices.return_value = ["GPU:0"]
+        logical = object()
+        fake_tf.config.LogicalDeviceConfiguration.return_value = logical
+        fake_tf.config.set_logical_device_configuration.side_effect = (
+            lambda *_: events.append("limit")
+        )
+        fake_calculator = MagicMock()
+        fake_calculator.implemented_properties = ["energy", "forces", "stress"]
+
+        def create_calculator(**_):
+            events.append("calculator")
+            return fake_calculator
+
+        fake_tp_cls = MagicMock(side_effect=create_calculator)
+        tp_mod = MagicMock(TPCalculator=fake_tp_cls)
+        monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+        monkeypatch.setitem(sys.modules, "tensorpotential", MagicMock())
+        monkeypatch.setitem(sys.modules, "tensorpotential.calculator", tp_mod)
+        model = tmp_path / "grace_model"
+        model.mkdir()
+
+        wrapper = GRACECalculatorWrapper(
+            model, device="cuda", gpu_memory_limit_mb=6144
+        )
+        wrapper.get_calculator()
+
+        assert events == ["limit", "calculator"]
+        fake_tf.config.LogicalDeviceConfiguration.assert_called_once_with(
+            memory_limit=6144
+        )
+        fake_tf.config.experimental.set_memory_growth.assert_not_called()
+        assert os.environ["TF_FORCE_GPU_ALLOW_GROWTH"] == "false"
+        assert wrapper.info()["gpu_memory_limit_mb"] == 6144
+
+    def test_grace_gpu_policy_fails_closed_after_tf_initialization(
+        self, tmp_path, monkeypatch
+    ):
+        fake_tf = MagicMock()
+        fake_tf.config.list_physical_devices.return_value = ["GPU:0"]
+        fake_tf.config.experimental.set_memory_growth.side_effect = RuntimeError(
+            "already initialized"
+        )
+        fake_tp_cls = MagicMock()
+        tp_mod = MagicMock(TPCalculator=fake_tp_cls)
+        monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
+        monkeypatch.setitem(sys.modules, "tensorpotential", MagicMock())
+        monkeypatch.setitem(sys.modules, "tensorpotential.calculator", tp_mod)
+        model = tmp_path / "grace_model"
+        model.mkdir()
+
+        wrapper = GRACECalculatorWrapper(model, device="cuda")
+        with pytest.raises(RuntimeError, match="refusing to run"):
+            wrapper.get_calculator()
+        fake_tp_cls.assert_not_called()
 
     def test_grace_rejects_invalid_cpu_threads(self, tmp_path):
         model = tmp_path / "grace_model"
         model.mkdir()
         with pytest.raises(ValueError, match="positive integer"):
             GRACECalculatorWrapper(model, cpu_threads=0)
+
+    def test_grace_rejects_invalid_gpu_memory_limit(self, tmp_path):
+        model = tmp_path / "grace_model"
+        model.mkdir()
+        with pytest.raises(ValueError, match="positive integer"):
+            GRACECalculatorWrapper(
+                model, device="cuda", gpu_memory_limit_mb=0
+            )
+        with pytest.raises(ValueError, match="only to a CUDA"):
+            GRACECalculatorWrapper(
+                model, device="cpu", gpu_memory_limit_mb=1024
+            )
 
 
 class TestEngineModelType:

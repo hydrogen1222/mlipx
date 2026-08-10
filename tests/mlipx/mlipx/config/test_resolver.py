@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
 from mlipx.config.resolver import ResolvedValue, resolve_config
 from mlipx.config.settings import load_settings
 
@@ -139,6 +140,27 @@ def test_cli_selected_engine_uses_matching_engine_defaults() -> None:
         assert rc.task == "bulk"
         assert rc.device == "cuda:1"
         assert rc.calculator_options["default_dtype"] == "float64"
+
+
+def test_grace_gpu_memory_policy_is_a_calculator_option() -> None:
+    with tempfile.TemporaryDirectory() as d:
+        ini = Path(d) / "settings.ini"
+        ini.write_text(
+            "[engine:grace]\n"
+            "task = bulk\n"
+            "gpu_memory_growth = true\n"
+            "gpu_memory_limit_mb = 6144\n"
+        )
+        settings = load_settings(explicit=str(ini))
+        rc = resolve_config(
+            calc_type="md",
+            settings=settings,
+            cli={"model_type": "grace", "model_path": "grace_model"},
+        )
+
+        assert rc.calculator_options["gpu_memory_growth"] is True
+        assert rc.calculator_options["gpu_memory_limit_mb"] == 6144
+        assert "gpu_memory_limit_mb" not in rc.run_options
 
 
 # ---------------------------------------------------------------------------

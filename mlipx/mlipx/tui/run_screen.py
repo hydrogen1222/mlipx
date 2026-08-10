@@ -144,6 +144,13 @@ class RunScreen(Screen):
             value = self.app.get_config(key)
             if value is not None:
                 options[key] = value
+        if model_type == "grace":
+            options["gpu_memory_growth"] = self.app.get_config(
+                "gpu_memory_growth", True
+            )
+            memory_limit = self.app.get_config("gpu_memory_limit_mb")
+            if memory_limit is not None:
+                options["gpu_memory_limit_mb"] = memory_limit
         if calc_type == "opt":
             for key in (
                 "fmax", "max_steps", "optimizer", "cell_opt", "fix_symmetry",

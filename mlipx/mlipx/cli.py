@@ -121,6 +121,22 @@ Examples:
             help="UMA GPU memory-saving activation checkpointing.",
         )
         p.add_argument(
+            "--gpu-memory-growth",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help=(
+                "GRACE: grow TensorFlow GPU memory on demand instead of "
+                "reserving the whole device (default: enabled)."
+            ),
+        )
+        p.add_argument(
+            "--gpu-memory-limit-mb",
+            type=int,
+            default=None,
+            metavar="MIB",
+            help="GRACE: hard per-process TensorFlow GPU memory limit in MiB.",
+        )
+        p.add_argument(
             "--dtype",
             "--default-dtype",
             dest="default_dtype",
@@ -134,6 +150,24 @@ Examples:
             type=str,
             default=None,
             help="MACE head or DeepMD/DPA branch name.",
+        )
+        p.add_argument(
+            "--write-outcar",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Write the VASP-like OUTCAR output (use --no-write-outcar to reduce MD I/O).",
+        )
+        p.add_argument(
+            "--write-xdatcar",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Write XDATCAR (use --no-write-xdatcar to keep only the canonical trajectory).",
+        )
+        p.add_argument(
+            "--write-trajectory",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help="Write the canonical ASE trajectory (recommended for reproducible MD).",
         )
         p.add_argument(
             "--model-alias",
@@ -1011,8 +1045,13 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
         "inference_mode",
         "torch_num_threads",
         "activation_checkpointing",
+        "gpu_memory_growth",
+        "gpu_memory_limit_mb",
         "default_dtype",
         "head",
+        "write_outcar",
+        "write_xdatcar",
+        "write_trajectory",
     ):
         value = getattr(args, key, None)
         if value is not None:

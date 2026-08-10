@@ -185,6 +185,8 @@ class CalculationEngine:
         "inference_mode",
         "torch_num_threads",
         "activation_checkpointing",
+        "gpu_memory_growth",
+        "gpu_memory_limit_mb",
     }
 
     def _effective_calculator_options(self) -> dict:
@@ -244,6 +246,10 @@ class CalculationEngine:
             and self.config.torch_num_threads is not None
         ):
             calc_opts.setdefault("cpu_threads", self.config.torch_num_threads)
+        if self.config.model_type.lower() == "grace":
+            # Polite TensorFlow allocation is the safe package default. A user
+            # can additionally set gpu_memory_limit_mb for hard isolation.
+            calc_opts.setdefault("gpu_memory_growth", True)
         # MACE uses an accuracy-first float64 default for every calculation type.
         # A higher config layer may explicitly opt into float32 for performance.
         if self.config.model_type.lower() == "mace":
@@ -336,6 +342,7 @@ class CalculationEngine:
                 write_trajectory=self.config.settings.get(
                     "write_trajectory", True
                 ),
+                write_xdatcar=self.config.settings.get("write_xdatcar", True),
                 **common,
             )
         else:

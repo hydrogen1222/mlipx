@@ -198,6 +198,17 @@ class ConfigScreen(Screen):
                     id="torch-threads-input",
                 )
 
+                grace_limit = self.app.get_config("gpu_memory_limit_mb")
+                yield Label(
+                    "GRACE GPU Memory Limit MiB (blank = on-demand growth):",
+                    id="grace-memory-limit-label",
+                )
+                yield Input(
+                    value="" if grace_limit is None else str(grace_limit),
+                    placeholder="e.g., 6144 when sharing a GPU",
+                    id="grace-memory-limit-input",
+                )
+
                 checkpointing = self.app.get_config("activation_checkpointing")
                 checkpointing_value = (
                     "auto"
@@ -518,6 +529,7 @@ class ConfigScreen(Screen):
         model_type = self._current_model_type()
         is_uma = model_type == "uma"
         is_mace = model_type == "mace"
+        is_grace = model_type == "grace"
         has_head = model_type in {"mace", "dpa"}
 
         task_label = self.query_one("#task-type-label", Label)
@@ -534,6 +546,11 @@ class ConfigScreen(Screen):
             "#activation-checkpointing-select",
         ):
             self.query_one(selector).display = is_uma
+        for selector in (
+            "#grace-memory-limit-label",
+            "#grace-memory-limit-input",
+        ):
+            self.query_one(selector).display = is_grace
 
         self.query_one("#dtype-select", Select).disabled = not is_mace
         self.query_one("#head-input", Input).disabled = not has_head
@@ -542,6 +559,7 @@ class ConfigScreen(Screen):
             "#activation-checkpointing-select", Select
         ).disabled = not is_uma
         self.query_one("#torch-threads-input", Input).disabled = False
+        self.query_one("#grace-memory-limit-input", Input).disabled = not is_grace
 
         head_label = self.query_one("#head-label", Label)
         if model_type == "mace":
@@ -568,8 +586,9 @@ class ConfigScreen(Screen):
             )
         else:
             note.update(
-                "GRACE has no extra model option here. CPU Threads controls "
-                "TensorFlow intra-op threads."
+                "GRACE uses TensorFlow on-demand GPU allocation by default. "
+                "Set a hard MiB limit below when sharing a GPU. CPU Threads "
+                "controls TensorFlow intra-op threads."
             )
         self._update_molecular_option_states()
 
@@ -762,6 +781,35 @@ class ConfigScreen(Screen):
             self.app.update_config("torch_num_threads", threads)
         else:
             self.app.update_config("torch_num_threads", None)
+        if model_type == "grace":
+            limit_text = self.query_one(
+                "#grace-memory-limit-input", Input
+            ).value.strip()
+            if limit_text:
+                try:
+                    memory_limit = int(limit_text)
+                except ValueError:
+                    self.notify(
+                        "GRACE GPU memory limit must be a positive integer",
+                        severity="error",
+                    )
+                    return
+                if memory_limit < 1:
+                    self.notify(
+                        "GRACE GPU memory limit must be at least 1 MiB",
+                        severity="error",
+                    )
+                    return
+                if device == "cpu":
+                    self.notify(
+                        "GRACE GPU memory limit requires a CUDA/GPU device",
+                        severity="error",
+                    )
+                    return
+                self.app.update_config("gpu_memory_limit_mb", memory_limit)
+            else:
+                self.app.update_config("gpu_memory_limit_mb", None)
+            self.app.update_config("gpu_memory_growth", True)
 
         # Get calculation-specific options
         calc_type = self.app.get_config("calc_type")

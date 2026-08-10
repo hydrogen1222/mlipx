@@ -150,6 +150,28 @@ def test_md_thermostat_flags_default_to_resolver() -> None:
     assert args.nhc_tloop is None
 
 
+def test_grace_memory_and_md_output_flags_parse() -> None:
+    parser = create_parser()
+    args = parser.parse_args(
+        [
+            "md",
+            "struct.xyz",
+            "--model",
+            "grace_model",
+            "--model-type",
+            "grace",
+            "--gpu-memory-limit-mb",
+            "6144",
+            "--no-write-outcar",
+            "--no-write-xdatcar",
+        ]
+    )
+
+    assert args.gpu_memory_limit_mb == 6144
+    assert args.write_outcar is False
+    assert args.write_xdatcar is False
+
+
 def test_batch_parser_accepts_pattern_and_workers() -> None:
     parser = create_parser()
     args = parser.parse_args([

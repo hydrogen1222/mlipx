@@ -85,8 +85,19 @@ uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --ste
 
 # GRACE: --model points to the complete SavedModel directory
 .venv-grace/bin/mlipx sp bulk.cif --model grace_model/ \
-  --model-type grace --task bulk --device cuda:0
+  --model-type grace --task bulk --device cuda:0 \
+  --gpu-memory-limit-mb 6144
 ```
+
+GRACE uses TensorFlow memory growth by default, so it no longer reserves the
+whole visible GPU at startup. When sharing a GPU, set an explicit hard limit
+with `--gpu-memory-limit-mb`; choose the value from the other job's measured
+peak plus safety headroom. The example value above is not a universal default.
+
+For MD, `raw/trajectory.traj` and `raw/md.csv` are the reproducible canonical
+outputs. If VASP interoperability files are not needed during a high-throughput
+run, use `--no-write-outcar --no-write-xdatcar` to avoid their duplicate text
+I/O; the canonical trajectory remains enabled.
 
 ### Or use a VASP-style INCAR file
 
@@ -225,7 +236,8 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 - **INCAR files:** VASP-style `KEY = VALUE` configuration
 - **Cross-platform:** Windows, Linux, macOS | CPU & CUDA
 - **Resource control in TUI and CLI:** indexed GPU selection, backend CPU
-  threads, and UMA activation checkpointing/inference mode
+  threads, GRACE TensorFlow GPU limits, and UMA activation
+  checkpointing/inference mode
 - **Live progress:** structured progress events, indeterminate spinner for SP, step counter for OPT/MD
 
 ---

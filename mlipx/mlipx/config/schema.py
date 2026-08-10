@@ -175,6 +175,20 @@ _SPECS: list[OptionSpec] = [
         aliases={"ACTIVATION_CHECKPOINTING"},
         description="GPU memory saving (UMA, overrides inference_mode preset).",
     ),
+    OptionSpec(
+        "gpu_memory_growth", bool, frozenset({"calculator.grace"}),
+        aliases={"GPU_MEMORY_GROWTH"},
+        description=(
+            "GRACE TensorFlow allocator grows on demand instead of claiming "
+            "the whole visible GPU."
+        ),
+    ),
+    OptionSpec(
+        "gpu_memory_limit_mb", int, frozenset({"calculator.grace"}),
+        aliases={"GPU_MEMORY_LIMIT_MB"},
+        minimum=1,
+        description="Hard GRACE TensorFlow logical-device memory limit in MiB.",
+    ),
     # --- molecular electronic state (applied to atoms.info by every runner) ---
     OptionSpec(
         "charge", int, frozenset({"sp", "opt", "md", "batch"}),
@@ -364,6 +378,16 @@ _SPECS: list[OptionSpec] = [
         "write_forces", bool, frozenset({"output"}),
         aliases={"WRITE_FORCES"},
         description="Write forces to OUTCAR.",
+    ),
+    OptionSpec(
+        "write_outcar", bool, frozenset({"output"}),
+        aliases={"WRITE_OUTCAR"},
+        description="Write the VASP-like OUTCAR interoperability view.",
+    ),
+    OptionSpec(
+        "write_xdatcar", bool, frozenset({"output"}),
+        aliases={"WRITE_XDATCAR"},
+        description="Write the VASP XDATCAR interoperability trajectory.",
     ),
     OptionSpec(
         "write_stress", bool, frozenset({"output"}),

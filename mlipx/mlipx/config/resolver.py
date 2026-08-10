@@ -112,7 +112,7 @@ _CALCULATOR_KEYS_BY_ENGINE: dict[str, set[str]] = {
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
     "dpa": {"head"},
-    "grace": set(),
+    "grace": {"gpu_memory_growth", "gpu_memory_limit_mb"},
 }
 
 

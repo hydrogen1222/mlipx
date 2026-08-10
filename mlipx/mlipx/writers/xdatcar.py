@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TextIO
 
 if TYPE_CHECKING:
     from typing import Any
@@ -33,6 +33,8 @@ class XdatcarWriter:
         """Initialize XDATCAR writer."""
         self.header_written = False
         self.configuration_index = 0
+        self._stream: TextIO | None = None
+        self._stream_path: Path | None = None
 
     def write_header(self, atoms: Atoms, output_path: Path | str) -> None:
         """Write XDATCAR header.
@@ -41,6 +43,7 @@ class XdatcarWriter:
             atoms: ASE Atoms object (template for structure)
             output_path: Output file path
         """
+        self.close_stream()
         output_path = Path(output_path)
 
         # VASP associates each count with a contiguous block of coordinates.
@@ -82,6 +85,29 @@ class XdatcarWriter:
         self.header_written = True
         self.configuration_index = 0
 
+    def open_stream(self, output_path: Path | str) -> None:
+        """Keep an initialized XDATCAR open for efficient frame appends."""
+        if not self.header_written:
+            raise RuntimeError("write_header() must be called before open_stream()")
+        self.close_stream()
+        self._stream_path = Path(output_path)
+        self._stream = self._stream_path.open(
+            "a", encoding="utf-8", buffering=1024 * 1024
+        )
+
+    def flush(self) -> None:
+        """Flush a persistent append stream, if one is active."""
+        if self._stream is not None:
+            self._stream.flush()
+
+    def close_stream(self) -> None:
+        """Flush and close a persistent append stream."""
+        if self._stream is not None:
+            self._stream.flush()
+            self._stream.close()
+        self._stream = None
+        self._stream_path = None
+
     def append_frame(
         self,
         output_path: Path | str,
@@ -114,8 +140,12 @@ class XdatcarWriter:
         for pos in scaled_pos:
             lines.append(" " + "".join(f"{value:12.8f}" for value in pos))
 
-        with open(output_path, "a", encoding="utf-8") as f:
-            f.write("\n".join(lines) + "\n")
+        payload = "\n".join(lines) + "\n"
+        if self._stream is not None and self._stream_path == output_path:
+            self._stream.write(payload)
+        else:
+            with open(output_path, "a", encoding="utf-8") as f:
+                f.write(payload)
 
     def write(
         self,

@@ -16,7 +16,6 @@ Outputs trajectories in multiple formats.
 
 from __future__ import annotations
 
-import csv
 import json
 import threading
 import time
@@ -26,8 +25,8 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import units
+from ase.calculators.singlepoint import SinglePointCalculator
 from ase.constraints import FixCom
-from ase.io.trajectory import TrajectoryWriter as AseTrajectoryWriter
 from ase.md.bussi import Bussi
 from ase.md.langevin import Langevin
 from ase.md.nose_hoover_chain import NoseHooverChainNVT
@@ -38,6 +37,12 @@ from ase.optimize import FIRE
 from mlipx.config.defaults import BUILTIN_DEFAULTS
 from mlipx.protocols import CancellationRequested
 from mlipx.runners.base import BaseRunner
+from mlipx.runners.md_output import (
+    AsyncMDOutputWriter,
+    MDFrameSnapshot,
+    MDFrameStats,
+    MDTrajectorySummary,
+)
 from mlipx.writers.contcar import ContcarWriter
 from mlipx.writers.outcar import MDOutcarWriter
 from mlipx.writers.xdatcar import XdatcarWriter
@@ -87,7 +92,10 @@ class MDRunner(BaseRunner):
 
     VALID_ENSEMBLES = {"nvt", "nve"}
     VALID_THERMOSTATS = {"langevin", "bussi", "nhc"}
-    LOG_INTERVAL_STEPS = 1
+    # Scalar observables already go to md.csv at every requested saved frame.
+    # A line-buffered run.log entry every integration step is redundant and can
+    # dominate short/fast models, especially on network filesystems.
+    LOG_INTERVAL_STEPS = 100
     PROGRESS_INTERVAL_STEPS = 100
 
     def __init__(
@@ -315,7 +323,7 @@ class MDRunner(BaseRunner):
         self,
         *,
         status: str,
-        frames: list[dict[str, Any]],
+        frame_stats: MDFrameStats,
         error: dict[str, Any] | None = None,
     ) -> None:
         """Describe the versioned MD output contract without parsing files."""
@@ -372,9 +380,9 @@ class MDRunner(BaseRunner):
                 "vasp": "VASP-syntax-compatible interoperability exports",
             },
             "trajectory": {
-                "frames": len(frames),
-                "first_step": frames[0]["step"] if frames else None,
-                "last_step": frames[-1]["step"] if frames else None,
+                "frames": frame_stats.count,
+                "first_step": frame_stats.first_step,
+                "last_step": frame_stats.last_step,
                 "md_timestep_fs": timestep_fs,
                 "frame_stride_steps": self.save_interval,
                 "frame_interval_fs": timestep_fs * self.save_interval,
@@ -390,14 +398,7 @@ class MDRunner(BaseRunner):
                 "production_steps": self.steps,
                 "total_steps": self.total_steps,
                 "production_start_step": self.equilibration_steps,
-                "production_start_frame": next(
-                    (
-                        index
-                        for index, frame in enumerate(frames)
-                        if frame["phase"] == "production"
-                    ),
-                    None,
-                ),
+                "production_start_frame": frame_stats.production_start_frame,
             },
             "units": {
                 "time": "fs",
@@ -790,7 +791,11 @@ class MDRunner(BaseRunner):
         self.log(
             f"Save interval:    {self.save_interval} steps (trajectory frames)"
         )
-        self.log(f"Thermodynamic log interval: {self.LOG_INTERVAL_STEPS} step")
+        log_step_unit = "step" if self.LOG_INTERVAL_STEPS == 1 else "steps"
+        self.log(
+            f"Thermodynamic log interval: {self.LOG_INTERVAL_STEPS} "
+            f"{log_step_unit}"
+        )
         self.log(f"Pre-relaxation:   {'Yes' if self.pre_relax else 'No'}")
 
         # Copy atoms to prevent mutating the caller's object. Pre-relaxation
@@ -827,25 +832,12 @@ class MDRunner(BaseRunner):
             )
         dyn = self._build_dynamics(atoms)
 
-        # Streaming trajectory outputs (plan section 5.5):
-        #   * full frames  -> raw/trajectory.traj (lossless ASE source)
-        #   * full frames  -> vasp/XDATCAR (VASP syntax, unwrapped direct)
-        #   * rich text    -> vasp/OUTCAR (documented VASP-like subset)
-        #   * scalars      -> raw/md.csv (streamed row-by-row)
-        # Only the scalar summary is kept in memory, so RAM stays flat
-        # regardless of run length (no per-frame atoms.copy() list).
-        trajectory_summary: list[dict[str, Any]] = []
+        # The live calculator and mutable Atoms object stay on the MD thread.
+        # Saved frames are detached into CPU-only snapshots and submitted to a
+        # small bounded queue; the writer thread owns every output file handle.
         traj_path = self.raw_dir / "trajectory.traj"
-
-        # File writers
-        traj_writer = None
-        if self.write_trajectory:
-            traj_writer = AseTrajectoryWriter(traj_path, mode="w")
-
-        md_csv_file = None
-        md_csv_writer = None
+        md_csv_path = self.raw_dir / "md.csv"
         xdatcar_writer = XdatcarWriter() if self.write_xdatcar else None
-        xdatcar_header_written = False
         xdatcar_path = self.vasp_dir / "XDATCAR"
         md_outcar_writer = MDOutcarWriter() if self.write_outcar else None
         if md_outcar_writer is not None:
@@ -856,6 +848,14 @@ class MDRunner(BaseRunner):
                 metadata=self.calculator.info(),
                 settings=self._outcar_md_settings(),
             )
+        output_stream = AsyncMDOutputWriter(
+            trajectory_path=traj_path,
+            csv_path=md_csv_path,
+            write_trajectory=self.write_trajectory,
+            xdatcar_writer=xdatcar_writer,
+            xdatcar_path=xdatcar_path,
+            outcar_writer=md_outcar_writer,
+        )
         # Run MD
         self.log("\nStarting MD simulation...")
         self._emit_progress(
@@ -868,7 +868,9 @@ class MDRunner(BaseRunner):
 
         def print_progress():
             """Print progress and save trajectory."""
-            nonlocal md_csv_file, md_csv_writer, xdatcar_header_written
+            # Surface writer failures promptly even on steps that do not save
+            # a frame; continuing an MD run with broken output is not allowed.
+            output_stream.raise_if_failed()
             # Check for cooperative cancellation first
             if self._is_cancelled():
                 raise CancellationRequested("MD simulation cancelled by user")
@@ -911,109 +913,55 @@ class MDRunner(BaseRunner):
                 total_stress = stress_data["total_stress"]
                 volume = float(atoms.get_volume())
                 frame_data = {
-                    "step": step,
+                    "step": int(step),
                     "time_fs": time_fs,
                     "phase": phase,
-                    "energy": pe,
-                    "kinetic_energy": ke,
-                    "total_energy": total_e,
-                    "temperature": temp,
+                    "energy": float(pe),
+                    "kinetic_energy": float(ke),
+                    "total_energy": float(total_e),
+                    "temperature": float(temp),
                     "volume": volume,
-                    **stress_data,
+                    "configurational_stress": (
+                        np.array(configurational_stress, dtype=float, copy=True)
+                        if configurational_stress is not None
+                        else None
+                    ),
+                    "total_stress": (
+                        np.array(total_stress, dtype=float, copy=True)
+                        if total_stress is not None
+                        else None
+                    ),
+                    "configurational_pressure_gpa": stress_data[
+                        "configurational_pressure_gpa"
+                    ],
+                    "total_pressure_gpa": stress_data["total_pressure_gpa"],
                 }
-                trajectory_summary.append(frame_data)
-
-                # md.csv: create lazily on the first saved frame.
-                if md_csv_writer is None:
-                    md_csv_file = open(
-                        self.raw_dir / "md.csv",
-                        "w",
-                        newline="",
-                        encoding="utf-8",
+                snapshot = atoms.copy()
+                snapshot.info["mlipx_step"] = int(step)
+                snapshot.info["mlipx_time_fs"] = time_fs
+                snapshot.info["mlipx_phase"] = phase
+                single_point_results: dict[str, Any] = {
+                    "energy": float(pe),
+                    "forces": np.array(forces_chk, dtype=float, copy=True),
+                }
+                if configurational_stress is not None:
+                    single_point_results["stress"] = np.array(
+                        configurational_stress, dtype=float, copy=True
                     )
-                    md_csv_writer = csv.writer(md_csv_file)
-                    md_csv_writer.writerow(
-                        [
-                            "step",
-                            "time_fs",
-                            "phase",
-                            "potential_energy_eV",
-                            "kinetic_energy_eV",
-                            "total_energy_eV",
-                            "temperature_K",
-                            "volume_A3",
-                            "configurational_stress_xx_eV_A3",
-                            "configurational_stress_yy_eV_A3",
-                            "configurational_stress_zz_eV_A3",
-                            "configurational_stress_yz_eV_A3",
-                            "configurational_stress_xz_eV_A3",
-                            "configurational_stress_xy_eV_A3",
-                            "total_stress_xx_eV_A3",
-                            "total_stress_yy_eV_A3",
-                            "total_stress_zz_eV_A3",
-                            "total_stress_yz_eV_A3",
-                            "total_stress_xz_eV_A3",
-                            "total_stress_xy_eV_A3",
-                            "configurational_pressure_GPa",
-                            "total_pressure_GPa",
-                        ]
+                snapshot.calc = SinglePointCalculator(
+                    snapshot, **single_point_results
+                )
+                output_stream.submit(
+                    MDFrameSnapshot(
+                        atoms=snapshot,
+                        summary=frame_data,
+                        outcar_forces=(
+                            np.array(forces_chk, dtype=float, copy=True)
+                            if self.write_forces
+                            else None
+                        ),
                     )
-                configurational_values = (
-                    configurational_stress.tolist()
-                    if configurational_stress is not None
-                    else [""] * 6
                 )
-                total_values = (
-                    total_stress.tolist() if total_stress is not None else [""] * 6
-                )
-                md_csv_writer.writerow(
-                    [
-                        step,
-                        time_fs,
-                        phase,
-                        pe,
-                        ke,
-                        total_e,
-                        temp,
-                        volume,
-                        *configurational_values,
-                        *total_values,
-                        stress_data["configurational_pressure_gpa"]
-                        if stress_data["configurational_pressure_gpa"] is not None
-                        else "",
-                        stress_data["total_pressure_gpa"]
-                        if stress_data["total_pressure_gpa"] is not None
-                        else "",
-                    ]
-                )
-                md_csv_file.flush()
-
-                # XDATCAR: header from the first frame, then stream frames.
-                if xdatcar_writer is not None:
-                    if not xdatcar_header_written:
-                        xdatcar_writer.write_header(atoms, xdatcar_path)
-                        xdatcar_header_written = True
-                    xdatcar_writer.append_frame(xdatcar_path, atoms, step=step)
-
-                if md_outcar_writer is not None:
-                    md_outcar_writer.append_frame(
-                        atoms,
-                        step=step,
-                        time_fs=time_fs,
-                        potential_energy=float(pe),
-                        kinetic_energy=float(ke),
-                        total_energy=float(total_e),
-                        temperature=float(temp),
-                        forces=forces_chk if self.write_forces else None,
-                        configurational_stress=configurational_stress,
-                        total_stress=total_stress,
-                    )
-
-                if traj_writer is not None:
-                    atoms.info["mlipx_step"] = int(step)
-                    atoms.info["mlipx_time_fs"] = float(time_fs)
-                    atoms.info["mlipx_phase"] = phase
-                    traj_writer.write(atoms)
 
             if force_abort:
                 raise ForceSafetyAbort(
@@ -1022,9 +970,8 @@ class MDRunner(BaseRunner):
                     atom_index=atom_index,
                     threshold=self.fmax_abort,
                 )
-            # Persist a scalar thermodynamic log record every MD step. This is
-            # intentionally independent of save_interval: the latter controls
-            # full trajectory frames, not lightweight E/T diagnostics.
+            # Keep the human log sparse. Exact scalar records remain available
+            # in md.csv at the requested trajectory save interval.
             if step % self.LOG_INTERVAL_STEPS == 0 or step == self.total_steps:
                 self.log(
                     f"Step {step:6d}/{self.total_steps}: "
@@ -1051,14 +998,35 @@ class MDRunner(BaseRunner):
 
         dyn.attach(print_progress, interval=1)
 
+        def close_output_stream(primary_error: BaseException | None = None) -> None:
+            """Drain requested frames, reporting output failure as fatal."""
+            try:
+                output_stream.close()
+            except Exception as output_error:
+                self.log(
+                    f"\nMD output failed while draining buffered frames: "
+                    f"{output_error}",
+                    level="error",
+                )
+                if md_outcar_writer is not None:
+                    md_outcar_writer.finalize(status="failed")
+                self._write_artifacts_manifest(
+                    status="failed",
+                    frame_stats=output_stream.stats,
+                    error={
+                        "type": "output_error",
+                        "message": str(output_error),
+                    },
+                )
+                if primary_error is not None:
+                    raise output_error from primary_error
+                raise
+
         try:
             dyn.run(self.total_steps)
         except ForceSafetyAbort as exc:
             self.log(f"\nMD aborted by force safety threshold: {exc}", level="error")
-            if traj_writer is not None:
-                traj_writer.close()
-            if md_csv_file is not None:
-                md_csv_file.close()
+            close_output_stream(exc)
             ContcarWriter().write_with_energy(
                 atoms,
                 self.vasp_dir / "CONTCAR",
@@ -1069,7 +1037,7 @@ class MDRunner(BaseRunner):
                 md_outcar_writer.finalize(status="aborted")
             self._write_artifacts_manifest(
                 status="aborted",
-                frames=trajectory_summary,
+                frame_stats=output_stream.stats,
                 error={
                     "type": "force_safety_abort",
                     "message": str(exc),
@@ -1080,38 +1048,27 @@ class MDRunner(BaseRunner):
                 },
             )
             raise
-        except CancellationRequested:
+        except CancellationRequested as exc:
             self.log("\n⚠️ MD simulation cancelled by user")
-            # Save what we have before returning
-            if traj_writer is not None:
-                traj_writer.close()
-            if md_csv_file is not None:
-                md_csv_file.close()
+            close_output_stream(exc)
             if md_outcar_writer is not None:
                 md_outcar_writer.finalize(status="cancelled")
             self._write_artifacts_manifest(
-                status="cancelled", frames=trajectory_summary
+                status="cancelled", frame_stats=output_stream.stats
             )
             raise  # Re-raise to propagate cancellation
         except Exception as e:
             self.log(f"\n❌ MD simulation failed: {e}", level="error")
-            # Save what we have
-            if traj_writer is not None:
-                traj_writer.close()
-            if md_csv_file is not None:
-                md_csv_file.close()
+            close_output_stream(e)
             if md_outcar_writer is not None:
                 md_outcar_writer.finalize(status="failed")
-            self._write_artifacts_manifest(status="failed", frames=trajectory_summary)
+            self._write_artifacts_manifest(
+                status="failed", frame_stats=output_stream.stats
+            )
             raise
 
+        close_output_stream()
         md_time = time.time() - start_time
-
-        # Close trajectory writer + csv
-        if traj_writer is not None:
-            traj_writer.close()
-        if md_csv_file is not None:
-            md_csv_file.close()
 
         # Final temperature with proper calculation
         final_temp = self._calculate_temperature(atoms)
@@ -1138,14 +1095,7 @@ class MDRunner(BaseRunner):
             "equilibration_steps": self.equilibration_steps,
             "production_steps": self.steps,
             "production_start_step": self.equilibration_steps,
-            "production_start_frame": next(
-                (
-                    index
-                    for index, frame in enumerate(trajectory_summary)
-                    if frame["phase"] == "production"
-                ),
-                None,
-            ),
+            "production_start_frame": output_stream.stats.production_start_frame,
             "timestep_fs": float(self.timestep / units.fs),
             "save_interval": self.save_interval,
             "ensemble": self.ensemble.upper(),
@@ -1157,11 +1107,12 @@ class MDRunner(BaseRunner):
             "velocity_policy": self.velocity_policy,
             "md_provenance": self._md_provenance(),
             "time": md_time,
-            "trajectory": trajectory_summary,
+            "trajectory": MDTrajectorySummary(
+                md_csv_path, output_stream.stats.count
+            ),
+            "trajectory_frame_count": output_stream.stats.count,
             "trajectory_path": str(traj_path) if self.write_trajectory else None,
-            "md_csv_path": str(self.raw_dir / "md.csv")
-            if md_csv_writer is not None
-            else None,
+            "md_csv_path": str(md_csv_path),
             "pre_relaxed": self.pre_relax,
         }
 
@@ -1175,7 +1126,9 @@ class MDRunner(BaseRunner):
                 final_temperature=float(final_temp),
             )
         self._write_outputs(atoms, results)
-        self._write_artifacts_manifest(status="completed", frames=trajectory_summary)
+        self._write_artifacts_manifest(
+            status="completed", frame_stats=output_stream.stats
+        )
 
         # Print summary
         self._write_summary(results, atoms)

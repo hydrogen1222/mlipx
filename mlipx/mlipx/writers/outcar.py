@@ -15,7 +15,7 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TextIO
 
 import numpy as np
 
@@ -373,6 +373,7 @@ class MDOutcarWriter:
         self.output_path: Path | None = None
         self.configuration_index = 0
         self._finished = False
+        self._stream: TextIO | None = None
 
     def write_header(
         self,
@@ -384,6 +385,7 @@ class MDOutcarWriter:
         settings: dict[str, Any],
     ) -> None:
         """Create the file and write static model/system/MD information."""
+        self.close_stream()
         self.output_path = Path(output_path)
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
         self.configuration_index = 0
@@ -435,6 +437,29 @@ class MDOutcarWriter:
             ]
         )
         self.output_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+    def open_stream(self) -> None:
+        """Keep the initialized MD OUTCAR open for efficient frame appends."""
+        if self.output_path is None:
+            raise RuntimeError("write_header() must be called before open_stream()")
+        if self._finished:
+            raise RuntimeError("Cannot open a finished MD OUTCAR")
+        self.close_stream()
+        self._stream = self.output_path.open(
+            "a", encoding="utf-8", buffering=1024 * 1024
+        )
+
+    def flush(self) -> None:
+        """Flush a persistent append stream, if one is active."""
+        if self._stream is not None:
+            self._stream.flush()
+
+    def close_stream(self) -> None:
+        """Flush and close a persistent append stream."""
+        if self._stream is not None:
+            self._stream.flush()
+            self._stream.close()
+        self._stream = None
 
     def append_frame(
         self,
@@ -542,8 +567,12 @@ class MDOutcarWriter:
             )
         lines.append("")
 
-        with self.output_path.open("a", encoding="utf-8") as handle:
-            handle.write("\n".join(lines) + "\n")
+        payload = "\n".join(lines) + "\n"
+        if self._stream is not None:
+            self._stream.write(payload)
+        else:
+            with self.output_path.open("a", encoding="utf-8") as handle:
+                handle.write(payload)
 
     def finalize(
         self,
@@ -556,6 +585,7 @@ class MDOutcarWriter:
         """Finish the stream with an explicit MLIP calculation summary."""
         if self.output_path is None or self._finished:
             return
+        self.close_stream()
         lines = [
             "=" * 100,
             " MLIPX MD SUMMARY",

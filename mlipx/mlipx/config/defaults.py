@@ -101,7 +101,10 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
         "head": None,
     },
     "calculator.dpa": {},
-    "calculator.grace": {},
+    "calculator.grace": {
+        # TensorFlow otherwise commonly reserves nearly all visible VRAM.
+        "gpu_memory_growth": True,
+    },
 }
 
 

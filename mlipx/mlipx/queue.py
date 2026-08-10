@@ -56,8 +56,13 @@ _OPT_FLAGS: dict[str, tuple[str, ...]] = {
     "inference_mode": ("--inference-mode",),
     "activation_checkpointing": ("--activation-checkpointing", "--no-activation-checkpointing"),
     "torch_num_threads": ("--cpu-threads",),
+    "gpu_memory_growth": ("--gpu-memory-growth", "--no-gpu-memory-growth"),
+    "gpu_memory_limit_mb": ("--gpu-memory-limit-mb",),
     "default_dtype": ("--dtype",),
     "head": ("--head",),
+    "write_outcar": ("--write-outcar", "--no-write-outcar"),
+    "write_xdatcar": ("--write-xdatcar", "--no-write-xdatcar"),
+    "write_trajectory": ("--write-trajectory", "--no-write-trajectory"),
     # opt
     "fmax": ("--fmax",),
     "max_steps": ("--max-steps",),
@@ -143,6 +148,8 @@ def build_mlipx_command(
         if key == "default_dtype" and engine != "mace":
             continue
         if key == "head" and engine not in {"mace", "dpa"}:
+            continue
+        if key in {"gpu_memory_growth", "gpu_memory_limit_mb"} and engine != "grace":
             continue
         flags = _OPT_FLAGS[key]
         if isinstance(value, bool):

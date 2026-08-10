@@ -185,6 +185,8 @@ class MlipxApp(App):
             "inference_mode": "default",
             "torch_num_threads": None,
             "activation_checkpointing": None,
+            "gpu_memory_growth": True,
+            "gpu_memory_limit_mb": None,
             "default_dtype": "float64",
             "head": None,
             "output_dir": "./results",
