@@ -184,6 +184,32 @@ class BaseRunner(ABC):
         if self.verbose:
             print(formatted_msg)
 
+    def log_buffered(self, message: str, level: str = "info") -> None:
+        """Record a high-frequency message with coalesced file flushing.
+
+        ``LiveRunLogger`` exposes ``write_buffered`` for this path. Generic log
+        callbacks retain the historical callable contract and receive the
+        message normally.
+        """
+        if not self.verbose and not self.log_fn:
+            return
+
+        prefix = {
+            "info": "  ",
+            "warning": "! ",
+            "error": "ERROR: ",
+        }.get(level, "  ")
+        formatted_msg = f"{prefix}{message}"
+
+        if self.log_fn:
+            buffered_writer = getattr(self.log_fn, "write_buffered", None)
+            if callable(buffered_writer):
+                buffered_writer(formatted_msg, level)
+            else:
+                self.log_fn(formatted_msg, level)
+        if self.verbose:
+            print(formatted_msg)
+
     def print_header(self, title: str) -> None:
         """Print section header.
 

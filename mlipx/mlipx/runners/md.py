@@ -92,10 +92,10 @@ class MDRunner(BaseRunner):
 
     VALID_ENSEMBLES = {"nvt", "nve"}
     VALID_THERMOSTATS = {"langevin", "bussi", "nhc"}
-    # Scalar observables already go to md.csv at every requested saved frame.
-    # A line-buffered run.log entry every integration step is redundant and can
-    # dominate short/fast models, especially on network filesystems.
-    LOG_INTERVAL_STEPS = 100
+    # Every MD step is retained in run.log independently of trajectory saving.
+    # LiveRunLogger coalesces the actual filesystem flushes and suppresses these
+    # high-frequency records from UI callbacks.
+    LOG_INTERVAL_STEPS = 1
     PROGRESS_INTERVAL_STEPS = 100
 
     def __init__(
@@ -794,7 +794,7 @@ class MDRunner(BaseRunner):
         log_step_unit = "step" if self.LOG_INTERVAL_STEPS == 1 else "steps"
         self.log(
             f"Thermodynamic log interval: {self.LOG_INTERVAL_STEPS} "
-            f"{log_step_unit}"
+            f"{log_step_unit} (buffered disk flush)"
         )
         self.log(f"Pre-relaxation:   {'Yes' if self.pre_relax else 'No'}")
 
@@ -970,10 +970,11 @@ class MDRunner(BaseRunner):
                     atom_index=atom_index,
                     threshold=self.fmax_abort,
                 )
-            # Keep the human log sparse. Exact scalar records remain available
-            # in md.csv at the requested trajectory save interval.
+            # Retain one thermodynamic record per step, independently of the
+            # trajectory save interval. The live run logger batches filesystem
+            # flushes and does not emit these records as UI render events.
             if step % self.LOG_INTERVAL_STEPS == 0 or step == self.total_steps:
-                self.log(
+                self.log_buffered(
                     f"Step {step:6d}/{self.total_steps}: "
                     f"E = {total_e:12.4f} eV, T = {temp:6.1f} K "
                     f"[{phase}]"

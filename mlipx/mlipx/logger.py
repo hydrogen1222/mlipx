@@ -17,6 +17,7 @@ import os
 import shlex
 import sys
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -132,7 +133,17 @@ def follow_log_command(log_path: Path | str) -> str:
 
 
 class LiveRunLogger:
-    """Thread-safe, line-buffered run log with an optional UI/console callback."""
+    """Thread-safe run log with buffered high-frequency record support.
+
+    Ordinary status messages are flushed immediately and forwarded to the
+    active interface. High-frequency records (for example one line per MD
+    step) can use :meth:`write_buffered`: every record is retained in
+    ``run.log``, while filesystem flushes are coalesced and the UI callback is
+    not flooded.
+    """
+
+    BUFFERED_FLUSH_RECORDS = 100
+    BUFFERED_FLUSH_SECONDS = 1.0
 
     def __init__(
         self,
@@ -143,26 +154,65 @@ class LiveRunLogger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.callback = callback
         self._lock = threading.Lock()
-        self._handle = open(self.path, "w", encoding="utf-8", buffering=1)
+        self._handle = open(
+            self.path,
+            "w",
+            encoding="utf-8",
+            buffering=1024 * 1024,
+        )
+        self._buffered_records = 0
+        self._last_flush = time.monotonic()
+
+    def _write_locked(self, message: str, level: str) -> int:
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = message.splitlines() or [""]
+        for line in lines:
+            self._handle.write(f"{timestamp} [{level.upper()}] {line}\n")
+        return len(lines)
+
+    def _flush_locked(self) -> None:
+        self._handle.flush()
+        self._buffered_records = 0
+        self._last_flush = time.monotonic()
 
     def __call__(self, message: str, level: str = "info") -> None:
         """Write and flush a message, then forward it to the active interface."""
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         text = str(message)
-        lines = text.splitlines() or [""]
         with self._lock:
-            for line in lines:
-                self._handle.write(f"{timestamp} [{level.upper()}] {line}\n")
-            self._handle.flush()
+            self._write_locked(text, level)
+            self._flush_locked()
 
         if self.callback is not None:
             self.callback(text, level)
+
+    def write_buffered(self, message: str, level: str = "info") -> None:
+        """Retain a high-frequency record without a per-record disk flush.
+
+        Buffered records deliberately bypass the UI callback. They are flushed
+        after a bounded number of records or elapsed wall time, and always on
+        the next ordinary log message or :meth:`close`.
+        """
+        text = str(message)
+        now = time.monotonic()
+        with self._lock:
+            self._buffered_records += self._write_locked(text, level)
+            if (
+                self._buffered_records >= self.BUFFERED_FLUSH_RECORDS
+                or now - self._last_flush >= self.BUFFERED_FLUSH_SECONDS
+            ):
+                self._flush_locked()
+
+    def flush(self) -> None:
+        """Make all buffered records visible to readers."""
+        with self._lock:
+            if not self._handle.closed:
+                self._flush_locked()
 
     def close(self) -> None:
         """Flush and close the log file."""
         with self._lock:
             if not self._handle.closed:
-                self._handle.flush()
+                self._flush_locked()
                 self._handle.close()
 
     def __enter__(self) -> LiveRunLogger:

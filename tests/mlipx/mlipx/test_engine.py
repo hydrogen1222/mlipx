@@ -276,6 +276,33 @@ def test_engine_creates_live_log_and_tail_hint(tmp_path):
     assert runner.execute.call_args.kwargs["started_at"] == 123.0
 
 
+def test_live_run_logger_batches_step_records_without_losing_them(tmp_path):
+    from mlipx.logger import LiveRunLogger
+
+    callbacks = []
+    log_path = tmp_path / "run.log"
+    with LiveRunLogger(
+        log_path,
+        callback=lambda message, level: callbacks.append((message, level)),
+    ) as logger:
+        logger.write_buffered("Step 0/2")
+        logger.write_buffered("Step 1/2")
+        assert callbacks == []
+        assert logger._buffered_records == 2
+
+        # A normal status message also flushes all preceding step records.
+        logger("MD simulation completed")
+        assert callbacks == [("MD simulation completed", "info")]
+        assert logger._buffered_records == 0
+        text = log_path.read_text(encoding="utf-8")
+        assert text.index("Step 0/2") < text.index("Step 1/2")
+        assert text.index("Step 1/2") < text.index("MD simulation completed")
+
+        logger.write_buffered("Step 2/2")
+
+    assert "Step 2/2" in log_path.read_text(encoding="utf-8")
+
+
 def test_python_api_forwards_all_thermostat_options(monkeypatch):
     from ase import Atoms
     from mlipx import api

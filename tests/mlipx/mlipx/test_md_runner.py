@@ -598,7 +598,7 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     assert manifest["artifacts"]["xdatcar"]["path"] == "vasp/XDATCAR"
 
 
-def test_md_throttles_human_log_independently_of_saved_scalars(tmp_path):
+def test_md_records_every_step_independently_of_trajectory_interval(tmp_path):
     logs: list[str] = []
     runner = MDRunner(
         _RunWrapper(_FiniteCalc()),
@@ -616,15 +616,58 @@ def test_md_throttles_human_log_independently_of_saved_scalars(tmp_path):
     results = runner.run(_bulk_atoms())
 
     step_logs = [message for message in logs if "/3: E =" in message]
-    assert len(step_logs) == 2
-    assert any("Step      0/3:" in message for message in step_logs)
-    assert any("Step      3/3:" in message for message in step_logs)
+    assert [
+        int(message.split("Step", 1)[1].split("/", 1)[0])
+        for message in step_logs
+    ] == [0, 1, 2, 3]
     assert any(
         "Save interval:    2 steps (trajectory frames)" in message
         for message in logs
     )
-    assert any("Thermodynamic log interval: 100 steps" in message for message in logs)
+    assert any(
+        "Thermodynamic log interval: 1 step (buffered disk flush)" in message
+        for message in logs
+    )
     assert [frame["step"] for frame in results["trajectory"]] == [0, 2]
+
+
+def test_400_atom_every_step_output_preserves_vacf_velocities(tmp_path):
+    """A VACF-style save cadence retains all CPU frames and velocities."""
+    from mlipx.logger import LiveRunLogger
+
+    steps = 16
+    with LiveRunLogger(tmp_path / "run.log") as run_logger:
+        runner = MDRunner(
+            _RunWrapper(_FiniteCalc()),
+            ensemble="NVE",
+            temperature=300.0,
+            timestep=1.0,
+            steps=steps,
+            save_interval=1,
+            output_dir=tmp_path,
+            pre_relax=False,
+            verbose=False,
+            seed=42,
+            log_fn=run_logger,
+        )
+        results = runner.run(_bulk_atoms(n=400))
+
+    expected_frames = steps + 1
+    with Trajectory(results["trajectory_path"], mode="r") as trajectory:
+        assert len(trajectory) == expected_frames
+        assert all(frame.has("momenta") for frame in trajectory)
+
+    run_log = (tmp_path / "run.log").read_text(encoding="utf-8")
+    assert len(
+        [line for line in run_log.splitlines() if f"/{steps}: E =" in line]
+    ) == expected_frames
+    assert (tmp_path / "vasp" / "XDATCAR").read_text().count(
+        "Direct configuration="
+    ) == expected_frames
+    assert (tmp_path / "vasp" / "OUTCAR").read_text().count(
+        " POSITION "
+    ) == expected_frames
+    assert len(results["trajectory"]) == expected_frames
 
 
 def test_md_equilibration_and_production_phase_metadata(tmp_path):
