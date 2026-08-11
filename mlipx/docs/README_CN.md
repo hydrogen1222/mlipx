@@ -1031,6 +1031,8 @@ mlipx analyze RUN transport \
     --charge 1 \
     --drift-reference nonmobile \
     --fit-start-ps 20 \
+    --lag-step-ps 1 \
+    --lag-stop-ps 200 \
     --random-seed 0
 ```
 
@@ -1039,6 +1041,15 @@ mlipx analyze RUN transport \
 三维周期、至少 4 个 production 帧、均匀采样和明确的坐标约定。对 wrapped
 轨迹，如果相邻帧位移已接近最小镜像失效范围，程序会直接拒绝，不会给出一个
 看似正常但无法验证的扩散系数。
+
+对于长时间且高频保存的轨迹，可用 `--lag-step-ps` 和
+`--lag-stop-ps` 显式指定 kinisi 的 lag-time 网格；两个参数必须同时给出。
+它们只减少 kinisi 计算的时间间隔数量，不会对轨迹降采样，完整保存帧和时间
+原点仍会保留。`--fit-start-ps` 是另一个概念：它决定从哪个 lag 开始进行
+扩散回归，而 lag 网格决定 kinisi 可使用哪些 lag。应先根据 MSD 找到扩散区间，
+再比较例如 0.5、1、2 ps 的间距做 convergence check。kinisi 文档指出，在完整
+协方差分析中计算每一个可能的时间间隔通常过度；未指定网格时，小轨迹仍保留
+kinisi 原生行为，但过密的默认网格会被 mlipx 拒绝并要求显式指定参数。
 
 kinisi 会输出后验均值、标准差和 95% 区间，并同时记录 m²/s 与 cm²/s。方向
 扩散遵循 `D = slope / (2d)`，其中 `d` 是所选方向数。`--charge` 必须显式给出，

@@ -39,13 +39,27 @@ and the observed diffusive regime rather than copying it blindly:
 
 ```bash
 mlipx analyze RUN transport --mobile Li --charge 1 \
-  --drift-reference nonmobile --fit-start-ps 20 --random-seed 0
+  --drift-reference nonmobile --fit-start-ps 20 \
+  --lag-step-ps 1 --lag-stop-ps 200 --random-seed 0
 ```
 
 The adapter passes either the recorded MD timestep and saved-frame stride or,
 when those are unavailable, the explicit frame interval with stride one. The
 result records this mapping, kinisi version, fit start, random seed, posterior
 mean/standard deviation/95% interval, and both m^2/s and cm^2/s.
+
+For long, frequently saved trajectories, provide an explicit kinisi lag grid
+with `--lag-step-ps` and `--lag-stop-ps`. The two options must be supplied
+together. The lag grid controls which time intervals kinisi evaluates; it does
+not downsample the trajectory, so all saved frames and their time origins are
+preserved. `--fit-start-ps` is separate: it selects the first lag used by the
+diffusion regression, while the lag grid selects the available lag values.
+Choose the grid from the observed diffusive regime and perform a convergence
+check (for example, compare 0.5, 1, and 2 ps spacing) for each material and
+trajectory. kinisi's documentation notes that evaluating every possible time
+interval can be excessive for its full covariance analysis. When no explicit
+grid is supplied, mlipx preserves kinisi's native behavior for small grids but
+refuses pathological dense defaults and asks for explicit parameters.
 
 References:
 

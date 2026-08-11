@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 5}
+_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 1}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
@@ -429,6 +429,7 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
         "python_version": platform.python_version(),
         "platform": platform.platform(),
         "packages": _versions(),
+        "parameters": request.parameters,
         "source_run": str(request.source_path),
         "source_trajectory": fingerprint,
     }
@@ -442,6 +443,13 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
     _update_index(root, analysis_id, record)
     try:
         result, artifacts = _dispatch(request, output_dir)
+        if request.task == "transport":
+            provenance["transport"] = {
+                "fit_start_ps": result["tracer_diffusion"]["fit_start_ps"],
+                "fit_stop_ps": result["tracer_diffusion"]["fit_stop_ps"],
+                "lag_grid": result["tracer_diffusion"]["lag_grid"],
+            }
+            _write_json(output_dir / "provenance.json", provenance)
         payload = {
             "schema": "mlipx.analysis-results/2",
             "analysis_id": analysis_id,

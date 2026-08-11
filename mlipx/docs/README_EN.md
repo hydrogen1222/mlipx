@@ -1081,6 +1081,8 @@ mlipx analyze RUN transport \
     --charge 1 \
     --drift-reference nonmobile \
     --fit-start-ps 20 \
+    --lag-step-ps 1 \
+    --lag-stop-ps 200 \
     --random-seed 0
 ```
 
@@ -1091,6 +1093,18 @@ at least four production frames, uniform sampling, and a known coordinate
 convention. A wrapped trajectory is rejected when consecutive displacements
 approach the unsafe range for minimum-image reconstruction; mlipx will not
 return a plausible-looking diffusion coefficient from an unverifiable unwrap.
+
+For long, frequently saved trajectories, use `--lag-step-ps` together with
+`--lag-stop-ps` to provide an explicit kinisi lag-time grid. These options
+reduce the lag times evaluated by kinisi, not the trajectory frames, so the
+complete trajectory and its time origins remain available. `--fit-start-ps`
+has a separate meaning: it chooses the first lag used by diffusion regression,
+whereas the lag grid chooses the available lag values. Select the grid from the
+observed diffusive regime and compare spacings such as 0.5, 1, and 2 ps as a
+convergence check. kinisi's documentation notes that evaluating every possible
+time interval can be excessive for full covariance analysis. Without an
+explicit grid, mlipx retains kinisi's native behavior for small grids but
+rejects pathological dense defaults and asks for explicit parameters.
 
 kinisi reports posterior mean, standard deviation, and 95% interval in both
 m²/s and cm²/s. Directional diffusion follows `D = slope / (2d)`, where `d` is

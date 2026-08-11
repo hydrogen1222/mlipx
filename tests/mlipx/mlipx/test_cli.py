@@ -7,7 +7,6 @@ import tempfile
 from pathlib import Path
 
 import pytest
-
 from mlipx.cli import create_parser, main
 
 # ---------------------------------------------------------------------------
@@ -20,6 +19,29 @@ def test_parser_has_all_subcommands() -> None:
     with pytest.raises(SystemExit) as exc:
         parser.parse_args(["--help"])
     assert exc.value.code == 0
+
+
+def test_transport_parser_accepts_explicit_lag_grid() -> None:
+    parser = create_parser()
+    args = parser.parse_args(
+        [
+            "analyze",
+            "RUN",
+            "transport",
+            "--mobile",
+            "Li",
+            "--charge",
+            "1",
+            "--fit-start-ps",
+            "40",
+            "--lag-step-ps",
+            "1",
+            "--lag-stop-ps",
+            "200",
+        ]
+    )
+    assert args.lag_step_ps == 1.0
+    assert args.lag_stop_ps == 200.0
 
 
 @pytest.mark.parametrize("queue_command", ["pause", "resume", "status"])

@@ -793,6 +793,26 @@ Examples:
         "--charge", dest="ionic_charge_e", type=float, required=True
     )
     transport_parser.add_argument("--fit-start-ps", type=float, required=True)
+    transport_parser.add_argument(
+        "--lag-step-ps",
+        type=float,
+        default=None,
+        help=(
+            "Spacing of the explicit kinisi lag-time grid in ps. "
+            "This sparsifies lag times, not trajectory frames, and must be "
+            "used together with --lag-stop-ps."
+        ),
+    )
+    transport_parser.add_argument(
+        "--lag-stop-ps",
+        type=float,
+        default=None,
+        help=(
+            "Maximum lag time for the explicit kinisi lag-time grid in ps. "
+            "This sparsifies lag times, not trajectory frames, and must be "
+            "used together with --lag-step-ps."
+        ),
+    )
     transport_parser.add_argument("--dimensions", default="xyz")
     transport_parser.add_argument(
         "--drift-reference",
@@ -1641,6 +1661,11 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         for key, value in vars(args).items()
         if key not in excluded and value is not None
     }
+    if args.analysis_task == "transport" and (
+        (args.lag_step_ps is None) != (args.lag_stop_ps is None)
+    ):
+        print("Error: --lag-step-ps and --lag-stop-ps must be provided together")
+        return 1
     if "start_frame" in parameters:
         parameters["start"] = parameters.pop("start_frame")
     if "stop_frame" in parameters:
