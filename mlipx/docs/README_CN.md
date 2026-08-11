@@ -16,7 +16,8 @@
   - [5.1 单点能计算 (SP)](#51-单点能计算-sp)
   - [5.2 几何优化 (OPT)](#52-几何优化-opt)
   - [5.3 分子动力学 (MD)](#53-分子动力学-md)
-  - [5.4 批量处理](#54-批量处理)
+  - [5.4 内置轨迹后处理](#54-内置轨迹后处理analysis-v2)
+  - [5.5 批量处理](#55-批量处理)
 - [6. 用户界面](#6-用户界面)
   - [6.1 CLI — 命令行界面](#61-cli--命令行界面)
   - [6.2 TUI — 终端交互界面](#62-tui--终端交互界面)
@@ -39,8 +40,9 @@ mlipx (MLIP eXtended) 是一个多引擎机器学习原子间势函数（MLIP）
 
 Analysis v2 已恢复面向固态离子输运的、与计算器后端解耦的轨迹分析。
 它使用显式的时间、PBC、阶段、单位与 provenance 数据契约，且不会导入
-archive 中的 Analysis v1。详见 [ANALYSIS.md](ANALYSIS.md) 与
-[TRANSPORT.md](TRANSPORT.md)。
+archive 中的 Analysis v1。使用方法见本手册
+[第 5.4 节](#54-内置轨迹后处理analysis-v2)；专题文档保留更细的算法定义和
+参考文献。
 
 | 引擎 | `MODEL_TYPE` | 后端包 |
 |------|--------------|--------|
@@ -910,39 +912,168 @@ NVT 平衡后切换到 NVE 生产段，仍应拆成两个任务并明确处理�
 └── run.log
 ```
 
-`raw/trajectory.traj` 是轨迹事实源；把整个任务目录传给分析命令通常更稳妥，
-因为程序还能读取 `raw/md.csv`、`artifacts.json` 和
-`resolved_config.json` 中的时间、阶段、单位和坐标约定。`vasp/XDATCAR`
-主要面向 OVITO、ASE 及其他 VASP 生态工具。
+`raw/trajectory.traj` 是轨迹事实源；`vasp/XDATCAR` 主要用于 OVITO、ASE
+和其他 VASP 生态工具。做后处理时，最好传入整个任务目录，而不是只传轨迹
+文件。这样程序还能读取 `raw/md.csv`、`artifacts.json` 和
+`resolved_config.json` 中的时间、阶段、单位与坐标约定。
 
-当前版本提供与模型后端解耦的 Analysis v2。DPA、MACE 或 GRACE 生成的轨迹
-可以直接在装有分析依赖的环境中处理，不会加载模型或计算器：
+### 5.4 内置轨迹后处理（Analysis v2）
+
+当前版本可以直接计算热力学统计、RDF、RMSD/RMSF、方向 MSD、扩散系数、
+Nernst–Einstein 电导率、三维占据密度、Arrhenius 拟合、离子位点与跳跃、
+VACF 和速度谱。分析层不加载模型，所以 DPA、MACE、GRACE 或 UMA 生成的
+轨迹都可以放到同一个分析环境中处理。
+
+从仓库根目录安装所需依赖：
 
 ```bash
-# 先检查时间轴、PBC、晶胞、坐标约定和任务资格
-mlipx analyze RUN validate
+# MSD、RDF、密度和作图
+python -m pip install -e './mlipx[analysis]'
 
-# 查看温度和能量，再计算 Li 的方向 MSD
-mlipx analyze RUN thermo
-mlipx analyze RUN msd \
-    --mobile Li \
-    --axes x,y,z,xyz \
-    --drift-reference nonmobile
+# 一次装齐 kinisi 和 GEMDAT
+python -m pip install -e './mlipx[analysis-all]'
 ```
 
-MSD 和输运分析要求晶胞固定、三维周期、采样时间均匀，并且坐标是明确的
-wrapped 或 unwrapped；已标记为 failed、aborted 或 cancelled 的 mlipx 任务
-会被拒绝。外部轨迹没有 mlipx 运行状态，用户需自行确认其是否完整。软件不会
-自动判断热化结束位置或扩散线性区间。新版轨迹默认只分析 production 帧；旧
-轨迹如果没有 phase 元数据，会把所有帧视为 production，应先查看 `thermo`，
-再用 `--start-frame` 明确排除前段。这里的 frame 指保存帧，不是 MD 步数。
+`RUN` 可以是 mlipx 的 MD 任务目录、ASE `.traj` 或 XDATCAR。外部轨迹如果
+缺少时间或坐标约定，必须在确实知道这些信息时显式补上，例如：
 
-上述命令中的 `RUN` 是 mlipx MD 任务目录。结果写入
-`RUN/analysis/<分析任务>/<请求哈希>/`，包含请求、provenance、
-CSV/NPZ、图和诊断信息。完整命令和科学限制见
-[Analysis v2](ANALYSIS.md) 与 [输运定义](TRANSPORT.md)。
+```bash
+mlipx analyze trajectory.traj validate \
+    --positions-convention wrapped \
+    --frame-interval-fs 10
+```
 
-### 5.4 批量处理
+不要凭文件外观猜 wrapped/unwrapped，也不要把 MD 时间步误当成保存帧间隔。
+
+#### 先验证，再计算
+
+```bash
+mlipx analyze RUN validate
+```
+
+`validate` 会报告时间轴、MD 时间步与保存间隔、PBC、晶胞是否变化、坐标约定、
+速度、equilibration/production 阶段、Nyquist 频率、任务状态，以及每种分析
+是否满足条件。标记为 failed、aborted 或 cancelled 的 mlipx 任务会被拒绝；
+外部轨迹没有 mlipx 状态，是否完整仍需用户自己确认。
+
+MD 可以用 `--equilibration-steps N` 和 `--steps M` 在同一系综、积分器、恒温器、
+时间步和温度下分别记录平衡段与生产段。分析默认只使用 production 帧；
+`thermo`、RDF、RMSD、MSD、密度、VACF 和速度谱可用
+`--include-equilibration` 把平衡段纳入诊断，`transport` 和 `electrolyte` 则固定
+使用 production 帧。程序不会自动决定热化何时结束，也不会自动替你挑扩散
+线性区间。没有 phase 元数据的旧轨迹会把全部帧视为 production，这只是兼容
+规则，不表示整段已经平衡。应先看 `thermo`，再用支持帧范围的任务所提供的
+`--start-frame`/`--stop-frame` 选取范围；这里的 frame 是保存下来的帧，不是
+MD 步数。
+
+#### 常用分析
+
+```bash
+# 温度、能量、压力和 NVE 能量漂移诊断
+mlipx analyze RUN thermo
+
+# Li–S 部分 RDF；配位数截断必须显式给出
+mlipx analyze RUN rdf --center Li --neighbor S --rmax 6 --cn-cutoff 3
+
+# 晶体周期位移的 RMSD/RMSF
+mlipx analyze RUN rmsd --species Li
+
+# 多时间原点平均的方向 MSD
+mlipx analyze RUN msd --mobile Li --axes x,y,z,xy,xyz \
+    --drift-reference nonmobile
+
+# 三维占据密度、VACF 和 VACF 导出的速度谱
+mlipx analyze RUN density --mobile Li --spacing 0.25
+mlipx analyze RUN vacf --species Li
+mlipx analyze RUN spectrum --species Li --taper one-sided-cosine
+```
+
+RDF 的 `center` 和 `neighbor` 有顺序；两者相同时会排除自身。`rmax` 不能超过
+三斜晶胞最小面高的一半，配位数只有在显式设置 `--cn-cutoff` 时才计算。密度
+结果同时给出总和为 1 的占据概率和单位为 Å⁻³ 的数密度，后者对晶胞积分应
+等于所选离子数。
+
+MSD 使用多时间原点平均，默认 FFT 实现，也可用 `--method direct` 交叉检查。
+计算使用连续坐标：unwrapped 轨迹直接使用；固定晶胞的 wrapped 轨迹按相邻帧
+最小镜像重建，并报告可能跨越半个晶胞的歧义。变胞轨迹会被拒绝，因为当前
+实现不能可靠地区分晶胞仿射形变和真实迁移。漂移修正从不暗中启用，可选
+`none`、`nonmobile` 或明确的 `indices`，选择会写入 provenance。只有同时给出
+`--fit-start-ps` 和 `--fit-stop-ps` 才会附带普通最小二乘斜率；它只是检查线性区
+的诊断值，不代替带协方差和不确定度的输运估计。
+
+#### 扩散系数和电导率
+
+生产级输运拟合使用 kinisi v2：
+
+```bash
+mlipx analyze RUN transport \
+    --mobile Li \
+    --charge 1 \
+    --drift-reference nonmobile \
+    --fit-start-ps 20 \
+    --random-seed 0
+```
+
+上面的 20 ps 只是命令示例，不能照搬到所有体系。应结合 `thermo`、MSD 曲线、
+采样长度和体系物理选择已经平衡且进入扩散区间的起点。输运分析要求固定晶胞、
+三维周期、至少 4 个 production 帧、均匀采样和明确的坐标约定。对 wrapped
+轨迹，如果相邻帧位移已接近最小镜像失效范围，程序会直接拒绝，不会给出一个
+看似正常但无法验证的扩散系数。
+
+kinisi 会输出后验均值、标准差和 95% 区间，并同时记录 m²/s 与 cm²/s。方向
+扩散遵循 `D = slope / (2d)`，其中 `d` 是所选方向数。`--charge` 必须显式给出，
+软件不会根据元素猜价态；温度来自 production 帧平均值，缺失时必须用
+`--temperature-K` 指定，不会回退到 300 K。Nernst–Einstein 示踪电导率采用
+`σ = n(ze)²D/(kBT)`，它不等同于考虑相关运动后的实验电导率。只有明确加上
+`--collective-conductivity` 才会额外计算集体量，软件也不会自动给出 Haven 比。
+
+多个独立温度的扩散结果可用 `arrhenius` 拟合
+`ln D = ln D₀ - Eₐ/(kBT)`。建议至少使用 3 个温度点；2 点只会给出警告，无法
+检验线性。若提供 `--diffusivity-std`，拟合会用近似
+`σ(ln D) = σ(D)/D` 加权；外推值会被明确标记。完整参数可用：
+
+```bash
+mlipx analyze RUN arrhenius --help
+```
+
+#### 电解质位点、跳跃和渗流
+
+这部分由 GEMDAT 提供。必须明确给出参考位点，或明确要求从密度中发现位点：
+
+```bash
+mlipx analyze RUN electrolyte \
+    --mobile Li \
+    --sites Li_sites.cif \
+    --jump-dimensions 3 \
+    --percolation-axes xyz
+
+# 没有参考位点时才使用，并检查发现结果
+mlipx analyze RUN electrolyte --mobile Li --discover-sites-from-density
+```
+
+两种位点来源互斥，软件不会静默选择。`--jump-dimensions` 决定跳跃扩散公式中的
+维数；`--percolation-axes` 只限制路径连通方向，不会改变跳跃维数、kinisi
+示踪扩散或电导率定义。输出包括参考/发现位点、跃迁和跳跃表及矩阵、密度与
+自由能数组、路径坐标和势垒。GEMDAT 的端点示踪估计不会覆盖 kinisi 的输运
+结果，两者的方法和用途不同。
+
+VACF 和 `spectrum` 只使用轨迹中实际保存且均匀采样的速度，不会对位置做数值
+微分。默认单边余弦 taper 在零时刻权重为 1，负谱值会保留并报告；输出应称为
+“VACF 导出的速度谱”，不能直接当作谐振子声子 DOS。
+
+#### 输出与复现
+
+结果写入 `RUN/analysis/<任务>/<请求哈希>/`，其中包含 `request.json`、
+`provenance.json`、`results.json`、任务对应的 CSV/NPZ、PNG/SVG 和诊断信息。
+请求哈希包含输入指纹、选区、帧范围、方向、漂移规则、科学参数和后端版本；
+相同请求会复用已有结果，`--force` 才会重算。失败信息写入 `error.json`，且不
+生成 `results.json`，不会把未完成任务标成成功。
+
+只看本 README 已经可以完成上述流程。更细的算法定义、单位表和参考文献保留在
+[Analysis v2 专题说明](ANALYSIS.md)、[输运定义](TRANSPORT.md) 和
+[电解质机制分析](ELECTROLYTE.md) 中。
+
+### 5.5 批量处理
 
 对目录中的多个结构运行相同类型的计算，支持 `sp` 和 `opt`。当前批量
 入口仅在 CLI 中提供，并按顺序处理文件；模型在整批任务中只加载一次。
@@ -1065,9 +1196,8 @@ mlipx analyze RUN msd --mobile Li --axes x,y,z,xyz \
 `density`、`arrhenius`、`electrolyte`、`vacf` 和 `spectrum`。
 先运行 `validate`，再根据报告决定后续分析。
 
-MSD/RDF/作图依赖 `mlipx[analysis]`，`transport` 另需
-`mlipx[transport]`，`electrolyte` 另需 `mlipx[electrolyte]`。参数以
-`mlipx analyze RUN <任务> --help` 和 [Analysis v2](ANALYSIS.md) 为准。
+依赖安装、完整示例和科学限制都在第 5.4 节；各子命令的当前参数以
+`mlipx analyze RUN <任务> --help` 为准。
 
 ##### `mlipx batch` — 批量处理
 

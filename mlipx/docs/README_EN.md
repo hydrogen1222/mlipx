@@ -16,7 +16,8 @@
   - [5.1 Single Point (SP)](#51-single-point-sp)
   - [5.2 Geometry Optimization (OPT)](#52-geometry-optimization-opt)
   - [5.3 Molecular Dynamics (MD)](#53-molecular-dynamics-md)
-  - [5.4 Batch Processing](#54-batch-processing)
+  - [5.4 Built-in Trajectory Analysis](#54-built-in-trajectory-analysis-analysis-v2)
+  - [5.5 Batch Processing](#55-batch-processing)
 - [6. User Interfaces](#6-user-interfaces)
   - [6.1 CLI — Command Line Interface](#61-cli--command-line-interface)
   - [6.2 TUI — Terminal User Interface](#62-tui--terminal-user-interface)
@@ -39,8 +40,9 @@ mlipx (MLIP eXtended) is a multi-engine machine-learning interatomic potential (
 
 Analysis v2 provides validated, calculator-independent trajectory analysis for
 solid-state ion transport. It uses explicit time/PBC/phase/unit contracts and
-does not import the archived Analysis v1. See [ANALYSIS.md](ANALYSIS.md) and
-[TRANSPORT.md](TRANSPORT.md).
+does not import the archived Analysis v1. See
+[Section 5.4](#54-built-in-trajectory-analysis-analysis-v2) for usage; the
+focused documents retain deeper algorithm definitions and references.
 
 | Engine | `MODEL_TYPE` | Backend package |
 |-------|--------------|-----------------|
@@ -943,46 +945,199 @@ The real-backend interface smoke test uses four atoms, CPU by default, and
 └── run.log
 ```
 
-`raw/trajectory.traj` is the trajectory source of truth. Passing the whole run
-directory to an analysis command is usually safer because mlipx can also read
-the time, phase, unit, and coordinate contracts in `raw/md.csv`,
-`artifacts.json`, and `resolved_config.json`. `vasp/XDATCAR` primarily targets
-OVITO, ASE, and other VASP ecosystem tools.
+`raw/trajectory.traj` is the trajectory source of truth;
+`vasp/XDATCAR` primarily targets OVITO, ASE, and other VASP ecosystem tools.
+For analysis, pass the whole run directory when possible instead of only the
+trajectory file. This also gives mlipx the time, phase, unit, and coordinate
+contracts in `raw/md.csv`, `artifacts.json`, and `resolved_config.json`.
 
-The current release includes calculator-independent Analysis v2. A trajectory
-produced with DPA, MACE, or GRACE can be analyzed in any environment containing
-the analysis dependencies; the model and calculator backend are not loaded:
+### 5.4 Built-in Trajectory Analysis (Analysis v2)
+
+The current release directly supports thermodynamic statistics, RDF,
+RMSD/RMSF, directional MSD, diffusion, Nernst–Einstein conductivity, 3-D
+occupancy density, Arrhenius fitting, ionic sites and jumps, VACF, and velocity
+spectra. The analysis layer does not load a model, so trajectories from DPA,
+MACE, GRACE, and UMA can all be processed in one analysis environment.
+
+Install the required dependencies from the repository root:
 
 ```bash
-# Check time, PBC, cell, coordinate convention, and task eligibility first.
-mlipx analyze RUN validate
+# MSD, RDF, density, and plotting
+python -m pip install -e './mlipx[analysis]'
 
-# Inspect temperature/energy, then calculate directional Li MSD.
-mlipx analyze RUN thermo
-mlipx analyze RUN msd \
-    --mobile Li \
-    --axes x,y,z,xyz \
-    --drift-reference nonmobile
+# Include both kinisi and GEMDAT
+python -m pip install -e './mlipx[analysis-all]'
 ```
 
-MSD and transport require a fixed-cell, three-dimensionally periodic trajectory
-with uniform sampling and an explicit wrapped or unwrapped coordinate
-convention. An mlipx run marked failed, aborted, or cancelled is rejected. An
-imported trajectory has no mlipx run status, so the user remains responsible
-for confirming that it is complete. mlipx does not choose the end of
-equilibration or the linear diffusive fitting window automatically. New
-trajectories use production frames by default. Legacy trajectories without
-phase metadata treat every frame as production; inspect `thermo` and use
-`--start-frame` to exclude the initial transient explicitly. Frame indices
-refer to saved frames, not MD steps.
+`RUN` may be an mlipx MD run directory, an ASE `.traj`, or an XDATCAR. If an
+external trajectory lacks time or coordinate metadata, declare it only when
+the values are genuinely known, for example:
 
-Here `RUN` is the mlipx MD run directory. Results are written below
-`RUN/analysis/<task>/<request-hash>/` with the request, provenance, CSV/NPZ
-data, plots, and diagnostics. See
-[Analysis v2](ANALYSIS.md) and [transport definitions](TRANSPORT.md) for the
-full command and scientific contracts.
+```bash
+mlipx analyze trajectory.traj validate \
+    --positions-convention wrapped \
+    --frame-interval-fs 10
+```
 
-### 5.4 Batch Processing
+Do not infer wrapped versus unwrapped coordinates from appearance, and do not
+confuse the MD timestep with the interval between saved frames.
+
+#### Validate before calculating
+
+```bash
+mlipx analyze RUN validate
+```
+
+`validate` reports the time axis, MD timestep and saved-frame interval, PBC,
+fixed or variable cell, coordinate convention, velocities,
+equilibration/production phases, Nyquist frequency, run status, and eligibility
+for each analysis. An mlipx run marked failed, aborted, or cancelled is
+rejected. Imported trajectories have no mlipx run status, so the user remains
+responsible for confirming that they are complete.
+
+MD can record equilibration and production separately with
+`--equilibration-steps N` and `--steps M`, using the same ensemble, integrator,
+thermostat, timestep, and temperature. Analyses use production frames by
+default. `thermo`, RDF, RMSD, MSD, density, VACF, and spectrum accept
+`--include-equilibration` for diagnostics; `transport` and `electrolyte` always
+use production frames. mlipx does not decide when equilibration ends or choose
+the linear diffusive window. Legacy trajectories without phase metadata treat
+every frame as production. That is a compatibility rule, not a claim that the
+entire run is equilibrated. Inspect `thermo`, then use `--start-frame` and
+`--stop-frame` on tasks that support a frame range. These are saved-frame
+indices, not MD step numbers.
+
+#### Common analyses
+
+```bash
+# Temperature, energy, pressure, and NVE energy-drift diagnostics
+mlipx analyze RUN thermo
+
+# Li-S partial RDF; the coordination cutoff is always explicit
+mlipx analyze RUN rdf --center Li --neighbor S --rmax 6 --cn-cutoff 3
+
+# Periodic-displacement RMSD/RMSF for a crystal
+mlipx analyze RUN rmsd --species Li
+
+# Directional, multiple-time-origin MSD
+mlipx analyze RUN msd --mobile Li --axes x,y,z,xy,xyz \
+    --drift-reference nonmobile
+
+# 3-D occupancy density, VACF, and a VACF-derived velocity spectrum
+mlipx analyze RUN density --mobile Li --spacing 0.25
+mlipx analyze RUN vacf --species Li
+mlipx analyze RUN spectrum --species Li --taper one-sided-cosine
+```
+
+RDF `center` and `neighbor` are ordered, and self pairs are excluded when the
+two selections are identical. `rmax` may not exceed half the minimum face
+height of the triclinic cell. A coordination number is calculated only when
+`--cn-cutoff` is explicit. Density output contains both an occupancy
+probability summing to one and a number density in Å⁻³ whose cell integral is
+the number of selected ions.
+
+MSD uses multiple time origins and defaults to an FFT implementation;
+`--method direct` is available as a cross-check. It operates on continuous
+coordinates: unwrapped trajectories are used directly, while wrapped,
+fixed-cell trajectories are reconstructed from consecutive minimum-image
+displacements and checked for half-cell ambiguity. Variable-cell trajectories
+are rejected because the current implementation cannot reliably separate
+affine cell deformation from migration. Drift removal is never enabled
+silently: choose `none`, `nonmobile`, or explicit `indices`; the choice is
+recorded in provenance. An ordinary-least-squares slope is added only when
+both `--fit-start-ps` and `--fit-stop-ps` are supplied. It is a linear-window
+diagnostic, not a substitute for a transport estimate with covariance and
+uncertainty.
+
+#### Diffusion and conductivity
+
+Production transport fitting uses kinisi v2:
+
+```bash
+mlipx analyze RUN transport \
+    --mobile Li \
+    --charge 1 \
+    --drift-reference nonmobile \
+    --fit-start-ps 20 \
+    --random-seed 0
+```
+
+The 20 ps value is only a command example. Choose the start of an equilibrated,
+diffusive regime from `thermo`, the MSD curve, the sampling length, and the
+physics of the system. Transport requires a fixed cell, three-dimensional PBC,
+at least four production frames, uniform sampling, and a known coordinate
+convention. A wrapped trajectory is rejected when consecutive displacements
+approach the unsafe range for minimum-image reconstruction; mlipx will not
+return a plausible-looking diffusion coefficient from an unverifiable unwrap.
+
+kinisi reports posterior mean, standard deviation, and 95% interval in both
+m²/s and cm²/s. Directional diffusion follows `D = slope / (2d)`, where `d` is
+the number of selected directions. `--charge` is required and is never guessed
+from the element. Temperature is the production-frame mean; if unavailable,
+it must be supplied with `--temperature-K`, with no 300 K fallback. The
+Nernst–Einstein tracer conductivity uses `σ = n(ze)²D/(kBT)` and should not be
+treated as an experimental or correlation-aware conductivity. A collective
+quantity is calculated only with `--collective-conductivity`; mlipx does not
+silently report a Haven ratio.
+
+Independent diffusion results at several temperatures can be fitted with the
+`arrhenius` task using `ln D = ln D₀ - Eₐ/(kBT)`. At least three temperatures
+are recommended; a two-point fit warns because linearity cannot be tested. If
+`--diffusivity-std` values are supplied, the fit uses the approximation
+`σ(ln D) = σ(D)/D` as weights, and extrapolated values are clearly labelled.
+See all parameters with:
+
+```bash
+mlipx analyze RUN arrhenius --help
+```
+
+#### Electrolyte sites, jumps, and percolation
+
+This layer uses GEMDAT. Either provide reference sites or explicitly request
+site discovery from the density:
+
+```bash
+mlipx analyze RUN electrolyte \
+    --mobile Li \
+    --sites Li_sites.cif \
+    --jump-dimensions 3 \
+    --percolation-axes xyz
+
+# Use only when no reference sites are available, then inspect the result.
+mlipx analyze RUN electrolyte --mobile Li --discover-sites-from-density
+```
+
+The two site sources are mutually exclusive and mlipx never chooses one
+silently. `--jump-dimensions` controls the dimensional factor in the jump
+diffusivity. `--percolation-axes` only constrains pathway connectivity; it does
+not change the jump dimension, kinisi tracer diffusion, or conductivity
+definition. Outputs include reference or discovered sites, transition and
+jump tables and matrices, density and free-energy arrays, pathway coordinates,
+and barriers. GEMDAT's endpoint tracer estimate does not replace the kinisi
+transport result; the two use different methods and serve different purposes.
+
+VACF and `spectrum` use velocities actually stored at uniform sampling; they do
+not numerically differentiate positions. The default one-sided cosine taper
+has unit weight at time zero, and negative spectral values are retained and
+reported. The result is a “VACF-derived velocity spectrum,” not automatically
+a harmonic phonon DOS.
+
+#### Output and reproducibility
+
+Results are written to `RUN/analysis/<task>/<request-hash>/`, including
+`request.json`, `provenance.json`, `results.json`, task-specific CSV/NPZ data,
+PNG/SVG figures, and diagnostics. The hash includes the source fingerprint,
+selection, frame range, directions, drift rule, scientific parameters, and
+backend versions. Identical requests reuse an existing result unless `--force`
+is given. Failure details are written to `error.json` without creating a
+`results.json`; an incomplete task is never marked as successful.
+
+This README is sufficient to run the workflows above. Detailed algorithm
+definitions, unit tables, and references remain in the
+[Analysis v2 notes](ANALYSIS.md), [transport definitions](TRANSPORT.md), and
+[electrolyte mechanism guide](ELECTROLYTE.md).
+
+### 5.5 Batch Processing
 
 Run the same calculation type on many structures in a directory. Batch
 supports `sp` and `opt`, is currently CLI-only, and processes files
@@ -1106,10 +1261,9 @@ metadata. Available tasks are `validate`, `thermo`, `rdf`, `rmsd`, `msd`,
 `transport`, `density`, `arrhenius`, `electrolyte`, `vacf`, and `spectrum`.
 Run `validate` first and use its eligibility report before further analysis.
 
-MSD/RDF/plotting require `mlipx[analysis]`; `transport` additionally requires
-`mlipx[transport]`, and `electrolyte` requires `mlipx[electrolyte]`. See
-`mlipx analyze RUN <task> --help` and [Analysis v2](ANALYSIS.md) for the exact
-parameters and scientific contracts.
+Dependency installation, complete examples, and scientific limits are in
+Section 5.4. Use `mlipx analyze RUN <task> --help` for the current arguments of
+each subcommand.
 
 ##### `mlipx batch` — Batch Processing
 
