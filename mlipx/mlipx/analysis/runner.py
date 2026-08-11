@@ -22,6 +22,9 @@ if TYPE_CHECKING:
     from typing import Any
 
 
+_TASK_OUTPUT_REVISIONS = {"msd": 2}
+
+
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
     if isinstance(value, np.ndarray):
         if value.size <= array_limit:
@@ -233,7 +236,7 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
         return result, artifacts
     if task == "msd":
         from mlipx.analysis.msd import calculate_msd
-        from mlipx.analysis.plots import plot_msd
+        from mlipx.analysis.plots import plot_msd, plot_msd_alpha
 
         result = calculate_msd(dataset, **parameters)
         columns = {
@@ -256,6 +259,9 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
         )
         artifacts.extend(("msd.csv", "diagnostics.json"))
         artifacts.extend(path.name for path in plot_msd(result, output_dir / "msd"))
+        artifacts.extend(
+            path.name for path in plot_msd_alpha(result, output_dir / "alpha")
+        )
         return result, artifacts
     if task == "density":
         from mlipx.analysis.structure import density_map
@@ -358,6 +364,8 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
         "parameters": request.parameters,
         "backend_versions": _versions(),
     }
+    if request.task in _TASK_OUTPUT_REVISIONS:
+        canonical_request["task_output_revision"] = _TASK_OUTPUT_REVISIONS[request.task]
     analysis_id = _analysis_id(canonical_request)
     root = _output_root(request.source_path)
     output_dir = root / request.task / analysis_id

@@ -87,6 +87,28 @@ def plot_msd(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
     return _save(fig, output_stem)
 
 
+def plot_msd_alpha(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+    """Plot the local log-log MSD exponent for each requested direction."""
+
+    plt = _pyplot()
+    fig, axis = plt.subplots(figsize=(7, 4.5))
+    for axes, values in result["log_log_alpha_by_axes"].items():
+        axis.plot(result["lag_time_ps"], values, label=f"alpha {axes}")
+    axis.axhline(
+        1.0,
+        color="black",
+        linestyle="--",
+        linewidth=1.0,
+        alpha=0.6,
+        label="normal diffusion (alpha = 1)",
+    )
+    axis.set_xlabel("Lag time (ps)")
+    axis.set_ylabel("Local exponent alpha = d ln(MSD) / d ln(t)")
+    axis.legend()
+    axis.grid(alpha=0.25)
+    return _save(fig, output_stem)
+
+
 def plot_arrhenius(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
     plt = _pyplot()
     fig, axis = plt.subplots(figsize=(6, 4.5))

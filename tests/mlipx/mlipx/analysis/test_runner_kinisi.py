@@ -123,7 +123,7 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
             str(run),
             parameters={
                 "mobile_species": "Li",
-                "axes": "xyz",
+                "axes": "x,y,z,xy,xyz",
                 "drift_reference": "none",
             },
         )
@@ -131,8 +131,19 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
     assert outcome["status"] == "success"
     assert len(outcome["results"]["lag_time_ps"]) == 4
     output = run / "analysis" / "msd" / outcome["analysis_id"]
+    request = json.loads((output / "request.json").read_text(encoding="utf-8"))
+    assert request["task_output_revision"] == 2
     assert (output / "msd.csv").is_file()
     assert (output / "msd.png").is_file()
+    assert (output / "msd.svg").is_file()
+    assert (output / "alpha.png").is_file()
+    assert (output / "alpha.svg").is_file()
+    with (output / "msd.csv").open(newline="", encoding="utf-8") as handle:
+        columns = next(csv.reader(handle))
+    for axes in ("x", "y", "z", "xy", "xyz"):
+        assert f"alpha_{axes}" in columns
+    payload = json.loads((output / "results.json").read_text(encoding="utf-8"))
+    assert {"alpha.png", "alpha.svg"} <= set(payload["artifacts"])
 
 
 def test_kinisi_adapter_matches_official_ase_api() -> None:
