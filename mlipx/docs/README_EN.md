@@ -56,6 +56,7 @@ All engines plug in through a unified ASE Calculator interface, so the higher-le
 - Compute energy, forces, and stress for crystal structures and molecules
 - Optimize atomic positions and cell parameters (geometry relaxation)
 - Run molecular dynamics simulations (NVT / NVE ensembles)
+- Validate and analyze MD trajectories, including thermo, RDF, MSD, transport, and VACF
 - Process hundreds of structures in batch mode
 - Write VASP-syntax CONTCAR/XDATCAR, a documented VASP-like OUTCAR, and OSZICAR
 
@@ -78,6 +79,7 @@ Unlike VASP, which solves the Kohn-Sham equations self-consistently, mlipx uses 
 | CLI mode | Full command-line interface (sp/opt/md/batch/run/config/queue/...) |
 | TUI mode | Interactive terminal UI with live progress |
 | Python API | Programmatic access for scripting and workflows |
+| Trajectory analysis | Backend-independent validation, thermo, RDF, MSD, transport, and VACF |
 | Background jobs | Submit, detach, re-attach, and kill long-running calculations |
 | Batch processing | Process many structures sequentially with one model load |
 | CPU & CUDA | Runs on CPU or GPU, auto-detected |
@@ -893,7 +895,8 @@ mlipx md CONTCAR \
 | `--ensemble` | NVT | NVT or NVE |
 | `--temp` | 300 | Temperature (K) |
 | `--timestep` | 1.0 | Time step (fs) |
-| `--steps` | 1000 | Number of MD steps |
+| `--steps` | 1000 | Number of production MD steps |
+| `--equilibration-steps` | 0 | Same-ensemble equilibration steps before production |
 | `--thermostat` | LANGEVIN | `LANGEVIN`, `BUSSI`, or `NHC` for NVT |
 | `--friction` | 0.001 | Langevin friction (fs⁻¹) |
 | `--bussi-tau` | 1000.0 | Bussi/CSVR coupling time (fs) |
@@ -909,7 +912,9 @@ mlipx md CONTCAR \
 
 Thermostat choice and coupling strength may influence dynamical and transport
 properties. For transport-oriented calculations, thermostat sensitivity should
-be checked. NVE production after a separate equilibration run remains available.
+be checked. `--equilibration-steps` runs an initial phase with the same ensemble,
+thermostat, and timestep. Switching from NVT equilibration to NVE production
+still requires separate runs and explicit handling of restart velocities.
 
 The real-backend interface smoke test uses four atoms, CPU by default, and
 5 steps per method. Run it with each isolated environment, for example:
@@ -938,13 +943,44 @@ The real-backend interface smoke test uses four atoms, CPU by default, and
 └── run.log
 ```
 
-Use `raw/trajectory.traj` as the preferred input for external post-processing.
-`vasp/XDATCAR` targets OVITO, ASE, and other VASP ecosystem tools. It uses
-VASP fixed-width fields and `Direct configuration=` records while retaining
-continuous coordinates across periodic boundaries.
-Built-in advanced trajectory post-processing is not currently provided. For
-equilibration/production separation, run independent MD jobs; mlipx does not
-automatically manage `equil_steps` in the current scope.
+`raw/trajectory.traj` is the trajectory source of truth. Passing the whole run
+directory to an analysis command is usually safer because mlipx can also read
+the time, phase, unit, and coordinate contracts in `raw/md.csv`,
+`artifacts.json`, and `resolved_config.json`. `vasp/XDATCAR` primarily targets
+OVITO, ASE, and other VASP ecosystem tools.
+
+The current release includes calculator-independent Analysis v2. A trajectory
+produced with DPA, MACE, or GRACE can be analyzed in any environment containing
+the analysis dependencies; the model and calculator backend are not loaded:
+
+```bash
+# Check time, PBC, cell, coordinate convention, and task eligibility first.
+mlipx analyze RUN validate
+
+# Inspect temperature/energy, then calculate directional Li MSD.
+mlipx analyze RUN thermo
+mlipx analyze RUN msd \
+    --mobile Li \
+    --axes x,y,z,xyz \
+    --drift-reference nonmobile
+```
+
+MSD and transport require a fixed-cell, three-dimensionally periodic trajectory
+with uniform sampling and an explicit wrapped or unwrapped coordinate
+convention. An mlipx run marked failed, aborted, or cancelled is rejected. An
+imported trajectory has no mlipx run status, so the user remains responsible
+for confirming that it is complete. mlipx does not choose the end of
+equilibration or the linear diffusive fitting window automatically. New
+trajectories use production frames by default. Legacy trajectories without
+phase metadata treat every frame as production; inspect `thermo` and use
+`--start-frame` to exclude the initial transient explicitly. Frame indices
+refer to saved frames, not MD steps.
+
+Here `RUN` is the mlipx MD run directory. Results are written below
+`RUN/analysis/<task>/<request-hash>/` with the request, provenance, CSV/NPZ
+data, plots, and diagnostics. See
+[Analysis v2](ANALYSIS.md) and [transport definitions](TRANSPORT.md) for the
+full command and scientific contracts.
 
 ### 5.4 Batch Processing
 
@@ -1037,7 +1073,9 @@ mlipx md STRUCTURE --model MODEL [options]
   --ensemble ENSEMBLE   NVT|NVE [default: NVT]
   --temp TEMP           Temperature in Kelvin [default: 300]
   --timestep DT         Time step in fs [default: 1.0]
-  --steps N             Number of MD steps [default: 1000]
+  --steps N             Number of production MD steps [default: 1000]
+  --equilibration-steps N
+                        Same-ensemble equilibration steps [default: 0]
   --thermostat TYPE     LANGEVIN|BUSSI|NHC [default: LANGEVIN]
   --friction VALUE      Langevin friction in fs^-1 [default: 0.001]
   --bussi-tau FS        Bussi/CSVR coupling time [default: 1000.0]
@@ -1052,6 +1090,26 @@ mlipx md STRUCTURE --model MODEL [options]
   --pre-relax-fmax F    Pre-relaxation force threshold eV/Å [default: 0.1]
   --fmax-abort F        Force-safety abort threshold eV/Å [default: 20.0]
 ```
+
+##### `mlipx analyze` — Trajectory Analysis
+
+```text
+mlipx analyze RUN validate
+mlipx analyze RUN thermo
+mlipx analyze RUN msd --mobile Li --axes x,y,z,xyz \
+    --drift-reference nonmobile
+```
+
+`RUN` may be an mlipx run directory, an ASE `.traj`, or an XDATCAR. Passing
+the run directory preserves the most complete time, PBC, phase, and unit
+metadata. Available tasks are `validate`, `thermo`, `rdf`, `rmsd`, `msd`,
+`transport`, `density`, `arrhenius`, `electrolyte`, `vacf`, and `spectrum`.
+Run `validate` first and use its eligibility report before further analysis.
+
+MSD/RDF/plotting require `mlipx[analysis]`; `transport` additionally requires
+`mlipx[transport]`, and `electrolyte` requires `mlipx[electrolyte]`. See
+`mlipx analyze RUN <task> --help` and [Analysis v2](ANALYSIS.md) for the exact
+parameters and scientific contracts.
 
 ##### `mlipx batch` — Batch Processing
 
@@ -1170,11 +1228,11 @@ CLI-only.
 Only controls used by the selected backend are shown; for example, selecting
 UMA no longer leaves a disabled DPA branch field on screen. Charge/spin appear
 only for molecular tasks and are cleared when switching back to a periodic
-task. OPT also exposes cell optimization and symmetry
-preservation. MD exposes the ensemble, temperature, timestep, step/save counts,
-NVT friction, pre-relaxation controls, random seed, velocity policy, and
-force-safety abort threshold. Paths support live validation with visual
-feedback:
+task. OPT also exposes cell optimization and symmetry preservation. MD exposes
+the ensemble, temperature, timestep, equilibration/production step counts,
+save interval, NVT thermostat and its active coupling parameters,
+pre-relaxation controls, random seed, velocity policy, and force-safety abort
+threshold. Paths support live validation with visual feedback:
 
 ```
 📁 Structure File: [structure.cif                ]
@@ -1303,7 +1361,8 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `MD_ENSEMBLE` | string | `NVT` | Ensemble: `NVT`, `NVE` |
 | `TEMPERATURE` | float | `300.0` | Temperature (K) |
 | `TIMESTEP` | float | `1.0` | Time step (fs) |
-| `STEPS` | int | `10000` | Number of MD steps |
+| `STEPS` | int | `10000` | Number of production MD steps |
+| `EQUILIBRATION_STEPS` | int | `0` | Same-ensemble equilibration steps before production; `EQUIL_STEPS` is an alias |
 | `THERMOSTAT` | string | `LANGEVIN` | NVT thermostat: `LANGEVIN`, `BUSSI`, `NHC` |
 | `FRICTION` | float | `0.001` | Langevin friction (fs⁻¹) |
 | `BUSSI_TAU` | float | `1000.0` | Bussi/CSVR coupling time (fs) |
@@ -1359,6 +1418,7 @@ MD_ENSEMBLE = NVT
 TEMPERATURE = 300.0
 TIMESTEP = 1.0
 STEPS = 10000
+EQUILIBRATION_STEPS = 0
 THERMOSTAT = LANGEVIN
 FRICTION = 0.001
 BUSSI_TAU = 1000.0

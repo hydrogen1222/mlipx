@@ -99,6 +99,27 @@ outputs. If VASP interoperability files are not needed during a high-throughput
 run, use `--no-write-outcar --no-write-xdatcar` to avoid their duplicate text
 I/O; the canonical trajectory remains enabled.
 
+### Analyze an MD trajectory
+
+Analysis is calculator-independent: a DPA, MACE, or GRACE trajectory can be
+analyzed from the UMA `.venv` without loading the model backend. Validate the
+trajectory contract before calculating MSD or transport properties:
+
+```bash
+uv run mlipx analyze results/LGPS-800K validate
+uv run mlipx analyze results/LGPS-800K thermo
+uv run mlipx analyze results/LGPS-800K msd \
+  --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
+```
+
+MSD and transport require a fixed-cell, three-dimensionally periodic trajectory
+with a uniform time axis and a known wrapped/unwrapped coordinate convention;
+an mlipx run marked failed, aborted, or cancelled is rejected. See the
+[Analysis v2 guide](mlipx/docs/ANALYSIS.md) and
+[transport definitions](mlipx/docs/TRANSPORT.md) before fitting a diffusion
+coefficient; mlipx does not choose an equilibration cutoff or diffusive fitting
+window automatically.
+
 ### Or use a VASP-style INCAR file
 
 ```ini
@@ -231,6 +252,8 @@ Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which ML
 
 - **Multi-engine:** UMA / MACE / DPA / GRACE via one ASE Calculator interface
 - **Calculation types:** Single-point (SP), geometry optimization (OPT, FIRE/BFGS/LBFGS), molecular dynamics (MD, NVT/NVE), batch processing
+- **Trajectory analysis:** validation, thermodynamics, RDF/coordination,
+  directional MSD, diffusion/transport, density maps, VACF, and velocity spectra
 - **VASP-compatible output:** OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
 - **Background jobs:** submit, detach, re-attach, kill long-running calculations
 - **INCAR files:** VASP-style `KEY = VALUE` configuration
@@ -249,8 +272,11 @@ mlipx/
 ├── README.md                  # Package README (links to full manuals)
 ├── docs/
 │   ├── README_CN.md           # 中文完整手册
-│   └── README_EN.md           # English complete manual
+│   ├── ANALYSIS.md            # Trajectory analysis contract and commands
+│   ├── README_EN.md           # English complete manual
+│   └── TRANSPORT.md           # Diffusion and conductivity definitions
 ├── mlipx/                     # The Python package
+│   ├── analysis/              # Calculator-independent trajectory analysis
 │   ├── engine.py              # CalculationEngine (unified execution)
 │   ├── base_calculator.py     # BaseMLIPCalculator abstract interface
 │   ├── calculator.py          # UMACalculator wrapper

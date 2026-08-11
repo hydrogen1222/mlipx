@@ -2,9 +2,11 @@
 
 ## Trajectory prerequisites
 
-Publication transport currently requires a completed, fixed-cell, 3-D periodic
-trajectory with finite coordinates, at least four production frames, an exact
-uniform time axis, and an explicit wrapped/unwrapped convention. Wrapped
+Publication transport currently requires a fixed-cell, 3-D periodic trajectory
+with finite coordinates, at least four production frames, a uniform time axis,
+and an explicit wrapped/unwrapped convention. An mlipx run marked failed,
+aborted, or cancelled is rejected. Imported trajectories have no mlipx run
+status, so their completeness remains the user's responsibility. Wrapped
 coordinates are reconstructed by consecutive minimum images; the reported
 unwrap safety ratio is a heuristic and cannot prove that no hidden multiple
 cell crossing occurred between sparse frames.
@@ -31,7 +33,9 @@ D_axes = slope(MSD_axes) / (2 d)
 explicit-range OLS diagnostic. It does not automatically identify the correct
 diffusive regime. The local log-log slope is a diagnostic only.
 
-The publication-oriented scalar tracer estimate uses kinisi 2.x:
+The publication-oriented scalar tracer estimate uses kinisi 2.x. The 20 ps
+fit start below is only an example; choose it from the equilibrated trajectory
+and the observed diffusive regime rather than copying it blindly:
 
 ```bash
 mlipx analyze RUN transport --mobile Li --charge 1 \

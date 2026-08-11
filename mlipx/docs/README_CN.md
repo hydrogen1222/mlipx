@@ -56,6 +56,7 @@ archive 中的 Analysis v1。详见 [ANALYSIS.md](ANALYSIS.md) 与
 - 计算晶体结构和分子的能量、力和应力
 - 优化原子位置和晶胞参数（几何弛豫）
 - 运行分子动力学模拟（NVT / NVE 系综）
+- 验证并分析 MD 轨迹，包括热力学、RDF、MSD、扩散和 VACF
 - 批量处理数百个结构
 - 输出 VASP 语法兼容的 CONTCAR/XDATCAR、VASP-like OUTCAR 和 OSZICAR
 
@@ -78,6 +79,7 @@ archive 中的 Analysis v1。详见 [ANALYSIS.md](ANALYSIS.md) 与
 | CLI 模式 | 完整的命令行界面（sp/opt/md/batch/run/config/queue/...） |
 | TUI 模式 | 交互式终端界面，实时进度显示 |
 | Python API | 面向脚本和工作流的编程接口 |
+| 轨迹后处理 | 与模型后端解耦的验证、热力学、RDF、MSD、输运和 VACF |
 | 后台任务 | 提交、分离、重连、终止长时间计算 |
 | 批量处理 | 模型只加载一次，顺序处理多个结构 |
 | CPU & CUDA | 支持 CPU 和 GPU，自动检测 |
@@ -869,7 +871,8 @@ mlipx md CONTCAR \
 | `--ensemble` | NVT | NVT 或 NVE |
 | `--temp` | 300 | 温度 (K) |
 | `--timestep` | 1.0 | 时间步长 (fs) |
-| `--steps` | 1000 | MD 步数 |
+| `--steps` | 1000 | 生产段 MD 步数 |
+| `--equilibration-steps` | 0 | 同一系综、恒温器和时间步下的平衡段步数 |
 | `--thermostat` | LANGEVIN | NVT 使用 `LANGEVIN`、`BUSSI` 或 `NHC` |
 | `--friction` | 0.001 | Langevin 摩擦系数（fs⁻¹） |
 | `--bussi-tau` | 1000.0 | Bussi/CSVR 耦合时间（fs） |
@@ -884,7 +887,8 @@ mlipx md CONTCAR \
 | `--pre-relax-fmax` | 0.1 | 预弛豫力收敛阈值 (eV/Å) |
 
 恒温器选择和耦合强度可能影响动力学与输运性质。面向输运的计算应检查恒温器
-敏感性；也可以先独立平衡，再执行 NVE 生产段。
+敏感性。`--equilibration-steps` 可在同一任务中先运行同系综平衡段；如果需要
+NVT 平衡后切换到 NVE 生产段，仍应拆成两个任务并明确处理重启速度。
 
 真实后端接口 smoke test 默认使用 CPU、4 个原子、每种方法 5 步。请分别用
 对应隔离环境运行 `mlipx/examples/smoke_md_backends.py`。
@@ -906,11 +910,37 @@ mlipx md CONTCAR \
 └── run.log
 ```
 
-`raw/trajectory.traj` 是外部后处理的首选输入。`vasp/XDATCAR` 面向 OVITO、ASE
-及其他 VASP 生态工具，使用 VASP 的固定列宽和
-`Direct configuration=` 语法，并保留跨周期的连续坐标。
-当前不提供内置高级轨迹后处理命令。需要平衡/生产分段时，请分别运行独立的
-MD 任务；本轮不自动管理 `equil_steps`。
+`raw/trajectory.traj` 是轨迹事实源；把整个任务目录传给分析命令通常更稳妥，
+因为程序还能读取 `raw/md.csv`、`artifacts.json` 和
+`resolved_config.json` 中的时间、阶段、单位和坐标约定。`vasp/XDATCAR`
+主要面向 OVITO、ASE 及其他 VASP 生态工具。
+
+当前版本提供与模型后端解耦的 Analysis v2。DPA、MACE 或 GRACE 生成的轨迹
+可以直接在装有分析依赖的环境中处理，不会加载模型或计算器：
+
+```bash
+# 先检查时间轴、PBC、晶胞、坐标约定和任务资格
+mlipx analyze RUN validate
+
+# 查看温度和能量，再计算 Li 的方向 MSD
+mlipx analyze RUN thermo
+mlipx analyze RUN msd \
+    --mobile Li \
+    --axes x,y,z,xyz \
+    --drift-reference nonmobile
+```
+
+MSD 和输运分析要求晶胞固定、三维周期、采样时间均匀，并且坐标是明确的
+wrapped 或 unwrapped；已标记为 failed、aborted 或 cancelled 的 mlipx 任务
+会被拒绝。外部轨迹没有 mlipx 运行状态，用户需自行确认其是否完整。软件不会
+自动判断热化结束位置或扩散线性区间。新版轨迹默认只分析 production 帧；旧
+轨迹如果没有 phase 元数据，会把所有帧视为 production，应先查看 `thermo`，
+再用 `--start-frame` 明确排除前段。这里的 frame 指保存帧，不是 MD 步数。
+
+上述命令中的 `RUN` 是 mlipx MD 任务目录。结果写入
+`RUN/analysis/<分析任务>/<请求哈希>/`，包含请求、provenance、
+CSV/NPZ、图和诊断信息。完整命令和科学限制见
+[Analysis v2](ANALYSIS.md) 与 [输运定义](TRANSPORT.md)。
 
 ### 5.4 批量处理
 
@@ -1002,7 +1032,9 @@ mlipx md STRUCTURE --model MODEL [选项]
   --ensemble ENSEMBLE   系综：NVT|NVE [默认: NVT]
   --temp TEMP           温度 (K) [默认: 300]
   --timestep DT         时间步长 (fs) [默认: 1.0]
-  --steps N             MD 步数 [默认: 1000]
+  --steps N             生产段 MD 步数 [默认: 1000]
+  --equilibration-steps N
+                        同系综平衡段步数 [默认: 0]
   --thermostat TYPE     LANGEVIN|BUSSI|NHC [默认: LANGEVIN]
   --friction VALUE      Langevin 摩擦系数 fs^-1 [默认: 0.001]
   --bussi-tau FS        Bussi/CSVR 耦合时间 [默认: 1000.0]
@@ -1017,6 +1049,25 @@ mlipx md STRUCTURE --model MODEL [选项]
   --pre-relax-fmax F    预弛豫力收敛阈值 eV/Å [默认: 0.1]
   --fmax-abort F        力安全中止阈值 eV/Å [默认: 20.0]
 ```
+
+##### `mlipx analyze` — 轨迹后处理
+
+```text
+mlipx analyze RUN validate
+mlipx analyze RUN thermo
+mlipx analyze RUN msd --mobile Li --axes x,y,z,xyz \
+    --drift-reference nonmobile
+```
+
+`RUN` 可以是 mlipx 任务目录、ASE `.traj` 或 XDATCAR；传入任务目录
+能保留最完整的时间、PBC、阶段和单位信息。可用任务包括
+`validate`、`thermo`、`rdf`、`rmsd`、`msd`、`transport`、
+`density`、`arrhenius`、`electrolyte`、`vacf` 和 `spectrum`。
+先运行 `validate`，再根据报告决定后续分析。
+
+MSD/RDF/作图依赖 `mlipx[analysis]`，`transport` 另需
+`mlipx[transport]`，`electrolyte` 另需 `mlipx[electrolyte]`。参数以
+`mlipx analyze RUN <任务> --help` 和 [Analysis v2](ANALYSIS.md) 为准。
 
 ##### `mlipx batch` — 批量处理
 
@@ -1060,6 +1111,7 @@ mlipx jobs
 
 ##### `mlipx kill` — 终止后台任务
 
+```
 mlipx kill JOB_ID
 ```
 
@@ -1133,7 +1185,8 @@ Batch 当前仅能通过 CLI 运行。
 选择某个引擎后，只显示该引擎实际使用的后端控件；例如选择 UMA 时不会再显示
 DPA branch。电荷/自旋仅在分子任务下出现，周期任务不会携带上一次的分子设置。
 OPT 还可设置晶胞优化和保持晶体对称性；MD 可设置系综、温度、时间步、
-步数/保存间隔、NVT 摩擦系数、预弛豫、随机种子、速度策略和力安全中止阈值。
+平衡/生产步数、保存间隔、NVT 恒温器及其对应的耦合参数、预弛豫、
+随机种子、速度策略和力安全中止阈值。
 路径支持实时验证和视觉反馈：
 
 ```
@@ -1263,7 +1316,8 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `MD_ENSEMBLE` | 字符串 | `NVT` | 系综：`NVT`、`NVE` |
 | `TEMPERATURE` | 浮点数 | `300.0` | 温度 (K) |
 | `TIMESTEP` | 浮点数 | `1.0` | 时间步长 (fs) |
-| `STEPS` | 整数 | `10000` | MD 步数 |
+| `STEPS` | 整数 | `10000` | 生产段 MD 步数 |
+| `EQUILIBRATION_STEPS` | 整数 | `0` | 生产段前的同系综平衡步数；`EQUIL_STEPS` 是别名 |
 | `THERMOSTAT` | 字符串 | `LANGEVIN` | NVT 恒温器：`LANGEVIN`、`BUSSI`、`NHC` |
 | `FRICTION` | 浮点数 | `0.001` | Langevin 摩擦系数（fs⁻¹） |
 | `BUSSI_TAU` | 浮点数 | `1000.0` | Bussi/CSVR 耦合时间（fs） |
@@ -1317,6 +1371,7 @@ MD_ENSEMBLE = NVT
 TEMPERATURE = 300.0
 TIMESTEP = 1.0
 STEPS = 10000
+EQUILIBRATION_STEPS = 0
 THERMOSTAT = LANGEVIN
 FRICTION = 0.001
 BUSSI_TAU = 1000.0
@@ -1754,7 +1809,7 @@ print(f"形成能: {e_form/len(compound):.4f} eV/atom")
 | 块体材料 | `--optimizer FIRE --fmax 0.05` |
 | 表面 | `--optimizer FIRE --fmax 0.03` |
 | MD 平衡 | `--ensemble NVT --timestep 1.0` |
-| MD 产气 | `--ensemble NVE --timestep 1.0` |
+| MD 生产 | `--ensemble NVE --timestep 1.0` |
 | 高温 MD | `--timestep 0.5 --friction 0.002` |
 
 ---

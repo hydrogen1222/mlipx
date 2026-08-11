@@ -5,7 +5,8 @@ without importing a calculator, Torch, FairChem, MACE, DeepMD, or
 TensorPotential. For an mlipx run, `raw/trajectory.traj` and `raw/md.csv` are
 preferred over interoperability exports.
 
-Install the lightweight analysis environment with:
+From the repository root, install the lightweight analysis dependencies into
+the environment that will run the analysis:
 
 ```bash
 python -m pip install -e './mlipx[analysis]'
@@ -47,6 +48,12 @@ boundary in `artifacts.json`.
 RDF, MSD, transport, and density analyses use production frames by default.
 `--include-equilibration` is available for diagnostics; mlipx does not attempt
 automatic equilibrium or plateau detection.
+
+Legacy trajectories may not contain phase metadata. Such trajectories are
+treated entirely as production data; this is a compatibility rule, not an
+equilibration claim. Inspect `thermo` first and use `--start-frame` and
+`--stop-frame` to select a justified range. These options count saved frames,
+not MD integration steps.
 
 ## Core commands
 
