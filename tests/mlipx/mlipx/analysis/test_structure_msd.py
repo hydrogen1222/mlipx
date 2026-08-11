@@ -113,6 +113,14 @@ def test_directional_msd_identity() -> None:
         result["msd_by_axes_A2"]["xyz"],
         result["msd_x_A2"] + result["msd_y_A2"] + result["msd_z_A2"],
     )
+    assert result["fit_window_source"] == "full_trajectory_default"
+    assert set(result["diagnostic_linear_diffusion_fits"]) == {
+        "x",
+        "y",
+        "z",
+        "xy",
+        "xyz",
+    }
 
 
 def test_simple_cubic_coordination_is_six_and_has_no_self_peak() -> None:

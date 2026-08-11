@@ -215,6 +215,7 @@ def diagnostic_linear_diffusion_fit(
     axes: str,
     fit_start_ps: float,
     fit_stop_ps: float,
+    fit_window_source: str = "explicit",
 ) -> dict[str, Any]:
     """Explicit-range OLS diagnostic; not a publication uncertainty model."""
 
@@ -250,6 +251,7 @@ def diagnostic_linear_diffusion_fit(
         "dimensions": dimensions,
         "fit_start_ps": float(fit_start_ps),
         "fit_stop_ps": float(fit_stop_ps),
+        "fit_window_source": fit_window_source,
         "actual_fit_start_ps": float(x[0]),
         "actual_fit_stop_ps": float(x[-1]),
         "fit_points": int(np.count_nonzero(mask)),
@@ -284,13 +286,14 @@ def calculate_msd(
     fit_start_ps: float | None = None,
     fit_stop_ps: float | None = None,
 ) -> dict[str, Any]:
-    """Calculate directional windowed MSD and optional explicit diagnostic fits."""
+    """Calculate directional MSD and a diagnostic fit over an explicit/default window."""
 
     selected_axes = _normalize_axes(axes)
     if (fit_start_ps is None) != (fit_stop_ps is None):
         raise ValueError(
             "Both fit_start_ps and fit_stop_ps are required for a diagnostic fit"
         )
+    fit_window_source = "explicit" if fit_start_ps is not None else "full_trajectory_default"
     view = dataset.analysis_view(
         include_equilibration=include_equilibration, start=start, stop=stop
     )
@@ -310,18 +313,20 @@ def calculate_msd(
     lag_ps = np.arange(view.nframes, dtype=float) * view.frame_interval_fs / 1000.0
     values = {axis: _axis_msd(components, axis) for axis in selected_axes}
     alpha = {axis: _log_log_alpha(lag_ps, values[axis]) for axis in selected_axes}
-    fits: dict[str, Any] = {}
-    if fit_start_ps is not None and fit_stop_ps is not None:
-        fits = {
-            axis: diagnostic_linear_diffusion_fit(
-                lag_ps,
-                values[axis],
-                axes=axis,
-                fit_start_ps=fit_start_ps,
-                fit_stop_ps=fit_stop_ps,
-            )
-            for axis in selected_axes
-        }
+    if fit_start_ps is None and fit_stop_ps is None:
+        fit_start_ps = 0.0
+        fit_stop_ps = float(lag_ps[-1])
+    fits = {
+        axis: diagnostic_linear_diffusion_fit(
+            lag_ps,
+            values[axis],
+            axes=axis,
+            fit_start_ps=fit_start_ps,
+            fit_stop_ps=fit_stop_ps,
+            fit_window_source=fit_window_source,
+        )
+        for axis in selected_axes
+    }
     return {
         "lag_time_ps": lag_ps,
         "time_origin_counts": view.nframes - np.arange(view.nframes),
@@ -330,11 +335,8 @@ def calculate_msd(
         "msd_z_A2": components[:, 2],
         "msd_by_axes_A2": values,
         "log_log_alpha_by_axes": alpha,
-        "fit_window_ps": (
-            None
-            if fit_start_ps is None or fit_stop_ps is None
-            else {"start": float(fit_start_ps), "stop": float(fit_stop_ps)}
-        ),
+        "fit_window_ps": {"start": float(fit_start_ps), "stop": float(fit_stop_ps)},
+        "fit_window_source": fit_window_source,
         "diagnostic_linear_diffusion_fits": fits,
         "method": f"{method}_windowed_msd",
         "mobile_species": mobile_species,

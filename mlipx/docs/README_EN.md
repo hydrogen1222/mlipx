@@ -1065,10 +1065,11 @@ displacements and checked for half-cell ambiguity. Variable-cell trajectories
 are rejected because the current implementation cannot reliably separate
 affine cell deformation from migration. Drift removal is never enabled
 silently: choose `none`, `nonmobile`, or explicit `indices`; the choice is
-recorded in provenance. An ordinary-least-squares slope is added only when
-both `--fit-start-ps` and `--fit-stop-ps` are supplied. It is a linear-window
-diagnostic, not a substitute for a transport estimate with covariance and
-uncertainty.
+recorded in provenance. An ordinary-least-squares slope is fitted over the
+full analysis lag range by default; supply both `--fit-start-ps` and
+`--fit-stop-ps` to restrict it to a linear window. It is a diagnostic, not a
+substitute for a transport estimate with covariance and uncertainty, and the
+default full-range fit is not an automatic diffusive-regime detector.
 
 #### Diffusion and conductivity
 

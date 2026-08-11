@@ -125,8 +125,6 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
                 "mobile_species": "Li",
                 "axes": "x,y,z,xy,xyz",
                 "drift_reference": "none",
-                "fit_start_ps": 0.002,
-                "fit_stop_ps": 0.006,
             },
         )
     )
@@ -134,7 +132,7 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
     assert len(outcome["results"]["lag_time_ps"]) == 4
     output = run / "analysis" / "msd" / outcome["analysis_id"]
     request = json.loads((output / "request.json").read_text(encoding="utf-8"))
-    assert request["task_output_revision"] == 4
+    assert request["task_output_revision"] == 5
     assert (output / "msd.csv").is_file()
     assert (output / "msd.png").is_file()
     assert (output / "msd.svg").is_file()
@@ -149,13 +147,15 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
     assert {"alpha.png", "alpha.svg", "diffusion_fits.csv"} <= set(
         payload["artifacts"]
     )
-    assert payload["results"]["fit_window_ps"] == {"start": 0.002, "stop": 0.006}
+    assert payload["results"]["fit_window_ps"] == {"start": 0.0, "stop": 0.006}
+    assert payload["results"]["fit_window_source"] == "full_trajectory_default"
     with (output / "diffusion_fits.csv").open(
         newline="", encoding="utf-8"
     ) as handle:
         fit_rows = list(csv.DictReader(handle))
     assert [row["axes"] for row in fit_rows] == ["x", "y", "z", "xy", "xyz"]
     assert all("self_diffusion_coefficient_m2_s" in row for row in fit_rows)
+    assert all(row["fit_window_source"] == "full_trajectory_default" for row in fit_rows)
 
 
 def test_kinisi_adapter_matches_official_ase_api() -> None:

@@ -77,9 +77,11 @@ MSD uses unwrapped coordinates. Wrapped fixed-cell trajectories are
 reconstructed with consecutive fractional minimum images and receive an
 unwrap ambiguity diagnostic. Variable-cell transport is unsupported because
 the current contract does not separate affine lattice deformation from atomic
-migration. A simple diffusion fit is produced only when both
-`--fit-start-ps` and `--fit-stop-ps` are supplied; its name and metadata mark it
-as diagnostic, not a covariance-aware publication estimate.
+migration. A simple diffusion fit is produced over the full analysis lag range
+by default. Supply both `--fit-start-ps` and `--fit-stop-ps` to restrict that
+diagnostic fit to an explicit window. Its name and metadata mark it as
+diagnostic, not a covariance-aware publication estimate; the default
+full-range fit is not an automatic diffusive-regime detector.
 
 VACF requires stored velocities and uniform sampling. Positions are not
 differentiated to invent velocities. The optional spectrum uses a one-sided
