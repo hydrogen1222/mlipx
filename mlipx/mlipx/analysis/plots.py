@@ -119,6 +119,8 @@ def plot_msd_alpha(result: dict[str, Any], output_stem: str | Path) -> list[Path
     axis.set_xlabel("Lag time (ps)")
     axis.set_ylabel("Local exponent alpha = d ln(MSD) / d ln(t)")
     _apply_msd_fit_window(axis, result)
+    axis.set_ylim(0.0, 2.0)
+    axis.set_yticks(np.arange(0.0, 2.1, 0.5))
     axis.legend()
     axis.grid(alpha=0.25)
     return _save(fig, output_stem)

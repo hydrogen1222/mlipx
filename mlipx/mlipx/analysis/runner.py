@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 3}
+_TASK_OUTPUT_REVISIONS = {"msd": 4}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:

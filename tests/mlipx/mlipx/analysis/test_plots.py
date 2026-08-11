@@ -42,6 +42,8 @@ def test_plot_msd_alpha_has_all_axes_and_normal_diffusion_reference(
     assert lines[-1].get_label() == "normal diffusion (alpha = 1)"
     np.testing.assert_allclose(lines[-1].get_ydata(), [1.0, 1.0])
     np.testing.assert_allclose(alpha_axis.get_xlim(), [20.0, 180.0])
+    np.testing.assert_allclose(alpha_axis.get_ylim(), [0.0, 2.0])
+    np.testing.assert_allclose(alpha_axis.get_yticks(), [0.0, 0.5, 1.0, 1.5, 2.0])
     assert saved["output_stem"] == tmp_path / "alpha"
     plots._pyplot().close(saved["figure"])
 
