@@ -122,7 +122,7 @@ cd mlipx
 
 ```bash
 uv sync
-uv run mlipx doctor
+uv run mlipx doctor --engine uma --device auto
 ```
 
 以后运行 UMA 时始终使用 `uv run mlipx`：
@@ -141,7 +141,7 @@ uv pip install --no-config --python .venv-mace/bin/python \
   "torch==2.6.0" --index-url https://download.pytorch.org/whl/cu124
 uv pip install --no-config --python .venv-mace/bin/python \
   -e ./mlipx "e3nn==0.4.4" "mace-torch==0.3.16"
-.venv-mace/bin/mlipx doctor
+.venv-mace/bin/mlipx doctor --engine mace --device auto
 ```
 
 运行示例：
@@ -160,7 +160,7 @@ uv pip install --no-config --python .venv-dpa/bin/python \
   "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
 uv pip install --no-config --python .venv-dpa/bin/python \
   -e ./mlipx "deepmd-kit[torch]==3.1.3"
-.venv-dpa/bin/mlipx doctor
+.venv-dpa/bin/mlipx doctor --engine dpa --device auto
 ```
 
 运行 LGPS 等固态电解质时，不要省略正确的模型分支：
@@ -190,6 +190,7 @@ uv pip install --no-config --python .venv-grace/bin/python \
   "nvidia-cudnn-cu12==9.3.0.75"
 .venv-grace/bin/python -c \
   "import tensorflow as tf; print(tf.__version__, tf.config.list_physical_devices('GPU'))"
+.venv-grace/bin/mlipx doctor --engine grace --device auto
 ```
 
 GRACE 的 `--model` 必须指向整个 SavedModel 目录：
@@ -344,7 +345,7 @@ hf download facebook/UMA checkpoints/uma-s-1p2p1.pt --local-dir models/uma
 
 > **不要执行 `uv pip install mace-torch`。** `uv pip` 默认目标就是项目的
 > `.venv`；此时 doctor 虽能看到两个引擎，却会报告
-> `Engine dependencies: incompatible`，MACE 模型也无法加载。
+> `UMA/MACE dependencies: incompatible`，MACE 模型也无法加载。
 
 模型路径通过 `--model`（CLI）、TUI 配置界面或 INCAR 文件中的 `MODEL_PATH` 键指定。
 
@@ -354,7 +355,24 @@ hf download facebook/UMA checkpoints/uma-s-1p2p1.pt --local-dir models/uma
 uv run mlipx doctor
 ```
 
-这会运行全面诊断：Python、PyTorch、CUDA、GPU 兼容性、fairchem-core、mlipx 和模型文件。如果有任何检查失败，它会打印出精确的修复命令。
+不带参数时，`doctor` 只读取包元数据和硬件清单，不导入任何模型后端，因此不会
+顺手初始化 DeepMD、TensorFlow 或 CUDA。要判断一个环境能不能实际启动所选
+后端，必须把准备使用的引擎和设备写清楚：
+
+```bash
+# auto：nvidia-smi 能发现 GPU 时检查 CUDA，否则检查 CPU
+uv run mlipx doctor --engine uma --device auto
+
+# 各隔离环境
+.venv-mace/bin/mlipx doctor --engine mace --device cuda:0
+.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0
+.venv-grace/bin/mlipx doctor --engine grace --device cpu
+```
+
+指定后端后，运行时导入会在隔离子进程中完成；导入错误、CUDA 不可见和
+PyTorch 架构不匹配都会返回非零退出码。纯 CPU 目标不要求 CUDA。可再加
+`--model PATH` 检查路径是否存在以及文件/目录类型是否符合后端；该选项不会
+加载大型模型，所以正式计算前仍需做一次小体系 SP 冒烟测试。
 
 查看完整命令列表：
 ```bash
@@ -584,11 +602,11 @@ result = run_single_point(
 > uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
 >
 > # UMA：始终使用仓库的 uv 环境
-> uv run mlipx doctor
+> uv run mlipx doctor --engine uma --device auto
 > uv run mlipx tui
 >
 > # MACE：始终显式使用 MACE 环境
-> .venv-mace/bin/mlipx doctor
+> .venv-mace/bin/mlipx doctor --engine mace --device auto
 > .venv-mace/bin/mlipx tui
 > ```
 
@@ -651,14 +669,15 @@ uv pip install --no-config --python .venv-grace/bin/python \
 ```bash
 # 恢复 UMA 项目环境；uv 会移除不在 uv.lock 中的 mace-torch
 uv sync
-uv run mlipx doctor       # 此环境中 MACE 应显示未安装，e3nn 应为 0.6.x
+uv run mlipx doctor       # 清单中 MACE 应显示未安装，e3nn 约束应兼容
+uv run mlipx doctor --engine uma --device auto
 
 # 再按上方三条 --python .venv-mace/bin/python 命令创建 MACE 环境
 ```
 >
-> `doctor` 现在会检查已安装发行包的依赖约束；如果同一环境中同时出现
+> `doctor` 会检查已安装发行包的依赖约束；如果同一环境中同时出现
 > `mace-torch`、`fairchem-core` 和不兼容的 e3nn，会明确显示
-> `Engine dependencies: incompatible`。但“包可以 import”仍不等于模型一定
+> `UMA/MACE dependencies: incompatible`。但“后端可以 import”仍不等于模型一定
 > 可加载，因此安装后应按下文执行一次模型冒烟测试。
 
 **MACE CUDA 冒烟测试（正式长 MD 前必须先跑）：**
@@ -1773,7 +1792,7 @@ UMA 的 MD 默认使用 `turbo`，SP/OPT 默认使用 `default`；可以在 TUI 
 ```bash
 uv run mlipx setup      # 检测 GPU 并打印精确的 torch 安装命令
 uv run python -c "import torch; print(torch.__version__, torch.cuda.get_arch_list())"
-uv run mlipx doctor     # 显示 GPU 的 CC 以及 PyTorch 是否支持
+uv run mlipx doctor --engine uma --device cuda:0  # 检查 CC 与 PyTorch 架构
 ```
 
 **解决方案（推荐顺序）：**

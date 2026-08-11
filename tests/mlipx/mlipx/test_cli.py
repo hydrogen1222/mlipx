@@ -372,6 +372,32 @@ def test_template_sp() -> None:
 # doctor / setup smoke (these need additional deps; just check exit)
 # ---------------------------------------------------------------------------
 
+def test_doctor_parser_accepts_engine_device_and_model() -> None:
+    parser = create_parser()
+    args = parser.parse_args(
+        [
+            "doctor",
+            "--engine",
+            "dpa",
+            "--device",
+            "cuda:2",
+            "--model",
+            "model.pt",
+        ]
+    )
+
+    assert args.engine == "dpa"
+    assert args.device == "cuda:2"
+    assert args.model == "model.pt"
+
+
+def test_doctor_parser_rejects_invalid_device() -> None:
+    parser = create_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args(["doctor", "--device", "cuda:bad"])
+    assert exc.value.code == 2
+
+
 def test_doctor_exits_gracefully() -> None:
     # Doctor should not crash even if optional deps are missing.
     rc = main(["doctor"])

@@ -15,6 +15,18 @@ from mlipx.doctor import (
 )
 
 
+def _controlled_environment(monkeypatch, **versions):
+    installed = {"mlipx": "2.0.0", **versions}
+    monkeypatch.setattr(
+        "mlipx.doctor._distribution_version",
+        lambda name: installed.get(name),
+    )
+    monkeypatch.setattr(
+        "mlipx.doctor._installed_dependency_conflicts", lambda names: []
+    )
+    monkeypatch.setattr("mlipx.doctor.metadata.requires", lambda name: [])
+
+
 def test_doctor_runs_without_crashing():
     checks, failures = run_diagnostics()
     assert isinstance(checks, list)
@@ -30,55 +42,149 @@ def test_doctor_format_output():
     checks, _ = run_diagnostics()
     output = format_diagnostics(checks)
     assert "mlipx Environment Diagnostic" in output
+    assert "Inventory complete" in output
     assert isinstance(output, str)
     assert len(output) > 0
 
 
-def test_doctor_with_nonexistent_model():
-    checks, _ = run_diagnostics(model_path="/nonexistent/model.pt")
+def test_doctor_with_nonexistent_model_fails_closed(monkeypatch):
+    _controlled_environment(monkeypatch)
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
+    checks, failures = run_diagnostics(model_path="/nonexistent/model.pt")
     model_check = [c for c in checks if c["name"] == "Model file"]
     assert len(model_check) == 1
-    assert model_check[0]["status"] == "warn"
+    assert model_check[0]["status"] == "fail"
+    assert failures == 1
 
 
-def test_doctor_pre_torch_gives_gpu_specific_guidance(monkeypatch):
-    """When torch is missing but a GPU is detected, doctor must print the
-    GPU-specific torch install command (not a generic 'install torch')."""
-    import builtins  # noqa: PLC0415
+def test_inventory_never_imports_optional_backends(monkeypatch):
+    _controlled_environment(
+        monkeypatch,
+        **{"deepmd-kit": "3.1.3", "tensorpotential": "0.6.0"},
+    )
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
 
-    from mlipx.gpu_setup import GpuInfo  # noqa: PLC0415
+    def unexpected_probe(engine, device, *, framework=None):
+        raise AssertionError("inventory mode must not import a backend")
 
-    real_import = builtins.__import__
+    monkeypatch.setattr("mlipx.doctor._runtime_probe", unexpected_probe)
+    checks, failures = run_diagnostics()
+    names = {c["name"]: c for c in checks}
+    assert names["Engine runtime"]["status"] == "skip"
+    assert names["NVIDIA driver"]["status"] == "skip"
+    assert failures == 0
 
-    def blocked(name, *a, **k):
-        if name == "torch" or name.startswith("torch."):
-            raise ImportError("simulated")
-        return real_import(name, *a, **k)
 
-    monkeypatch.setattr(builtins, "__import__", blocked)
+def test_cpu_target_does_not_require_cuda(monkeypatch):
+    _controlled_environment(monkeypatch, tensorpotential="0.6.0")
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
+    monkeypatch.setattr(
+        "mlipx.doctor._runtime_probe",
+        lambda engine, device, framework=None: {
+            "ok": True,
+            "framework": "tensorflow",
+            "tensorflow_version": "2.20.0",
+            "cuda_available": False,
+            "device_count": 0,
+        },
+    )
+
+    checks, failures = run_diagnostics(engine="grace", device="cpu")
+    names = {c["name"]: c for c in checks}
+
+    assert names["NVIDIA driver"]["status"] == "skip"
+    assert names["Compute device"] == {
+        "name": "Compute device",
+        "value": "CPU",
+        "status": "ok",
+    }
+    assert failures == 0
+
+
+def test_dpa_pb_model_selects_tensorflow_runtime_probe(monkeypatch, tmp_path):
+    _controlled_environment(monkeypatch, **{"deepmd-kit": "3.1.3"})
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
+    model = tmp_path / "legacy.pb"
+    model.write_bytes(b"placeholder")
+    observed = {}
+
+    def fake_probe(engine, device, *, framework=None):
+        observed.update(engine=engine, device=device, framework=framework)
+        return {
+            "ok": True,
+            "framework": "tensorflow",
+            "tensorflow_version": "2.20.0",
+            "cuda_available": False,
+            "device_count": 0,
+        }
+
+    monkeypatch.setattr("mlipx.doctor._runtime_probe", fake_probe)
+
+    _, failures = run_diagnostics(
+        model_path=model,
+        engine="dpa",
+        device="cpu",
+    )
+
+    assert observed == {
+        "engine": "dpa",
+        "device": "cpu",
+        "framework": "tensorflow",
+    }
+    assert failures == 0
+
+
+def test_cuda_target_fails_when_framework_cannot_see_gpu(monkeypatch):
+    from mlipx.gpu_setup import GpuInfo
+
+    _controlled_environment(monkeypatch, **{"mace-torch": "0.3.16", "torch": "2.6.0"})
     monkeypatch.setattr(
         "mlipx.doctor.detect_gpus",
         lambda: [GpuInfo("NVIDIA P104-100", 6, 1, "580.167.08", 8192)],
     )
+    monkeypatch.setattr(
+        "mlipx.doctor._runtime_probe",
+        lambda engine, device, framework=None: {
+            "ok": True,
+            "framework": "torch",
+            "torch_version": "2.6.0+cu124",
+            "cuda_runtime": "12.4",
+            "cuda_available": False,
+            "device_count": 0,
+            "arch_list": [],
+            "gpus": [],
+        },
+    )
 
-    checks, failures = run_diagnostics()
+    checks, failures = run_diagnostics(engine="mace", device="cuda")
+    names = {c["name"]: c for c in checks}
+
+    assert names["Engine runtime"]["status"] == "ok"
+    assert names["CUDA runtime"]["status"] == "fail"
+    assert failures == 1
+
+
+def test_backend_import_failure_is_not_reported_as_installed_runtime(monkeypatch):
+    _controlled_environment(monkeypatch, **{"deepmd-kit": "3.1.3", "torch": "2.10.0"})
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
+    monkeypatch.setattr(
+        "mlipx.doctor._runtime_probe",
+        lambda engine, device, framework=None: {
+            "ok": False,
+            "error_type": "ImportError",
+            "error": "undefined symbol: broken_abi",
+        },
+    )
+
+    checks, failures = run_diagnostics(engine="dpa", device="cpu")
+    runtime = next(c for c in checks if c["name"] == "Engine runtime")
     output = format_diagnostics(checks)
 
-    pt_check = [c for c in checks if c["name"] == "PyTorch"][0]
-    assert pt_check["status"] == "fail"
-    assert "2.6.0+cu124" in pt_check["detail"]
-    assert "uv pip install" in pt_check["detail"]
-    assert "NVIDIA driver" in [c["name"] for c in checks]
-    assert failures >= 1
-    assert "2.6.0+cu124" in output
-
-
-def test_doctor_no_gpu_cpu_guidance(monkeypatch):
-    """No nvidia-smi / no GPU: doctor warns about driver and suggests CPU."""
-    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
-    checks, _ = run_diagnostics()
-    names = {c["name"]: c for c in checks}
-    assert names["NVIDIA driver"]["status"] == "warn"
+    assert runtime["status"] == "fail"
+    assert "broken_abi" in runtime["detail"]
+    assert failures == sum(c["status"] == "fail" for c in checks) == 1
+    assert "1 required check failed" in output
+    assert "2 required checks failed" not in output
 
 
 def test_dependency_conflicts_detect_mace_e3nn_mismatch(monkeypatch):

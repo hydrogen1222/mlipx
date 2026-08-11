@@ -32,7 +32,7 @@ cd mlipx
 
 # Environment 1: UMA
 uv sync
-uv run mlipx doctor
+uv run mlipx doctor --engine uma --device auto
 ```
 
 Each optional engine needs its own Python environment. These directories share
@@ -225,7 +225,9 @@ exact standard VASP XDATCAR layout (unwrapped coordinates).
 | **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
 | **INCAR** | `mlipx run -i INCAR` | VASP-style batch configuration |
 
-Run `mlipx doctor` to diagnose your Python/PyTorch/CUDA setup and check which MLIP engine backends are installed.
+Run `mlipx doctor` for a side-effect-free package inventory. For an actual
+readiness check, select the same engine and device you will use, for example
+`uv run mlipx doctor --engine uma --device cuda:0`.
 
 ---
 

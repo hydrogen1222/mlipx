@@ -34,6 +34,16 @@ from mlipx.config.settings import init_settings_file
 from mlipx.engine import CalculationEngine, EngineConfig
 
 
+def _doctor_device_argument(value: str) -> str:
+    """Argparse validator for doctor device targets, including ``cuda:N``."""
+    normalized = value.strip().lower()
+    if normalized in {"auto", "cpu", "cuda", "gpu"}:
+        return normalized
+    if normalized.startswith("cuda:") and normalized[5:].isdigit():
+        return normalized
+    raise argparse.ArgumentTypeError("device must be auto, cpu, cuda, gpu, or cuda:N")
+
+
 def create_parser() -> argparse.ArgumentParser:
     """Create argument parser with subcommands."""
     parser = argparse.ArgumentParser(
@@ -58,7 +68,7 @@ Examples:
   mlipx batch structures/ --pattern "*.cif" --output results/
 
   # Run environment diagnostic (recommended after install!)
-  mlipx doctor
+  mlipx doctor --engine uma --device auto
 
   # Generate template INCAR
   mlipx template sp
@@ -959,7 +969,26 @@ Examples:
     doctor_parser = subparsers.add_parser(
         "doctor",
         help="Run environment diagnostic checks",
-        description="Check Python, PyTorch, CUDA, GPU compatibility, and model file",
+        description=(
+            "Inventory installed engines without importing them, or validate one "
+            "selected engine/device runtime."
+        ),
+    )
+    doctor_parser.add_argument(
+        "--engine",
+        choices=["auto", "uma", "mace", "dpa", "grace"],
+        default="auto",
+        help=(
+            "Engine to runtime-check. auto (default) performs a side-effect-free "
+            "package inventory only."
+        ),
+    )
+    doctor_parser.add_argument(
+        "--device",
+        type=_doctor_device_argument,
+        default="auto",
+        metavar="DEVICE",
+        help="Target auto, cpu, cuda, gpu, or cuda:N (used with --engine).",
     )
     doctor_parser.add_argument(
         "--model",
@@ -1537,7 +1566,11 @@ def cmd_doctor(args: argparse.Namespace) -> int:
     """Run environment diagnostic checks."""
     from mlipx.doctor import run_diagnostics, format_diagnostics  # noqa: PLC0415
 
-    checks, failures = run_diagnostics(model_path=args.model)
+    checks, failures = run_diagnostics(
+        model_path=args.model,
+        engine=args.engine,
+        device=args.device,
+    )
     print(format_diagnostics(checks))
     return 0 if failures == 0 else 1
 
