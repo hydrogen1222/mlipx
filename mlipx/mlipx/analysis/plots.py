@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 if TYPE_CHECKING:
     from typing import Any
 
@@ -82,9 +84,21 @@ def plot_msd(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
         axis.plot(result["lag_time_ps"], values, label=f"MSD {axes}")
     axis.set_xlabel("Lag time (ps)")
     axis.set_ylabel("MSD (A^2)")
+    _apply_msd_fit_window(axis, result)
     axis.legend()
     axis.grid(alpha=0.25)
     return _save(fig, output_stem)
+
+
+def _apply_msd_fit_window(axis, result: dict[str, Any]) -> None:
+    window = result.get("fit_window_ps")
+    if window is None:
+        return
+    start = float(window["start"])
+    stop = float(window["stop"])
+    if not np.isfinite([start, stop]).all() or start < 0 or stop <= start:
+        raise ValueError("Invalid MSD fit window in plot result")
+    axis.set_xlim(start, stop)
 
 
 def plot_msd_alpha(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
@@ -104,6 +118,7 @@ def plot_msd_alpha(result: dict[str, Any], output_stem: str | Path) -> list[Path
     )
     axis.set_xlabel("Lag time (ps)")
     axis.set_ylabel("Local exponent alpha = d ln(MSD) / d ln(t)")
+    _apply_msd_fit_window(axis, result)
     axis.legend()
     axis.grid(alpha=0.25)
     return _save(fig, output_stem)

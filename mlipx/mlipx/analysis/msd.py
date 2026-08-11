@@ -222,6 +222,13 @@ def diagnostic_linear_diffusion_fit(
         raise ValueError("Invalid diffusion axes")
     if fit_start_ps < 0 or fit_stop_ps <= fit_start_ps:
         raise ValueError("fit_stop_ps must be greater than fit_start_ps >= 0")
+    maximum_lag_ps = float(np.max(lag_ps))
+    tolerance = max(1.0e-12, abs(maximum_lag_ps) * 1.0e-12)
+    if fit_stop_ps > maximum_lag_ps + tolerance:
+        raise ValueError(
+            f"fit_stop_ps {fit_stop_ps:g} exceeds the maximum available lag "
+            f"time {maximum_lag_ps:g} ps"
+        )
     mask = (lag_ps >= fit_start_ps) & (lag_ps <= fit_stop_ps) & np.isfinite(msd_A2)
     if np.count_nonzero(mask) < 3:
         raise ValueError("Diagnostic diffusion fit requires at least three lag points")
@@ -243,12 +250,16 @@ def diagnostic_linear_diffusion_fit(
         "dimensions": dimensions,
         "fit_start_ps": float(fit_start_ps),
         "fit_stop_ps": float(fit_stop_ps),
+        "actual_fit_start_ps": float(x[0]),
+        "actual_fit_stop_ps": float(x[-1]),
         "fit_points": int(np.count_nonzero(mask)),
         "slope_A2_ps": float(slope_A2_ps),
         "intercept_A2": float(intercept_A2),
         "r_squared": 1.0 - residual / total if total > 0 else 1.0,
         "D_diagnostic_m2_s": diffusion_m2_s,
         "D_diagnostic_cm2_s": diffusion_m2_s_to_cm2_s(diffusion_m2_s),
+        "self_diffusion_coefficient_m2_s": diffusion_m2_s,
+        "self_diffusion_coefficient_cm2_s": diffusion_m2_s_to_cm2_s(diffusion_m2_s),
         "mean_log_log_alpha_in_fit": (
             float(np.mean(finite_alpha)) if len(finite_alpha) else None
         ),
@@ -319,6 +330,11 @@ def calculate_msd(
         "msd_z_A2": components[:, 2],
         "msd_by_axes_A2": values,
         "log_log_alpha_by_axes": alpha,
+        "fit_window_ps": (
+            None
+            if fit_start_ps is None or fit_stop_ps is None
+            else {"start": float(fit_start_ps), "stop": float(fit_stop_ps)}
+        ),
         "diagnostic_linear_diffusion_fits": fits,
         "method": f"{method}_windowed_msd",
         "mobile_species": mobile_species,

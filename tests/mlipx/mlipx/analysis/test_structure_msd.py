@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 from ase import Atoms
 
 from mlipx.analysis import TrajectoryDataset
 from mlipx.analysis.msd import (
     calculate_msd,
+    diagnostic_linear_diffusion_fit,
     direct_windowed_msd_components,
     fft_windowed_msd_components,
     unwrap_positions,
@@ -63,6 +65,31 @@ def test_fft_and_direct_windowed_msd_match() -> None:
     direct = direct_windowed_msd_components(walk)
     fft = fft_windowed_msd_components(walk)
     np.testing.assert_allclose(fft, direct, rtol=1e-11, atol=1e-11)
+
+
+def test_linear_msd_fit_known_self_diffusion_coefficient() -> None:
+    lag_time_ps = np.arange(5, dtype=float)
+    msd_xyz_A2 = 6.0 * lag_time_ps
+    fit = diagnostic_linear_diffusion_fit(
+        lag_time_ps,
+        msd_xyz_A2,
+        axes="xyz",
+        fit_start_ps=1.0,
+        fit_stop_ps=3.0,
+    )
+    assert fit["actual_fit_start_ps"] == 1.0
+    assert fit["actual_fit_stop_ps"] == 3.0
+    assert fit["self_diffusion_coefficient_m2_s"] == pytest.approx(1.0e-8)
+    assert fit["self_diffusion_coefficient_cm2_s"] == pytest.approx(1.0e-4)
+
+    with pytest.raises(ValueError, match="exceeds the maximum available lag time"):
+        diagnostic_linear_diffusion_fit(
+            lag_time_ps,
+            msd_xyz_A2,
+            axes="xyz",
+            fit_start_ps=1.0,
+            fit_stop_ps=5.0,
+        )
 
 
 def test_directional_msd_identity() -> None:

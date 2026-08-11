@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 2}
+_TASK_OUTPUT_REVISIONS = {"msd": 3}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
@@ -250,6 +250,39 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             columns[f"msd_{axes}_A2"] = values
             columns[f"alpha_{axes}"] = result["log_log_alpha_by_axes"][axes]
         _write_columns(output_dir / "msd.csv", columns)
+        fits = list(result["diagnostic_linear_diffusion_fits"].values())
+        if fits:
+            _write_columns(
+                output_dir / "diffusion_fits.csv",
+                {
+                    "axes": [fit["axes"] for fit in fits],
+                    "dimensions": [fit["dimensions"] for fit in fits],
+                    "fit_start_ps": [fit["fit_start_ps"] for fit in fits],
+                    "fit_stop_ps": [fit["fit_stop_ps"] for fit in fits],
+                    "actual_fit_start_ps": [
+                        fit["actual_fit_start_ps"] for fit in fits
+                    ],
+                    "actual_fit_stop_ps": [fit["actual_fit_stop_ps"] for fit in fits],
+                    "fit_points": [fit["fit_points"] for fit in fits],
+                    "slope_A2_ps": [fit["slope_A2_ps"] for fit in fits],
+                    "intercept_A2": [fit["intercept_A2"] for fit in fits],
+                    "r_squared": [fit["r_squared"] for fit in fits],
+                    "self_diffusion_coefficient_m2_s": [
+                        fit["self_diffusion_coefficient_m2_s"] for fit in fits
+                    ],
+                    "self_diffusion_coefficient_cm2_s": [
+                        fit["self_diffusion_coefficient_cm2_s"] for fit in fits
+                    ],
+                    "mean_log_log_alpha_in_fit": [
+                        fit["mean_log_log_alpha_in_fit"] for fit in fits
+                    ],
+                    "diffusive_regime_warning": [
+                        fit["diffusive_regime_warning"] for fit in fits
+                    ],
+                    "estimator": [fit["estimator"] for fit in fits],
+                    "publication_grade": [fit["publication_grade"] for fit in fits],
+                },
+            )
         _write_json(
             output_dir / "diagnostics.json",
             {
@@ -258,6 +291,8 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             },
         )
         artifacts.extend(("msd.csv", "diagnostics.json"))
+        if fits:
+            artifacts.append("diffusion_fits.csv")
         artifacts.extend(path.name for path in plot_msd(result, output_dir / "msd"))
         artifacts.extend(
             path.name for path in plot_msd_alpha(result, output_dir / "alpha")

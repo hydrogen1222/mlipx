@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import numpy as np
 import pytest
 from ase import Atoms
@@ -7,6 +9,7 @@ from ase import Atoms
 from mlipx.analysis import TrajectoryDataset, require_analysis, validate_trajectory
 from mlipx.analysis.thermo import thermodynamic_diagnostics
 from mlipx.analysis.validation import InvalidTrajectoryError
+from mlipx.writers.xdatcar import XdatcarWriter
 
 
 def _frames(n: int = 4) -> list[Atoms]:
@@ -31,6 +34,34 @@ def test_uniform_time_axis_is_explicit_and_eligible() -> None:
     assert report.time.uniform is True
     assert report.time.frame_interval_fs == 10
     assert report.eligible_for_msd is True
+
+
+def test_mlipx_xdatcar_is_a_direct_msd_source(tmp_path) -> None:
+    run = tmp_path / "run"
+    vasp = run / "vasp"
+    vasp.mkdir(parents=True)
+    frames = _frames(4)
+    frames[-1].positions[0, 0] = 5.2
+    xdatcar = vasp / "XDATCAR"
+    XdatcarWriter().write(xdatcar, frames)
+    (run / "artifacts.json").write_text(
+        json.dumps(
+            {
+                "trajectory": {
+                    "frame_interval_fs": 10.0,
+                    "positions_convention": "unwrapped",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    dataset = TrajectoryDataset.load(xdatcar)
+    assert dataset.metadata["source_format"] == "xdatcar"
+    assert dataset.frame_interval_fs == 10.0
+    assert dataset.positions_convention == "unwrapped"
+    assert dataset.positions[-1, 0, 0] == pytest.approx(5.2)
+    assert validate_trajectory(dataset).eligible_for_msd is True
 
 
 def test_nonuniform_time_is_not_replaced_by_median() -> None:
