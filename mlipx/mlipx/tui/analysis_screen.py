@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -40,6 +41,25 @@ class AnalysisScreen(Screen):
                     "default; no automatic equilibration detection is performed.",
                     id="analysis-range-summary",
                 )
+                yield Label(
+                    "Positions Convention Override:",
+                    id="analysis-positions-convention-label",
+                )
+                yield Select(
+                    options=[
+                        ("Auto / metadata", "auto"),
+                        ("wrapped", "wrapped"),
+                        ("unwrapped", "unwrapped"),
+                        ("unknown", "unknown"),
+                    ],
+                    value="auto",
+                    id="analysis-positions-convention-select",
+                )
+                yield Label(
+                    "Frame Interval Override (fs):",
+                    id="analysis-frame-interval-label",
+                )
+                yield Input(value="", id="analysis-frame-interval-input")
                 yield Label("Analysis Task:")
                 yield Select(
                     options=[
@@ -102,6 +122,26 @@ class AnalysisScreen(Screen):
                 )
                 yield Label("Fit Start (ps):", id="analysis-fit-label")
                 yield Input(value="", id="analysis-fit-input")
+                yield Label(
+                    "Lag Step (ps; blank = kinisi default):",
+                    id="analysis-lag-step-label",
+                )
+                yield Input(value="", id="analysis-lag-step-input")
+                yield Label(
+                    "Lag Stop (ps; blank = kinisi default):",
+                    id="analysis-lag-stop-label",
+                )
+                yield Input(value="", id="analysis-lag-stop-input")
+                yield Label(
+                    "Temperature (K; blank = metadata):",
+                    id="analysis-temperature-label",
+                )
+                yield Input(value="", id="analysis-temperature-input")
+                yield Horizontal(
+                    Label("Collective Conductivity:"),
+                    Switch(value=False, id="analysis-collective-switch"),
+                    id="analysis-collective-row",
+                )
                 yield Label("kinisi Random Seed:", id="analysis-seed-label")
                 yield Input(value="0", id="analysis-seed-input")
 
@@ -138,6 +178,16 @@ class AnalysisScreen(Screen):
     def _update_task_fields(self, task: str) -> None:
         ranged = task not in {"validate", "transport", "electrolyte"}
         self.query_one("#analysis-equilibration-row").display = ranged
+        source_overrides = task in {"validate", "msd", "transport"}
+        self._set_display(
+            (
+                "#analysis-positions-convention-label",
+                "#analysis-positions-convention-select",
+                "#analysis-frame-interval-label",
+                "#analysis-frame-interval-input",
+            ),
+            source_overrides,
+        )
         mobile = task in {
             "msd",
             "transport",
@@ -180,6 +230,13 @@ class AnalysisScreen(Screen):
                 "#analysis-charge-input",
                 "#analysis-fit-label",
                 "#analysis-fit-input",
+                "#analysis-lag-step-label",
+                "#analysis-lag-step-input",
+                "#analysis-lag-stop-label",
+                "#analysis-lag-stop-input",
+                "#analysis-temperature-label",
+                "#analysis-temperature-input",
+                "#analysis-collective-row",
                 "#analysis-seed-label",
                 "#analysis-seed-input",
             ),
@@ -212,6 +269,22 @@ class AnalysisScreen(Screen):
 
     def _parameters(self, task: str) -> dict[str, Any]:
         parameters: dict[str, Any] = {}
+        if task in {"validate", "msd", "transport"}:
+            convention = str(
+                self.query_one(
+                    "#analysis-positions-convention-select", Select
+                ).value
+            )
+            if convention != "auto":
+                parameters["positions_convention"] = convention
+            frame_interval = self.query_one(
+                "#analysis-frame-interval-input", Input
+            ).value.strip()
+            if frame_interval:
+                value = float(frame_interval)
+                if not math.isfinite(value) or value <= 0:
+                    raise ValueError("Frame interval must be positive")
+                parameters["frame_interval_fs"] = value
         if task not in {"validate", "transport", "electrolyte"}:
             parameters["include_equilibration"] = self.query_one(
                 "#analysis-include-equilibration", Switch
@@ -248,8 +321,42 @@ class AnalysisScreen(Screen):
             fit = self.query_one("#analysis-fit-input", Input).value.strip()
             if not charge or not fit:
                 raise ValueError("Transport requires explicit charge and fit start")
-            parameters["ionic_charge_e"] = float(charge)
-            parameters["fit_start_ps"] = float(fit)
+            charge_value = float(charge)
+            fit_value = float(fit)
+            if not math.isfinite(charge_value) or charge_value == 0:
+                raise ValueError("Ionic charge must be finite and non-zero")
+            if not math.isfinite(fit_value) or fit_value < 0:
+                raise ValueError("Fit start must be finite and non-negative")
+            parameters["ionic_charge_e"] = charge_value
+            parameters["fit_start_ps"] = fit_value
+            lag_step = self.query_one("#analysis-lag-step-input", Input).value.strip()
+            lag_stop = self.query_one("#analysis-lag-stop-input", Input).value.strip()
+            if bool(lag_step) != bool(lag_stop):
+                raise ValueError(
+                    "Transport lag step and lag stop must be provided together"
+                )
+            if lag_step:
+                parameters["lag_step_ps"] = float(lag_step)
+                parameters["lag_stop_ps"] = float(lag_stop)
+                if (
+                    not math.isfinite(parameters["lag_step_ps"])
+                    or not math.isfinite(parameters["lag_stop_ps"])
+                    or parameters["lag_step_ps"] <= 0
+                    or parameters["lag_stop_ps"] <= 0
+                ):
+                    raise ValueError("Transport lag step and lag stop must be positive")
+            temperature = self.query_one(
+                "#analysis-temperature-input", Input
+            ).value.strip()
+            if temperature:
+                parameters["temperature_K"] = float(temperature)
+                if not math.isfinite(parameters["temperature_K"]) or parameters[
+                    "temperature_K"
+                ] <= 0:
+                    raise ValueError("Temperature must be positive")
+            parameters["collective_conductivity"] = self.query_one(
+                "#analysis-collective-switch", Switch
+            ).value
             parameters["random_seed"] = int(
                 self.query_one("#analysis-seed-input", Input).value
             )

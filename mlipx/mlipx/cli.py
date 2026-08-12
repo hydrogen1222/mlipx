@@ -1642,6 +1642,50 @@ def _parse_index_list(value: str | None) -> list[int] | None:
     return parsed
 
 
+def _print_transport_summary(results: dict) -> None:
+    """Print a compact, human-readable transport posterior summary."""
+
+    tracer = results.get("tracer_diffusion") or {}
+    d_post = tracer.get("D_posterior_m2_s") or {}
+    lag = tracer.get("lag_grid") or {}
+    ne = results.get("nernst_einstein") or {}
+    sigma = ne.get("sigma_NE_tracer_posterior_mS_cm") or {}
+    print("Tracer diffusion:")
+    d_mean = d_post.get("mean")
+    d_std = d_post.get("std")
+    d_ci = d_post.get("credible_interval_95") or [None, None]
+    if d_mean is not None:
+        print(f"  D = {d_mean:.6e} m^2/s")
+    if d_std is not None:
+        print(f"  posterior SD = {d_std:.6e} m^2/s")
+    if d_ci[0] is not None and d_ci[1] is not None:
+        print(f"  95% credible interval = [{d_ci[0]:.6e}, {d_ci[1]:.6e}] m^2/s")
+    fit_start = tracer.get("fit_start_ps")
+    fit_stop = tracer.get("fit_stop_ps")
+    if fit_start is not None and fit_stop is not None:
+        print("Fit window:")
+        print(f"  {fit_start:g} - {fit_stop:g} ps")
+    mode = lag.get("mode")
+    n_total = lag.get("n_lag_points_total")
+    nominal = lag.get("nominal_step_ps")
+    if nominal is None:
+        nominal = lag.get("requested_step_ps")
+    print("Kinisi lag grid:")
+    if mode == "custom" and nominal is not None:
+        print(f"  custom, nominal step {nominal:g} ps, {n_total} total points")
+    else:
+        print(f"  {mode}, {n_total} total points")
+    sigma_mean = sigma.get("mean")
+    sigma_ci = sigma.get("credible_interval_95") or [None, None]
+    if sigma_mean is not None:
+        print("Nernst-Einstein tracer conductivity:")
+        print(f"  sigma_NE = {sigma_mean:.6e} mS/cm")
+        if sigma_ci[0] is not None and sigma_ci[1] is not None:
+            print(
+                f"  95% credible interval = [{sigma_ci[0]:.6e}, {sigma_ci[1]:.6e}] mS/cm"
+            )
+
+
 def cmd_analyze(args: argparse.Namespace) -> int:
     """Execute one explicit Analysis v2 subcommand."""
 
@@ -1710,6 +1754,8 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         print(f"VACF eligible: {result.get('eligible_for_vacf')}")
         for warning in result.get("warnings", []):
             print(f"WARNING: {warning}")
+    elif args.analysis_task == "transport":
+        _print_transport_summary(outcome.get("results") or {})
     return 0
 
 

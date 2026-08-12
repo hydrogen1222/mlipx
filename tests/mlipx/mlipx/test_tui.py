@@ -37,12 +37,100 @@ async def test_analysis_screen_progressive_disclosure() -> None:
         assert screen.query_one("#analysis-mobile-input").display is True
         assert screen.query_one("#analysis-drift-select").display is True
         assert screen.query_one("#analysis-charge-input").display is True
+        assert screen.query_one("#analysis-lag-step-input").display is True
+        assert screen.query_one("#analysis-lag-stop-input").display is True
+        assert screen.query_one("#analysis-temperature-input").display is True
+        assert screen.query_one("#analysis-collective-switch").display is True
+        assert screen.query_one("#analysis-frame-interval-input").display is True
         assert screen.query_one("#analysis-rdf-center-input").display is False
+
+        screen.query_one("#analysis-task-select").value = "rdf"
+        await pilot.pause()
+        assert screen.query_one("#analysis-lag-step-input").display is False
+        assert screen.query_one("#analysis-temperature-input").display is False
+        assert screen.query_one("#analysis-frame-interval-input").display is False
 
         screen.query_one("#analysis-task-select").value = "electrolyte"
         await pilot.pause()
         assert screen.query_one("#analysis-sites-input").display is True
         assert screen.query_one("#analysis-charge-input").display is False
+        assert screen.query_one("#analysis-lag-step-input").display is False
+        assert screen.query_one("#analysis-frame-interval-input").display is False
+
+
+@pytest.mark.asyncio()
+async def test_analysis_transport_parameters_include_lag_and_source_overrides() -> None:
+    app = MlipxApp()
+    async with app.run_test(size=(100, 100)) as pilot:
+        screen = AnalysisScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#analysis-task-select").value = "transport"
+        await pilot.pause()
+
+        screen.query_one("#analysis-drift-select").value = "nonmobile"
+        screen.query_one("#analysis-axes-input").value = "xyz"
+        screen.query_one("#analysis-charge-input").value = "1"
+        screen.query_one("#analysis-fit-input").value = "40"
+        screen.query_one("#analysis-lag-step-input").value = "2"
+        screen.query_one("#analysis-lag-stop-input").value = "200"
+        screen.query_one("#analysis-temperature-input").value = "700"
+        screen.query_one("#analysis-collective-switch").value = True
+        screen.query_one("#analysis-positions-convention-select").value = "wrapped"
+        screen.query_one("#analysis-frame-interval-input").value = "10"
+        parameters = screen._parameters("transport")
+
+    assert parameters == {
+        "mobile_species": "Li",
+        "drift_reference": "nonmobile",
+        "dimensions": "xyz",
+        "ionic_charge_e": 1.0,
+        "fit_start_ps": 40.0,
+        "lag_step_ps": 2.0,
+        "lag_stop_ps": 200.0,
+        "temperature_K": 700.0,
+        "collective_conductivity": True,
+        "positions_convention": "wrapped",
+        "frame_interval_fs": 10.0,
+        "random_seed": 0,
+    }
+
+
+@pytest.mark.asyncio()
+async def test_analysis_transport_blank_overrides_are_omitted() -> None:
+    app = MlipxApp()
+    async with app.run_test(size=(100, 100)) as pilot:
+        screen = AnalysisScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#analysis-task-select").value = "transport"
+        await pilot.pause()
+        screen.query_one("#analysis-charge-input").value = "1"
+        screen.query_one("#analysis-fit-input").value = "40"
+        parameters = screen._parameters("transport")
+
+    assert "positions_convention" not in parameters
+    assert "frame_interval_fs" not in parameters
+    assert "temperature_K" not in parameters
+
+
+@pytest.mark.asyncio()
+async def test_analysis_transport_lag_pair_validation() -> None:
+    app = MlipxApp()
+    async with app.run_test(size=(100, 100)) as pilot:
+        screen = AnalysisScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one("#analysis-task-select").value = "transport"
+        await pilot.pause()
+        screen.query_one("#analysis-charge-input").value = "1"
+        screen.query_one("#analysis-fit-input").value = "40"
+        screen.query_one("#analysis-lag-step-input").value = "2"
+        with pytest.raises(
+            ValueError,
+            match="Transport lag step and lag stop must be provided together",
+        ):
+            screen._parameters("transport")
 
 
 @pytest.mark.asyncio()

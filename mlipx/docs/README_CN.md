@@ -1058,6 +1058,26 @@ kinisi 会输出后验均值、标准差和 95% 区间，并同时记录 m²/s �
 `σ = n(ze)²D/(kBT)`，它不等同于考虑相关运动后的实验电导率。只有明确加上
 `--collective-conductivity` 才会额外计算集体量，软件也不会自动给出 Haven 比。
 
+Nernst–Einstein 输出现在还包含 S/m、S/cm 和 mS/cm 三种单位的后验摘要。这只是
+在固定数密度、电荷、体积和温度条件下，对 kinisi 示踪扩散后验的线性传播，
+不是总物理不确定度；不包含模型、有限尺寸、重复轨迹、温度、体积、
+Nernst–Einstein 近似和离子相关运动的不确定度。旧的 `sigma_NE_tracer_*`
+标量字段仍保留，并等于相应后验均值。
+
+kinisi 的 ASE 后端会从周期/缩放坐标重新构造位移。对于 exact unwrapped 源，
+mlipx 在调用 kinisi 前逐个比较保存帧位移和 ASE 最小镜像重建结果；如果会丢失
+image history，就直接拒绝分析。通过检查时结果也会明确记录：重建等价，但
+kinisi 并没有直接消费 exact image counters。
+
+成功的 transport 还会在 `kinisi_arrays.npz` 旁写出
+`transport_summary.csv`、`transport_msd.png` 和 `transport_msd.svg`；CLI 会直接
+打印扩散后验、95% credible interval、拟合区间、lag 网格和
+Nernst–Einstein 电导率。优先使用 `mlipx analyze RUN transport ...`，这样程序可
+从任务目录读取时间、保存步长、坐标约定、production 阶段和温度。外部轨迹只有
+在确实知道时才填写 `--positions-convention`、`--frame-interval-fs` 和
+`--temperature-K`。当前 LGPS 使用的 `2 ps` 是经过灵敏度比较后的工作参数，
+不是所有材料的通用默认值。
+
 多个独立温度的扩散结果可用 `arrhenius` 拟合
 `ln D = ln D₀ - Eₐ/(kBT)`。建议至少使用 3 个温度点；2 点只会给出警告，无法
 检验线性。若提供 `--diffusivity-std`，拟合会用近似

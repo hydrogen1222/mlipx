@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 
+import mlipx.analysis.transport as transport_module
 from mlipx.analysis import TrajectoryDataset
 from mlipx.analysis.arrhenius import fit_arrhenius
 from mlipx.analysis.msd import calculate_msd
@@ -14,8 +15,11 @@ from mlipx.analysis.spectral import (
     one_sided_cosine_taper,
     velocity_spectrum,
 )
-from mlipx.analysis.transport import nernst_einstein_tracer_conductivity
-from mlipx.analysis.units import BOLTZMANN_J_K, ELEMENTARY_CHARGE_C
+from mlipx.analysis.transport import (
+    kinisi_transport,
+    nernst_einstein_tracer_conductivity,
+)
+from mlipx.analysis.units import BOLTZMANN_J_K, ELEMENTARY_CHARGE_C, S_M_TO_MS_CM
 
 
 def test_nernst_einstein_units_and_charge_squared() -> None:
@@ -171,3 +175,126 @@ def test_velocity_spectrum_retains_negative_estimates() -> None:
     )
     assert result["negative_fraction"] > 0
     assert np.min(result["spectrum"]) < 0
+
+
+def _ne_posterior_dataset() -> TrajectoryDataset:
+    n_frames = 140
+    positions = np.zeros((n_frames, 2, 3), dtype=float)
+    positions[:, 0, 0] = np.arange(n_frames, dtype=float) * 0.01
+    frames = [
+        Atoms("LiS", positions=frame, cell=[100, 100, 100], pbc=True)
+        for frame in positions
+    ]
+    return TrajectoryDataset.from_frames(
+        frames,
+        times_fs=np.arange(n_frames, dtype=float) * 2.0,
+        positions_convention="unwrapped",
+        md_timestep_fs=0.5,
+        frame_stride_steps=4,
+    )
+
+
+def _run_ne_transport(monkeypatch, *, ionic_charge_e: float) -> dict:
+    sc = pytest.importorskip("scipp")
+
+    class FakeDiffusionAnalyzer:
+        """Returns a fixed D posterior [1, 2, 3, 4] x 1e-10 m^2/s."""
+
+        def __class_getitem__(cls, item):
+            return cls
+
+        @classmethod
+        def from_ase(cls, **kwargs):
+            analyzer = cls()
+            analyzer.dt = kwargs.get("dt")
+            return analyzer
+
+        def diffusion(self, *_args, **_kwargs):
+            n_points = self.dt.shape[0]
+            self.msd = sc.array(
+                dims=["time interval"],
+                values=np.arange(1, n_points + 1, dtype=float),
+                variances=np.ones(n_points),
+                unit="angstrom^2",
+            )
+            self.D = sc.array(
+                dims=["sample"],
+                values=np.asarray([1.0, 2.0, 3.0, 4.0]) * 1.0e-10,
+                unit="m^2/s",
+            )
+
+    monkeypatch.setattr(
+        transport_module,
+        "_require_kinisi",
+        lambda: (sc, FakeDiffusionAnalyzer, FakeDiffusionAnalyzer, "2.1.0"),
+    )
+    return kinisi_transport(
+        _ne_posterior_dataset(),
+        mobile_species="Li",
+        ionic_charge_e=ionic_charge_e,
+        fit_start_ps=0.0,
+        lag_step_ps=0.02,
+        lag_stop_ps=0.12,
+        temperature_K=600.0,
+    )
+
+
+def test_nernst_einstein_posterior_is_linear_in_d(monkeypatch) -> None:
+    """6.1: sigma_NE posterior is an exact linear transform of the D posterior."""
+
+    result = _run_ne_transport(monkeypatch, ionic_charge_e=1)
+    d_posterior = result["tracer_diffusion"]["D_posterior_m2_s"]
+    ne = result["nernst_einstein"]
+    sigma = ne["sigma_NE_tracer_posterior_mS_cm"]
+    # The legacy mS/cm scalar is factor * D_mean * S_M_TO_MS_CM, so the ratio
+    # sigma/D is the constant linear factor (including the unit conversion).
+    ratio = ne["sigma_NE_tracer_mS_cm"] / d_posterior["mean"]
+    assert sigma["mean"] == pytest.approx(ratio * d_posterior["mean"])
+    assert sigma["std"] == pytest.approx(ratio * d_posterior["std"])
+    assert sigma["median"] == pytest.approx(ratio * d_posterior["median"])
+    assert sigma["credible_interval_95"][0] == pytest.approx(
+        ratio * d_posterior["credible_interval_95"][0]
+    )
+    assert sigma["credible_interval_95"][1] == pytest.approx(
+        ratio * d_posterior["credible_interval_95"][1]
+    )
+    assert sigma["posterior_samples"] == d_posterior["posterior_samples"] == 4
+    # S/m and S/cm posteriors are consistent unit conversions of S/m samples.
+    assert ne["sigma_NE_tracer_posterior_S_cm"]["mean"] == pytest.approx(
+        sigma["mean"] / S_M_TO_MS_CM * 1.0e-2
+    )
+
+
+def test_nernst_einstein_posterior_scales_with_charge_squared(monkeypatch) -> None:
+    """6.2: z=2 gives exactly 4x the monovalent posterior conductivity."""
+
+    mono = _run_ne_transport(monkeypatch, ionic_charge_e=1)
+    divalent = _run_ne_transport(monkeypatch, ionic_charge_e=2)
+    mono_mean = mono["nernst_einstein"]["sigma_NE_tracer_posterior_mS_cm"]["mean"]
+    div_mean = divalent["nernst_einstein"]["sigma_NE_tracer_posterior_mS_cm"]["mean"]
+    assert div_mean == pytest.approx(4.0 * mono_mean)
+    # The full posterior scales, not only the mean.
+    mono_ci = mono["nernst_einstein"]["sigma_NE_tracer_posterior_mS_cm"][
+        "credible_interval_95"
+    ]
+    div_ci = divalent["nernst_einstein"]["sigma_NE_tracer_posterior_mS_cm"][
+        "credible_interval_95"
+    ]
+    assert div_ci[0] == pytest.approx(4.0 * mono_ci[0])
+    assert div_ci[1] == pytest.approx(4.0 * mono_ci[1])
+
+
+def test_nernst_einstein_legacy_scalar_equals_posterior_mean(monkeypatch) -> None:
+    """6.3: backward-compatible scalar fields equal the posterior means."""
+
+    result = _run_ne_transport(monkeypatch, ionic_charge_e=1)
+    ne = result["nernst_einstein"]
+    assert ne["sigma_NE_tracer_S_m"] == pytest.approx(
+        ne["sigma_NE_tracer_posterior_S_m"]["mean"]
+    )
+    assert ne["sigma_NE_tracer_S_cm"] == pytest.approx(
+        ne["sigma_NE_tracer_posterior_S_cm"]["mean"]
+    )
+    assert ne["sigma_NE_tracer_mS_cm"] == pytest.approx(
+        ne["sigma_NE_tracer_posterior_mS_cm"]["mean"]
+    )

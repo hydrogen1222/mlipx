@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from ase import Atoms
+from ase.geometry import find_mic
 
 from mlipx.analysis.msd import unwrap_positions
 from mlipx.analysis.units import (
@@ -31,6 +32,11 @@ if TYPE_CHECKING:
 DEFAULT_MAX_NATIVE_KINISI_LAG_POINTS = 1000
 _FRAME_OFFSET_ATOL = 1.0e-8
 _FRAME_OFFSET_RTOL = 1.0e-9
+# An exact unwrapped displacement and its periodic minimum-image
+# reconstruction agree to ~1e-12 A when no image crossing occurs; a real
+# crossing differs by ~half a cell. 1e-6 A sits safely above roundoff and
+# well below any physical image loss.
+_KINISI_RECONSTRUCTION_ATOL_A = 1.0e-6
 
 
 def particle_number_density_m3(
@@ -186,10 +192,13 @@ def _resolve_kinisi_lag_grid(
             "lag_times_fs": None,
             "requested_step_ps": None,
             "requested_stop_ps": None,
+            "nominal_step_ps": None,
             "actual_step_ps": None,
             "actual_stop_ps": None,
             "n_lag_points": None,
             "fit_start_frame_index": fit_start_frames,
+            "fit_start_inserted": None,
+            "is_uniform_grid": None,
             "estimated_n_lag_points": estimated_native_lag_points,
             "frame_interval_ps": interval_ps,
         }
@@ -234,30 +243,41 @@ def _resolve_kinisi_lag_grid(
     if fit_start_frames < 0:
         raise ValueError("fit_start_ps must map to a non-negative frame offset")
 
-    lag_indices = np.arange(
+    base_indices = np.arange(
         step_frames,
         stop_frames + 1,
         step_frames,
         dtype=int,
     )
-    if fit_start_frames > 0 and fit_start_frames not in lag_indices:
-        lag_indices = np.concatenate((lag_indices, np.asarray([fit_start_frames])))
+    fit_start_inserted = bool(
+        fit_start_frames > 0 and fit_start_frames not in base_indices
+    )
+    if fit_start_inserted:
+        lag_indices = np.concatenate(
+            (base_indices, np.asarray([fit_start_frames]))
+        )
         lag_indices.sort()
+    else:
+        lag_indices = base_indices
     lag_indices = np.unique(lag_indices)
     if not len(lag_indices):
         raise ValueError("The custom lag grid contains no positive lag points")
     lag_times_fs = lag_indices.astype(float) * frame_interval_fs
     actual_stop_ps = float(lag_times_fs[-1] / 1000.0)
+    is_uniform = not fit_start_inserted
     return {
         "mode": "custom",
         "lag_frame_indices": lag_indices,
         "lag_times_fs": lag_times_fs,
         "requested_step_ps": float(lag_step_ps),
         "requested_stop_ps": float(lag_stop_ps),
-        "actual_step_ps": float(lag_step_ps),
+        "nominal_step_ps": float(lag_step_ps),
+        "actual_step_ps": float(lag_step_ps) if is_uniform else None,
         "actual_stop_ps": actual_stop_ps,
         "n_lag_points": int(len(lag_indices)),
         "fit_start_frame_index": fit_start_frames,
+        "fit_start_inserted": fit_start_inserted,
+        "is_uniform_grid": is_uniform,
         "estimated_n_lag_points": estimated_native_lag_points,
         "frame_interval_ps": interval_ps,
     }
@@ -304,20 +324,95 @@ def _kinisi_frames_and_indices(
     return frames, local_mobile, reference
 
 
+def _validate_kinisi_periodic_reconstruction(
+    dataset: TrajectoryDataset,
+    unwrap_diagnostics: dict[str, Any],
+) -> dict[str, Any]:
+    """Record kinisi backend position semantics; fail closed on image loss.
+
+    kinisi's ASE backend reconstructs displacements from wrapped/scaled
+    periodic coordinates, so exact unwrapped image counters are never
+    consumed directly.  For an unwrapped source we verify that the periodic
+    minimum-image reconstruction of every saved-frame displacement equals the
+    exact displacement; otherwise exact image history would be lost and
+    transport must be refused.  Wrapped sources carry no exact image counter,
+    so only the heuristic unwrap safety ratio (applied by the caller) is
+    available and the reconstruction equivalence is reported as null.
+    """
+
+    convention = dataset.positions_convention
+    if convention == "unwrapped":
+        positions = dataset.positions
+        if positions.shape[0] < 2:
+            raise UnsupportedAnalysisError(
+                "Transport requires at least two saved frames to reconstruct "
+                "displacements."
+            )
+        exact_steps = np.diff(positions, axis=0)
+        cell = np.asarray(dataset.cells[0], dtype=float)
+        pbc = np.asarray(dataset.pbc, dtype=bool)
+        flat = np.asarray(exact_steps, dtype=float).reshape(-1, 3)
+        mic_flat, _ = find_mic(flat, cell, pbc=pbc)
+        mic_steps = mic_flat.reshape(exact_steps.shape)
+        differences = np.linalg.norm(exact_steps - mic_steps, axis=-1)
+        max_difference = float(np.max(differences)) if differences.size else 0.0
+        n_intervals = int(exact_steps.shape[0])
+        if max_difference > _KINISI_RECONSTRUCTION_ATOL_A:
+            raise UnsupportedAnalysisError(
+                "The source contains exact unwrapped image information, but "
+                "kinisi's ASE backend reconstructs periodic displacements from "
+                "wrapped/scaled coordinates. At least one saved-frame "
+                "displacement is not equal to its minimum-image reconstruction, "
+                "so exact image history would be lost.\n\n"
+                "Use a denser saved trajectory or a future exact-displacement "
+                "transport backend. Native mlipx MSD can still use the exact "
+                "unwrapped coordinates."
+            )
+        return {
+            "source_positions_convention": "unwrapped",
+            "backend_input": "periodic ASE frames",
+            "backend_reconstruction": "kinisi periodic displacement reconstruction",
+            "exact_unwrapped_preserved_directly": False,
+            "exact_unwrapped_reconstruction_equivalent": True,
+            "checked_saved_intervals": n_intervals,
+            "maximum_exact_vs_mic_difference_A": max_difference,
+        }
+    if convention != "wrapped":
+        raise UnsupportedAnalysisError(
+            "Kinisi transport requires an explicit wrapped or unwrapped "
+            "position convention."
+        )
+    return {
+        "source_positions_convention": "wrapped",
+        "backend_input": "wrapped/scaled periodic coordinates",
+        "backend_reconstruction": "kinisi periodic displacement reconstruction",
+        "exact_unwrapped_preserved_directly": False,
+        "exact_unwrapped_reconstruction_equivalent": None,
+        "wrapped_source_safety": unwrap_diagnostics.get("unwrap_safety_level"),
+    }
+
+
+def _numeric_sample_summary(values: np.ndarray, *, unit: str) -> dict[str, Any]:
+    """Posterior summary (mean/std/median/95% CrI) for a numeric sample array."""
+
+    flat = np.asarray(values, dtype=float).reshape(-1)
+    return {
+        "unit": unit,
+        "mean": float(np.mean(flat)),
+        "std": float(np.std(flat, ddof=1)) if len(flat) > 1 else 0.0,
+        "median": float(np.median(flat)),
+        "credible_interval_95": [
+            float(np.quantile(flat, 0.025)),
+            float(np.quantile(flat, 0.975)),
+        ],
+        "posterior_samples": int(len(flat)),
+    }
+
+
 def _sample_summary(variable, *, target_unit: str) -> dict[str, Any]:
     converted = variable.to(unit=target_unit)
-    values = np.asarray(converted.values, dtype=float).reshape(-1)
-    return {
-        "unit": target_unit,
-        "mean": float(np.mean(values)),
-        "std": float(np.std(values, ddof=1)) if len(values) > 1 else 0.0,
-        "median": float(np.median(values)),
-        "credible_interval_95": [
-            float(np.quantile(values, 0.025)),
-            float(np.quantile(values, 0.975)),
-        ],
-        "posterior_samples": int(len(values)),
-    }
+    values = np.asarray(converted.values, dtype=float)
+    return _numeric_sample_summary(values, unit=target_unit)
 
 
 def _production_temperature(
@@ -394,6 +489,9 @@ def kinisi_transport(
             "exceeds 0.8. Save frames more frequently or provide exact unwrapped "
             "positions/image counters."
         )
+    position_semantics = _validate_kinisi_periodic_reconstruction(
+        view, unwrap_diagnostics
+    )
     temperature, temperature_source = _production_temperature(view, temperature_K)
     if ionic_charge_e is None:
         raise ValueError(
@@ -453,6 +551,9 @@ def kinisi_transport(
     analyzer.diffusion(start_dt, **mcmc)
     diffusion_m2_s = _sample_summary(analyzer.D, target_unit="m^2/s")
     diffusion_cm2_s = _sample_summary(analyzer.D, target_unit="cm^2/s")
+    d_samples_m2_s = np.asarray(
+        analyzer.D.to(unit="m^2/s").values, dtype=float
+    ).reshape(-1)
     lag_time_ps = np.asarray(analyzer.dt.to(unit="ps").values, dtype=float)
     n_lag_points_total = int(len(lag_time_ps))
     fit_mask = lag_time_ps >= float(fit_start_ps)
@@ -466,11 +567,14 @@ def kinisi_transport(
         "mode": lag_grid["mode"],
         "requested_step_ps": lag_grid["requested_step_ps"],
         "requested_stop_ps": lag_grid["requested_stop_ps"],
+        "nominal_step_ps": lag_grid["nominal_step_ps"],
         "actual_step_ps": lag_grid["actual_step_ps"],
         "actual_min_ps": float(lag_time_ps[0]),
         "actual_max_ps": actual_fit_stop_ps,
         "n_lag_points_total": n_lag_points_total,
         "n_lag_points_in_fit": n_lag_points_in_fit,
+        "fit_start_inserted": lag_grid["fit_start_inserted"],
+        "is_uniform_grid": lag_grid["is_uniform_grid"],
         "frame_interval_ps": float(view.frame_interval_fs / 1000.0),
     }
     if lag_grid["mode"] == "kinisi_default":
@@ -483,6 +587,16 @@ def kinisi_transport(
         tracer_diffusion_m2_s=diffusion_m2_s["mean"],
         temperature_K=temperature,
         ionic_charge_e=ionic_charge_e,
+    )
+    charge_C = float(ionic_charge_e) * ELEMENTARY_CHARGE_C
+    ne_factor = number_density * charge_C**2 / (BOLTZMANN_J_K * temperature)
+    sigma_samples_S_m = ne_factor * d_samples_m2_s
+    sigma_ne_posterior_S_m = _numeric_sample_summary(sigma_samples_S_m, unit="S/m")
+    sigma_ne_posterior_S_cm = _numeric_sample_summary(
+        sigma_samples_S_m * S_M_TO_S_CM, unit="S/cm"
+    )
+    sigma_ne_posterior_mS_cm = _numeric_sample_summary(
+        sigma_samples_S_m * S_M_TO_MS_CM, unit="mS/cm"
     )
     result: dict[str, Any] = {
         "mobile_species": mobile_species,
@@ -507,6 +621,16 @@ def kinisi_transport(
             "definition": "sigma_NE_tracer = n (z e)^2 D_tracer / (k_B T)",
             "ionic_charge_e": float(ionic_charge_e),
             **nernst_einstein,
+            "sigma_NE_tracer_posterior_S_m": sigma_ne_posterior_S_m,
+            "sigma_NE_tracer_posterior_S_cm": sigma_ne_posterior_S_cm,
+            "sigma_NE_tracer_posterior_mS_cm": sigma_ne_posterior_mS_cm,
+            "uncertainty_semantics": (
+                "Linear propagation of the kinisi tracer-D posterior; n, z, V "
+                "and T are treated as fixed. This is not the total physical "
+                "uncertainty: model, finite-size, replica, temperature, volume, "
+                "Nernst-Einstein approximation and ion-ion correlation "
+                "uncertainties are not included."
+            ),
         },
         "kinisi_time_mapping": {
             "time_step_fs": float(kinisi_time_step_fs),
@@ -523,6 +647,7 @@ def kinisi_transport(
             "backend_semantics": "kinisi mean framework displacement; applied once",
         },
         "unwrap_diagnostics": unwrap_diagnostics,
+        "kinisi_position_semantics": position_semantics,
         "kinisi_resource_diagnostics": {
             "n_lag_points_total": n_lag_points_total,
             "n_lag_points_in_fit": n_lag_points_in_fit,

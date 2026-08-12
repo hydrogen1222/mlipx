@@ -1116,6 +1116,30 @@ treated as an experimental or correlation-aware conductivity. A collective
 quantity is calculated only with `--collective-conductivity`; mlipx does not
 silently report a Haven ratio.
 
+The Nernst–Einstein output now includes posterior summaries in S/m, S/cm, and
+mS/cm. They are the linear propagation of the kinisi tracer-D posterior with
+number density, charge, volume, and temperature held fixed—not total physical
+uncertainty. Model, finite-size, replica, temperature, volume, approximation,
+and ion-ion-correlation uncertainty are not included. Legacy scalar
+`sigma_NE_tracer_*` fields remain and equal the corresponding posterior means.
+
+kinisi's ASE backend reconstructs periodic displacements from wrapped/scaled
+coordinates. For an exact unwrapped source, mlipx compares every saved-frame
+displacement against ASE's periodic minimum-image reconstruction before
+calling kinisi and refuses the analysis if image history would be lost. A
+successful result records that the reconstruction was equivalent, while
+making clear that kinisi did not consume exact image counters directly.
+
+Successful transport also writes `transport_summary.csv`,
+`transport_msd.png`, and `transport_msd.svg` alongside `kinisi_arrays.npz`,
+and the CLI prints the posterior summary, 95% credible interval, fit window,
+lag grid, and Nernst–Einstein conductivity. Prefer `mlipx analyze RUN
+transport ...` so the run metadata supplies time, save stride, coordinate
+convention, phase, and temperature. For external trajectories, provide
+`--positions-convention`, `--frame-interval-fs`, and `--temperature-K` only
+when their values are known. The `2 ps` lag spacing used in current LGPS work
+is a sensitivity-checked working parameter, not a universal default.
+
 Independent diffusion results at several temperatures can be fitted with the
 `arrhenius` task using `ln D = ln D₀ - Eₐ/(kBT)`. At least three temperatures
 are recommended; a two-point fit warns because linearity cannot be tested. If

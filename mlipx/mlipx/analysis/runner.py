@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 1}
+_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 2}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
@@ -142,6 +142,64 @@ def _write_columns(path: Path, columns: dict[str, Any]) -> None:
         writer = csv.writer(handle)
         writer.writerow(usable)
         writer.writerows(zip(*usable.values(), strict=True))
+
+
+def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
+    """Write a one-row human-readable transport summary CSV.
+
+    Collective-conductivity columns are appended only when that analysis ran;
+    absent fields are left blank rather than filled with fake zeros.
+    """
+
+    tracer = result["tracer_diffusion"]
+    lag = tracer["lag_grid"]
+    d_post = tracer["D_posterior_m2_s"]
+    ne = result["nernst_einstein"]
+    sigma = ne["sigma_NE_tracer_posterior_mS_cm"]
+    semantics = result["kinisi_position_semantics"]
+    fields: dict[str, Any] = {
+        "mobile_species": result["mobile_species"],
+        "dimensions": result["dimensions"],
+        "temperature_K": result["temperature_mean_K"],
+        "fit_start_ps": tracer["fit_start_ps"],
+        "fit_stop_ps": tracer["fit_stop_ps"],
+        "lag_grid_mode": lag["mode"],
+        "lag_step_ps": lag["requested_step_ps"],
+        "lag_stop_ps": lag["requested_stop_ps"],
+        "n_lag_points_total": lag["n_lag_points_total"],
+        "n_lag_points_in_fit": lag["n_lag_points_in_fit"],
+        "D_mean_m2_s": d_post["mean"],
+        "D_std_m2_s": d_post["std"],
+        "D_median_m2_s": d_post["median"],
+        "D_ci95_low_m2_s": d_post["credible_interval_95"][0],
+        "D_ci95_high_m2_s": d_post["credible_interval_95"][1],
+        "sigma_NE_mean_mS_cm": sigma["mean"],
+        "sigma_NE_std_mS_cm": sigma["std"],
+        "sigma_NE_median_mS_cm": sigma["median"],
+        "sigma_NE_ci95_low_mS_cm": sigma["credible_interval_95"][0],
+        "sigma_NE_ci95_high_mS_cm": sigma["credible_interval_95"][1],
+        "kinisi_version": tracer["kinisi_version"],
+        "random_seed": tracer["random_seed"],
+        "positions_convention": semantics["source_positions_convention"],
+        "kinisi_backend_reconstruction": semantics["backend_reconstruction"],
+    }
+    if "collective_conductivity" in result:
+        coll = result["collective_conductivity"][
+            "sigma_collective_mS_cm_posterior"
+        ]
+        fields.update(
+            {
+                "sigma_collective_mean_mS_cm": coll["mean"],
+                "sigma_collective_std_mS_cm": coll["std"],
+                "sigma_collective_median_mS_cm": coll["median"],
+                "sigma_collective_ci95_low_mS_cm": coll["credible_interval_95"][0],
+                "sigma_collective_ci95_high_mS_cm": coll["credible_interval_95"][1],
+            }
+        )
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(fields.keys())
+        writer.writerow(["" if value is None else value for value in fields.values()])
 
 
 def _load_dataset(request: AnalysisRequest) -> TrajectoryDataset:
@@ -315,6 +373,7 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
         artifacts.append("density.npz")
         return result, artifacts
     if task == "transport":
+        from mlipx.analysis.plots import plot_transport
         from mlipx.analysis.transport import kinisi_transport
 
         result = kinisi_transport(dataset, **parameters)
@@ -325,6 +384,11 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             msd_variance_A4=result["kinisi_msd_variance_A4"],
         )
         artifacts.append("kinisi_arrays.npz")
+        _write_transport_summary(output_dir / "transport_summary.csv", result)
+        artifacts.append("transport_summary.csv")
+        artifacts.extend(
+            path.name for path in plot_transport(result, output_dir / "transport_msd")
+        )
         return result, artifacts
     if task == "electrolyte":
         from mlipx.analysis.electrolyte import gemdat_electrolyte
@@ -448,6 +512,7 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
                 "fit_start_ps": result["tracer_diffusion"]["fit_start_ps"],
                 "fit_stop_ps": result["tracer_diffusion"]["fit_stop_ps"],
                 "lag_grid": result["tracer_diffusion"]["lag_grid"],
+                "kinisi_position_semantics": result["kinisi_position_semantics"],
             }
             _write_json(output_dir / "provenance.json", provenance)
         payload = {

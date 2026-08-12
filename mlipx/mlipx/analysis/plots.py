@@ -126,6 +126,47 @@ def plot_msd_alpha(result: dict[str, Any], output_stem: str | Path) -> list[Path
     return _save(fig, output_stem)
 
 
+def plot_transport(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+    """Plot kinisi MSD with the diffusion regression fit window highlighted.
+
+    The figure only visualizes the kinisi MSD data and the explicit fit window
+    used by the covariance-aware Bayesian regression; it deliberately does not
+    draw an OLS fit line, because transport does not use ordinary least squares.
+    """
+
+    plt = _pyplot()
+    fig, axis = plt.subplots(figsize=(7, 4.5))
+    lag_ps = np.asarray(result["lag_time_ps"], dtype=float)
+    msd = np.asarray(result["kinisi_msd_A2"], dtype=float)
+    variance = np.asarray(result["kinisi_msd_variance_A4"], dtype=float)
+    error = np.sqrt(np.abs(variance))
+    axis.errorbar(
+        lag_ps,
+        msd,
+        yerr=error,
+        fmt=".",
+        markersize=3,
+        elinewidth=0.8,
+        capsize=0,
+        label="kinisi MSD",
+    )
+    tracer = result["tracer_diffusion"]
+    fit_start = float(tracer["fit_start_ps"])
+    fit_stop = float(tracer["fit_stop_ps"])
+    axis.axvspan(
+        fit_start,
+        fit_stop,
+        alpha=0.15,
+        color="tab:orange",
+        label="diffusion fit window",
+    )
+    axis.set_xlabel("Lag time (ps)")
+    axis.set_ylabel("MSD (A^2)")
+    axis.legend()
+    axis.grid(alpha=0.25)
+    return _save(fig, output_stem)
+
+
 def plot_arrhenius(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
     plt = _pyplot()
     fig, axis = plt.subplots(figsize=(6, 4.5))
