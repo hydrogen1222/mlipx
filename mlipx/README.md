@@ -17,11 +17,11 @@ contracts; the archived Analysis v1 is not imported.
 #    uv auto-creates .venv. The repository is managed through `pyproject.toml`
 #    and `uv.lock`; do not install a legacy requirements snapshot.
 #    (that is a CI snapshot pinned to different torch versions).
-uv sync
+uv sync --frozen
 
 # 2. Inspect GPU compatibility, then verify.
 uv run mlipx setup
-uv run mlipx doctor              # comprehensive environment diagnostic
+uv run mlipx doctor --engine uma --device auto  # actual runtime compute probe
 
 # 3. Run UMA
 uv run mlipx --help              # show all commands
@@ -34,9 +34,9 @@ uv run mlipx analyze results/LGPS-800K msd \
   --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
 ```
 
-Running `uv run ...` before `uv sync` also triggers a project sync implicitly,
-but explicit `uv sync` is recommended so it is clear that this creates the
-UMA-only `.venv`.
+Use the explicit frozen sync above for a reproducible UMA environment. Running
+`uv run ...` can otherwise trigger an implicit project sync, which is less
+obvious during installation and may update environment state.
 
 > **Important:** four engines use four environments. `uv run` always selects
 > UMA; it must not be used to launch another engine.
@@ -70,7 +70,7 @@ interpreter, for example DPA:
 > four-environment installation guide.
 > ```bash
 > uv run mlipx setup      # inspect UMA/GPU compatibility
-> uv run mlipx doctor     # verify after install
+> uv run mlipx doctor --engine uma --device auto  # execute a runtime probe
 > ```
 > Supported floor is **Maxwell (GTX 900 series, e.g. GTX 960)**; Kepler (GTX 700/600) is not supported (no prebuilt PyTorch wheel). The recommendation table:
 >
@@ -98,9 +98,11 @@ mlipx 默认使用 **UMA (FAIRChem)** 引擎，现有用户无需修改任何配
 | `dpa` | DPA (DeepMD-kit) | `deepmd-kit` | `bulk`/`molecule` |
 | `grace` | GRACE | `tensorpotential` | `bulk`/`molecule` |
 
-> 非 UMA 引擎没有 "task" 概念，`task` 仅作为周期性提示：`bulk`=周期性体系（PBC=True），`molecule`=分子（PBC=False）。
+> 非 UMA 后端本身没有模型 `task` 概念；mlipx 用 `bulk` / `molecule`
+> 声明物理边界条件。`bulk` 要求输入已经是完整三维 PBC，`molecule` 要求输入
+> 完全非周期；mlipx 会验证并拒绝冲突，不会替用户改写 PBC。
 
-### 1. 默认 UMA 计算（与旧版完全兼容）
+### 1. 默认 UMA 计算
 
 ```bash
 # 单点能
@@ -149,14 +151,14 @@ DEVICE      = cpu
 ### 4. 检查环境与已安装的引擎
 
 ```bash
-uv run mlipx doctor                  # UMA 环境
+uv run mlipx doctor                  # 只做包与硬件清单，不导入后端
+uv run mlipx doctor --engine uma --device auto  # UMA 真实运行时探针
 uv run mlipx tui                     # UMA TUI
-.venv-mace/bin/mlipx doctor          # MACE 环境
+.venv-mace/bin/mlipx doctor --engine mace --device auto
 .venv-mace/bin/mlipx tui             # MACE TUI
-.venv-dpa/bin/mlipx doctor           # DPA 环境
+.venv-dpa/bin/mlipx doctor --engine dpa --device auto
 .venv-dpa/bin/mlipx tui              # DPA TUI
-.venv-grace/bin/python -c \
-  "import tensorflow as tf; print(tf.config.list_physical_devices('GPU'))"
+.venv-grace/bin/mlipx doctor --engine grace --device auto
 .venv-grace/bin/mlipx tui            # GRACE TUI
 ```
 

@@ -2,7 +2,7 @@
 
 ## Trajectory prerequisites
 
-Publication transport currently requires a fixed-cell, 3-D periodic trajectory
+Covariance-aware transport currently requires a fixed-cell, 3-D periodic trajectory
 with finite coordinates, at least four production frames, a uniform time axis,
 and an explicit wrapped/unwrapped convention. An mlipx run marked failed,
 aborted, or cancelled is rejected. Imported trajectories have no mlipx run
@@ -24,11 +24,15 @@ equivalent, but that exact unwrapped coordinates were not consumed directly.
 Drift correction is never silently enabled:
 
 - `none`: raw mobile-particle displacement;
-- `nonmobile`: kinisi removes the mean displacement of all nonmobile atoms;
-- `indices`: kinisi removes the mean displacement of explicitly selected
-  reference atoms.
+- `nonmobile`: mlipx removes the unweighted mean displacement of all nonmobile
+  atoms, matching kinisi's framework definition;
+- `indices`: mlipx removes the unweighted mean displacement of explicitly
+  selected reference atoms.
 
-The chosen indices/species and backend semantics are stored in results.
+The correction is applied exactly once before kinisi. Only corrected mobile
+atoms are passed to its ASE parser, whose automatic framework complement is
+then empty. The chosen indices/species and backend semantics are stored in
+results.
 
 ## MSD and tracer diffusion
 
@@ -43,7 +47,7 @@ D_axes = slope(MSD_axes) / (2 d)
 explicit-range OLS diagnostic. It does not automatically identify the correct
 diffusive regime. The local log-log slope is a diagnostic only.
 
-The publication-oriented scalar tracer estimate uses kinisi 2.x. The 20 ps
+The covariance-aware scalar tracer estimate uses kinisi 2.x. The 20 ps
 fit start below is only an example; choose it from the equilibrated trajectory
 and the observed diffusive regime rather than copying it blindly:
 
@@ -77,6 +81,23 @@ regular grid, mlipx inserts it for the regression and records
 `fit_start_inserted: true`, `is_uniform_grid: false`, and
 `actual_step_ps: null`; the nominal step must not be mistaken for every
 adjacent spacing.
+
+### Parser memory guard
+
+kinisi 2.x's triclinic ASE parser materializes several arrays with shape
+`frames × atoms × 8`; this can exhaust RAM before Bayesian fitting starts.
+mlipx reduces that atom dimension to the selected mobile species after applying
+the equivalent framework correction, and estimates parser peak memory before
+allocating frames. The default guard is 4 GiB:
+
+```bash
+mlipx analyze RUN transport ... --parser-memory-limit-gib 4
+```
+
+Raise the limit only after checking available RAM. The result records source
+and parser atom counts, orthorhombic/triclinic dispatch, estimated bytes, and
+the configured limit. This is a conservative allocation guard, not a claim
+that total process RSS will equal the estimate.
 
 References:
 

@@ -19,6 +19,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+import numpy as np
+
 from mlipx.protocols import CancellationRequested, ProgressEvent
 from mlipx.timing import RunTiming, append_timing_to_outputs, timing_log_lines
 
@@ -308,22 +310,32 @@ class BaseRunner(ABC):
         PERIODIC_TASKS = {"omat", "oc20", "oc25", "odac", "omc", "bulk"}
         MOLECULAR_TASKS = {"omol", "molecule"}
 
-        # Ensure PBC is set correctly for periodic systems
+        pbc = np.asarray(atoms.pbc, dtype=bool)
+
+        # The task selects a physical boundary condition; it must agree with
+        # the structure instead of rewriting it behind the user's back.
         if task in PERIODIC_TASKS:
-            if not atoms.pbc.any():
-                self.log("Setting PBC=True for periodic system", level="warning")
-                atoms.pbc = True
+            if not pbc.all():
+                raise ValueError(
+                    f"Task {task!r} requires full 3D periodicity, but the input "
+                    f"PBC is {pbc.tolist()}. Set PBC explicitly in the structure "
+                    "or choose a molecular task; mlipx will not change it."
+                )
             # Log cell info for debugging
             cell = atoms.cell
-            if cell.volume > 0:
+            if cell.rank == 3 and cell.volume > 0:
                 self.log(
                     f"Cell: {cell.lengths()[0]:.4f} x {cell.lengths()[1]:.4f} x {cell.lengths()[2]:.4f} Å"
                 )
             else:
                 raise ValueError("Invalid cell: zero volume. Check input structure.")
         elif task in MOLECULAR_TASKS:
-            # Molecules should not have PBC
-            atoms.pbc = False
+            if pbc.any():
+                raise ValueError(
+                    f"Task {task!r} requires a nonperiodic structure, but the "
+                    f"input PBC is {pbc.tolist()}. Disable PBC explicitly in "
+                    "the structure; mlipx will not change it."
+                )
             # A non-periodic molecule still needs a bounding-box cell for
             # output writers (CONTCAR/OUTCAR call atoms.get_volume()) and for
             # logging. ASE's .xyz reader leaves no cell (rank 0); add a vacuum
@@ -350,9 +362,8 @@ class BaseRunner(ABC):
                 # on spin-enabled MACE models. Only default the total charge.
                 atoms.info.setdefault("charge", 0)
         else:
-            # Unknown task type: preserve the input structure's PBC settings
-            self.log(
-                f"Unknown task '{task}', preserving input PBC settings", level="warning"
+            raise ValueError(
+                f"Unknown task {task!r}; refusing to infer PBC semantics."
             )
 
         return atoms

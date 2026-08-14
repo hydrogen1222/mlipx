@@ -67,7 +67,7 @@ mlipx analyze RUN vacf --species Li
 mlipx analyze RUN spectrum --species Li --taper one-sided-cosine
 ```
 
-Publication transport uses kinisi 2.x and requires an explicit fit start. For
+Covariance-aware transport uses kinisi 2.x and requires an explicit fit start. For
 long, frequently saved trajectories, provide both lag-grid controls; they
 sparsify kinisi's evaluated lag times without downsampling the trajectory:
 
@@ -98,14 +98,13 @@ and number density in A^-3 (volume integral equals the number of selected
 mobile particles).
 
 MSD uses unwrapped coordinates. Wrapped fixed-cell trajectories are
-reconstructed with consecutive fractional minimum images and receive an
+reconstructed with ASE's general minimum-image convention and receive an
 unwrap ambiguity diagnostic. Variable-cell transport is unsupported because
 the current contract does not separate affine lattice deformation from atomic
-migration. A simple diffusion fit is produced over the full analysis lag range
-by default. Supply both `--fit-start-ps` and `--fit-stop-ps` to restrict that
-diagnostic fit to an explicit window. Its name and metadata mark it as
-diagnostic, not a covariance-aware publication estimate; the default
-full-range fit is not an automatic diffusive-regime detector.
+migration. A simple diagnostic diffusion fit is produced only when both
+`--fit-start-ps` and `--fit-stop-ps` are explicit. Without them, mlipx reports
+MSD and local log-log exponents but does not guess a diffusion coefficient.
+The OLS result remains diagnostic, not a covariance-aware uncertainty model.
 
 VACF requires stored velocities and uniform sampling. Positions are not
 differentiated to invent velocities. The optional spectrum uses a one-sided

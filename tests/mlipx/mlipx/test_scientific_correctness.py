@@ -137,6 +137,37 @@ def test_explicit_charge_and_spin_override_structure_metadata(tmp_path):
     assert atoms.info == {"charge": 0, "spin": 1}
 
 
+@pytest.mark.parametrize("pbc", [False, [True, True, False]])
+def test_bulk_task_never_silently_enables_pbc(tmp_path, pbc):
+    class _BulkWrapper(_Wrapper):
+        task = "bulk"
+
+    atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=pbc)
+    runner = SinglePointRunner(_BulkWrapper(), output_dir=tmp_path, verbose=False)
+    with pytest.raises(ValueError, match="requires full 3D periodicity"):
+        runner._prepare_atoms(atoms)
+    assert np.array_equal(atoms.pbc, np.broadcast_to(np.asarray(pbc), (3,)))
+
+
+@pytest.mark.parametrize("pbc", [True, [True, False, False]])
+def test_molecule_task_never_silently_disables_pbc(tmp_path, pbc):
+    atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.7]], cell=[8, 8, 8], pbc=pbc)
+    runner = SinglePointRunner(_Wrapper(), output_dir=tmp_path, verbose=False)
+    with pytest.raises(ValueError, match="requires a nonperiodic structure"):
+        runner._prepare_atoms(atoms)
+    assert np.array_equal(atoms.pbc, np.broadcast_to(np.asarray(pbc), (3,)))
+
+
+def test_unknown_task_fails_closed(tmp_path):
+    class _UnknownWrapper(_Wrapper):
+        task = "bulkk"
+
+    atoms = Atoms("Li", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
+    runner = SinglePointRunner(_UnknownWrapper(), output_dir=tmp_path, verbose=False)
+    with pytest.raises(ValueError, match="Unknown task"):
+        runner._prepare_atoms(atoms)
+
+
 def test_xdatcar_preserves_interleaved_symbol_blocks(tmp_path):
     atoms = Atoms(
         ["Li", "S", "Li"],
@@ -186,11 +217,14 @@ def test_batch_default_discovery_and_explicit_pattern(tmp_path, monkeypatch):
 def test_batch_same_stem_different_formats_do_not_overwrite(tmp_path):
     structures = tmp_path / "structures"
     structures.mkdir()
-    atoms = Atoms("He", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=False)
+    atoms = Atoms("He", positions=[[0, 0, 0]], cell=[5, 5, 5], pbc=True)
     write(structures / "sample.xyz", atoms)
     write(structures / "sample.cif", atoms)
     out = tmp_path / "out"
-    summary = BatchRunner(_Wrapper(), output_dir=out, verbose=False).run_from_files(
+    class _BulkWrapper(_Wrapper):
+        task = "bulk"
+
+    summary = BatchRunner(_BulkWrapper(), output_dir=out, verbose=False).run_from_files(
         [structures / "sample.xyz", structures / "sample.cif"]
     )
     assert summary["success"] == 2

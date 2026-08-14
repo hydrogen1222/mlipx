@@ -123,6 +123,16 @@ class AnalysisScreen(Screen):
                 yield Label("Fit Start (ps):", id="analysis-fit-label")
                 yield Input(value="", id="analysis-fit-input")
                 yield Label(
+                    "MSD Diagnostic Fit Start (ps; optional):",
+                    id="analysis-msd-fit-start-label",
+                )
+                yield Input(value="", id="analysis-msd-fit-start-input")
+                yield Label(
+                    "MSD Diagnostic Fit Stop (ps; optional):",
+                    id="analysis-msd-fit-stop-label",
+                )
+                yield Input(value="", id="analysis-msd-fit-stop-input")
+                yield Label(
                     "Lag Step (ps; blank = kinisi default):",
                     id="analysis-lag-step-label",
                 )
@@ -144,6 +154,11 @@ class AnalysisScreen(Screen):
                 )
                 yield Label("kinisi Random Seed:", id="analysis-seed-label")
                 yield Input(value="0", id="analysis-seed-input")
+                yield Label(
+                    "kinisi Parser Memory Limit (GiB):",
+                    id="analysis-parser-memory-label",
+                )
+                yield Input(value="4.0", id="analysis-parser-memory-input")
 
                 yield Label("Density Grid Spacing (A):", id="analysis-spacing-label")
                 yield Input(value="0.25", id="analysis-spacing-input")
@@ -239,8 +254,20 @@ class AnalysisScreen(Screen):
                 "#analysis-collective-row",
                 "#analysis-seed-label",
                 "#analysis-seed-input",
+                "#analysis-parser-memory-label",
+                "#analysis-parser-memory-input",
             ),
             transport,
+        )
+        msd = task == "msd"
+        self._set_display(
+            (
+                "#analysis-msd-fit-start-label",
+                "#analysis-msd-fit-start-input",
+                "#analysis-msd-fit-stop-label",
+                "#analysis-msd-fit-stop-input",
+            ),
+            msd,
         )
         axes = task in {"msd", "transport"}
         self._set_display(("#analysis-axes-label", "#analysis-axes-input"), axes)
@@ -303,6 +330,29 @@ class AnalysisScreen(Screen):
             parameters["axes" if task == "msd" else "dimensions"] = self.query_one(
                 "#analysis-axes-input", Input
             ).value.strip()
+        if task == "msd":
+            fit_start = self.query_one(
+                "#analysis-msd-fit-start-input", Input
+            ).value.strip()
+            fit_stop = self.query_one(
+                "#analysis-msd-fit-stop-input", Input
+            ).value.strip()
+            if bool(fit_start) != bool(fit_stop):
+                raise ValueError(
+                    "MSD diagnostic fit start and stop must be provided together"
+                )
+            if fit_start:
+                parameters["fit_start_ps"] = float(fit_start)
+                parameters["fit_stop_ps"] = float(fit_stop)
+                if (
+                    not math.isfinite(parameters["fit_start_ps"])
+                    or not math.isfinite(parameters["fit_stop_ps"])
+                    or parameters["fit_start_ps"] < 0
+                    or parameters["fit_stop_ps"] <= parameters["fit_start_ps"]
+                ):
+                    raise ValueError(
+                        "MSD fit stop must be greater than fit start >= 0"
+                    )
         if task == "rdf":
             parameters["center_species"] = self.query_one(
                 "#analysis-rdf-center-input", Input
@@ -360,6 +410,12 @@ class AnalysisScreen(Screen):
             parameters["random_seed"] = int(
                 self.query_one("#analysis-seed-input", Input).value
             )
+            parser_limit = float(
+                self.query_one("#analysis-parser-memory-input", Input).value
+            )
+            if not math.isfinite(parser_limit) or parser_limit <= 0:
+                raise ValueError("kinisi parser memory limit must be positive")
+            parameters["parser_memory_limit_gib"] = parser_limit
         elif task == "density":
             parameters["spacing_A"] = float(
                 self.query_one("#analysis-spacing-input", Input).value

@@ -58,6 +58,8 @@ _OPT_FLAGS: dict[str, tuple[str, ...]] = {
     "torch_num_threads": ("--cpu-threads",),
     "gpu_memory_growth": ("--gpu-memory-growth", "--no-gpu-memory-growth"),
     "gpu_memory_limit_mb": ("--gpu-memory-limit-mb",),
+    "neighbor_cache": ("--neighbor-cache", "--no-neighbor-cache"),
+    "neighbor_skin": ("--neighbor-skin",),
     "default_dtype": ("--dtype",),
     "head": ("--head",),
     "write_outcar": ("--write-outcar", "--no-write-outcar"),
@@ -149,7 +151,12 @@ def build_mlipx_command(
             continue
         if key == "head" and engine not in {"mace", "dpa"}:
             continue
-        if key in {"gpu_memory_growth", "gpu_memory_limit_mb"} and engine != "grace":
+        if key in {
+            "gpu_memory_growth",
+            "gpu_memory_limit_mb",
+            "neighbor_cache",
+            "neighbor_skin",
+        } and engine != "grace":
             continue
         flags = _OPT_FLAGS[key]
         if isinstance(value, bool):

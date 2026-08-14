@@ -104,6 +104,14 @@ tested layout is:
 | DPA | `.venv-dpa/bin/mlipx` | `.venv-dpa` | DeepMD requires PyTorch 2.10 with the CXX11 ABI |
 | GRACE | `.venv-grace/bin/mlipx` | `.venv-grace` | TensorFlow CUDA/cuDNN must not replace PyTorch libraries |
 
+The versions below are the repository's **known-good profile as of
+2026-08-14**, not a promise that one "latest" stack fits every GPU. Before
+changing them, check the upstream
+[uv installation guide](https://docs.astral.sh/uv/getting-started/installation/),
+[DeePMD installation guide](https://docs.deepmodeling.com/projects/deepmd/en/latest/getting-started/install.html),
+and [GRACE/TensorPotential installation guide](https://gracemaker.readthedocs.io/en/latest/gracemaker/install/),
+then rerun doctor's runtime and model probes.
+
 An “environment” is only an isolated directory of Python packages, not another
 copy of the source code. All four share this repository, structures, and model
 files. Run the commands below from the repository root. If you need only one
@@ -123,7 +131,7 @@ cd mlipx
 #### Environment 1: UMA (default; recommended first)
 
 ```bash
-uv sync
+uv sync --frozen
 uv run mlipx doctor --engine uma --device auto
 ```
 
@@ -227,35 +235,16 @@ place them under `models/` or another known path yourself.
 | Python | 3.10–3.12 | 3.12 |
 | RAM | 8 GB | 32 GB |
 | Disk | 15 GB (one environment and a small model) | 60+ GB (all four environments and several models) |
-| GPU (optional) | CUDA 11.8+ | CUDA 12.x, 8+ GB VRAM |
+| GPU (optional) | NVIDIA driver compatible with the selected PyTorch/TensorFlow wheel | Validated CUDA 12.x combination, 8+ GB VRAM |
 
 ### 2.3 UMA environment details
 
-> **Note:** `fairchem-core` is published on
-> [PyPI](https://pypi.org/project/fairchem-core/). This repository also vendors
-> the upstream source at `packages/fairchem-core/`; the root uv workspace
-> explicitly selects that local member. Consequently, `uv sync` run **inside
-> this repository** installs the local editable workspace version rather than
-> fetching it from PyPI. Normal non-workspace installations can resolve it from
-> PyPI.
-
-```bash
-# Clone the repository
-git clone https://github.com/hydrogen1222/mlipx.git
-cd mlipx
-
-# Step 1: Create a pinned venv (Python 3.12 via .python-version) and install
-#         everything from the lockfile. uv auto-creates .venv.
-uv sync
-
-# Step 2 (optional): Detect your GPU and verify the PyTorch CUDA match.
-#         Uses nvidia-smi and the installed PyTorch.
-uv run mlipx setup
-```
-
-> Running `uv run mlipx doctor` immediately after cloning also performs an
-> implicit sync and creates `.venv`. That environment is still UMA-only.
-> Running `uv sync` explicitly first makes this boundary clearer.
+Although `fairchem-core` is published on
+[PyPI](https://pypi.org/project/fairchem-core/), the root workspace explicitly
+uses the local member at `packages/fairchem-core/`. Therefore Section 2.1's
+`uv sync --frozen` installs the lockfile/local-source combination. Do not
+overwrite `.venv` with a bare `uv pip install`. Run `uv run mlipx setup` when
+you need the GPU architecture and recommended-wheel report.
 
 ### 2.4 CUDA GPU vs CPU
 
@@ -299,9 +288,9 @@ The following configuration has been tested and confirmed working:
 requirement. Lower-spec GPUs (for example GTX 10-series Pascal, sm_61) and
 CPU-only systems can also work, but their installation commands may differ.*
 
-### 2.5 How to Run Commands
+### 2.5 Command Prefixes and Activation
 
-Two equivalent methods:
+These two forms are equivalent for UMA's `.venv` only:
 
 ```bash
 # Method A: uv run (recommended — auto-detects .venv, works everywhere)
@@ -315,6 +304,10 @@ source .venv/bin/activate      # Linux/Mac
 mlipx --help
 mlipx tui
 ```
+
+For another backend, replace `.venv` with `.venv-mace`, `.venv-dpa`, or
+`.venv-grace`. Calling `ENV/bin/mlipx` explicitly is the least ambiguous form
+for scripts and the TUI.
 
 ### 2.6 Model Checkpoint
 
@@ -341,17 +334,10 @@ page before applying because these conditions may change.
 > any local checkpoint path, for example
 > `--model models/uma/checkpoints/uma-s-1p2p1.pt`.
 
-**Other engines (optional):** MACE / DPA / GRACE models are released by each
-project. To prevent e3nn, PyTorch ABI, and CUDA/cuDNN binaries from overwriting
-one another, use one environment per backend: UMA `.venv`, MACE `.venv-mace`,
-DPA `.venv-dpa`, and GRACE `.venv-grace`. Do not install the other backends
-into the UMA `.venv`.
-
-| Engine | Backend install | Model format |
-|--------|-----------------|--------------|
-| MACE | Use the `.venv-mace` commands in Section 2.1 | `.model` / `.pt` |
-| DPA | Use the `.venv-dpa` commands in Section 2.1 | frozen `.pt` / `.pth` |
-| GRACE | Use the `.venv-grace` commands in Section 2.1 | TensorFlow SavedModel directory |
+**Other engines (optional):** each project publishes its own model. MACE uses
+`.model`/`.pt`; DPA requires a frozen/exported `.pt`/`.pth`, not a training
+checkpoint; GRACE requires the complete TensorFlow SavedModel directory.
+Section 2.1 remains the single installation authority.
 
 > **Do not run `uv pip install mace-torch`.** The default target of `uv pip` is
 > the project `.venv`. Doctor may then find both engines but will report
@@ -380,11 +366,25 @@ uv run mlipx doctor --engine uma --device auto
 .venv-grace/bin/mlipx doctor --engine grace --device cpu
 ```
 
-The selected backend is imported in an isolated subprocess. Import errors,
-invisible CUDA devices, and unsupported PyTorch wheel architectures produce a
-nonzero exit status. A CPU target does not require CUDA. Add `--model PATH` to
-check existence and the backend's basic file/directory expectation. This does
-not load a large model, so still run a small SP smoke test before production.
+With an explicit backend, doctor imports it in an isolated subprocess and runs
+a real tensor operation on the target CPU/GPU. Import errors, invisible CUDA
+devices, failed operations, and unsupported PyTorch wheel architectures
+produce a nonzero exit status. A CPU target does not require CUDA.
+
+Use the full probe to validate a concrete model/task/head/structure. It loads
+the checkpoint and evaluates energy and forces; for periodic models that
+support stress it checks stress too. It writes no OUTCAR, trajectory, or result
+directory:
+
+```bash
+.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0 \
+  --model models/dpa/DPA-3.2-5M.pt --task bulk \
+  --head Domains_SSE_PBE --structure structure.vasp
+```
+
+`--model` requires both `--engine` and `--task`. Multi-head MACE/DPA models
+also require an explicit `--head`; doctor never guesses a potential-energy
+surface.
 
 For a full command list:
 ```bash
@@ -590,134 +590,44 @@ result = run_single_point(
 )
 ```
 
-### Backend Installation & Environment Isolation
+### Environments, model task/head, and pre-run validation
 
-The repository's `uv sync` installs `fairchem-core` from the local workspace,
-so the UMA runtime is importable; model weights still require the separate
-Hugging Face access and download in Section 2.6. Other engines need their
-backend package installed separately:
+Installation commands are maintained only in Section 2; this section no
+longer duplicates a second, easily stale setup guide. Always use the command
+prefix for the corresponding environment. If MACE was accidentally installed
+into UMA's `.venv`, run `uv sync --frozen` to restore the locked UMA
+environment, then rebuild `.venv-mace` from Section 2.1.
 
-| Engine | Install command | Model format |
-|--------|-----------------|--------------|
-| MACE | Install only into `.venv-mace` using the complete commands below | `.model` / `.pt` |
-| DPA | Install into `.venv-dpa` using the commands below | frozen `.pt` / `.pth` |
-| GRACE | Install into `.venv-grace` with the commands below | TensorFlow SavedModel directory |
+`task` and model `head` are different decisions. For non-UMA engines,
+`bulk|molecule` explicitly declares periodic semantics; a MACE head or DPA
+branch selects the potential-energy surface. mlipx no longer rewrites input
+PBC: `bulk` requires full 3-D PBC and `molecule` requires a fully nonperiodic
+structure. A multi-head MACE/DPA model without explicit `--head` fails closed.
+Use `dp show MODEL model-branch` for canonical DPA branch names and aliases.
 
-> ⚠️ **Environment isolation warning:** `mace-torch` pins `e3nn==0.4.4`, which **fundamentally conflicts** with `fairchem-core` (`e3nn>=0.5`) - they cannot coexist in one Python environment.
->
-> **Recommended approach:** keep the `.venv` created by `uv sync` for UMA and
-> create a separate `.venv-mace`. Never install `mace-torch` into the UMA
-> environment:
-> ```bash
-> # Run from the repository root; the project does not support Python 3.13+
-> uv venv --python 3.12 .venv-mace
-> uv pip install --python .venv-mace/bin/python \
->   torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-> uv pip install --python .venv-mace/bin/python -e ./mlipx
-> uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
->
-> # UMA: always use the repository's uv environment
-> uv run mlipx doctor --engine uma --device auto
-> uv run mlipx tui
->
-> # MACE: explicitly use the MACE environment
-> .venv-mace/bin/mlipx doctor --engine mace --device auto
-> .venv-mace/bin/mlipx tui
-> ```
-
-The root workspace deliberately pins UMA to PyTorch 2.6.0+cu124 to retain the
-`sm_60` kernels required by Pascal GPUs, while current fairchem-core metadata
-declares `torch~=2.8.0`. Consequently,
-`uv pip check --python .venv/bin/python` reports this known override. The mlipx
-UMA inference path is validated with real checkpoints; this does not imply
-support for every other fairchem-core feature under the non-upstream version
-combination.
-
-Recent DeePMD-kit wheels are compiled against PyTorch's CXX11 ABI, while the
-PyTorch 2.6 build required by the UMA environment uses the older ABI. Keep DPA
-isolated as well; an ABI mismatch may allow `import deepmd` but fails as soon as
-a PyTorch model is loaded:
+Before production MD, run a no-output single-structure doctor probe:
 
 ```bash
-uv venv --python 3.12 .venv-dpa
-uv pip install --no-config --python .venv-dpa/bin/python \
-  "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
-uv pip install --no-config --python .venv-dpa/bin/python \
-  -e ./mlipx "deepmd-kit[torch]==3.1.3"
+.venv-mace/bin/mlipx doctor --engine mace --device cuda:0 \
+  --model mace.model --task bulk --head default --structure test.vasp
 
-.venv-dpa/bin/mlipx sp structure.vasp \
-  --model models/dpa/DPA-3.2-5M.pt --model-type dpa --task bulk \
-  --head Domains_SSE_PBE --device cuda:0
+.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0 \
+  --model models/dpa/DPA-3.2-5M.pt --task bulk \
+  --head Domains_SSE_PBE --structure test.vasp
 ```
 
-Use a DeePMD-kit/PyTorch pair whose declared versions and CXX11 ABI match if
-you choose other releases. On a machine without an NVIDIA GPU, use the CPU
-Torch command in Section 2.1 and run with `--device cpu`. DPA accepts an
-exported/frozen inference model, not a raw training checkpoint.
-
-`DPA-3.2-5M.pt` is a multi-task model. Its `head` selects the learned
-potential-energy surface, while mlipx `task=bulk|molecule` only controls PBC.
-For LGPS use `--head Domains_SSE_PBE` (the branch explicitly trained on
-Li–Si/Ge/Sn–P–S solid electrolytes); for general molecules use
-`--head OMol25`. Run `dp show MODEL model-branch` to list branches. Never rely
-on the default branch merely because a calculation completes.
-
-GRACE uses TensorFlow. CPU inference can technically run in the UMA
-environment, but use a dedicated `.venv-grace` for consistent CPU/GPU commands
-and to prevent TensorFlow from replacing UMA/PyTorch CUDA libraries:
-
-```bash
-uv venv --python 3.12 .venv-grace
-uv pip install --no-config --python .venv-grace/bin/python \
-  -e ./mlipx "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
-
-# Required by the tested V100/Volta setup; newer cuDNN 9.24 fails its
-# convolution-algorithm probe on this GPU.
-uv pip install --no-config --python .venv-grace/bin/python \
-  "nvidia-cudnn-cu12==9.3.0.75"
-
-.venv-grace/bin/mlipx sp structure.vasp \
-  --model models/grace/GRACE-2L-SMAX-large --model-type grace \
-  --task bulk --device cuda:0
-```
-
-A successful TensorFlow import or a listed GPU does not validate GPU graph
-execution. Run a real TensorFlow GPU operation and a one-structure GRACE SP
-smoke test before GRACE MD.
-
-If you already ran `uv pip install mace-torch`, you do not need to delete the
-repository. Restore the UMA environment and then create `.venv-mace`:
-
-```bash
-# uv removes mace-torch because it is not present in uv.lock
-uv sync
-uv run mlipx doctor       # inventory: MACE absent and e3nn constraints compatible
-uv run mlipx doctor --engine uma --device auto
-
-# Now run the three --python .venv-mace/bin/python commands above
-```
->
-> `doctor` checks installed distribution constraints. If `mace-torch`,
-> `fairchem-core`, and an incompatible e3nn coexist, it reports
-> `UMA/MACE dependencies: incompatible`. A backend import still cannot prove that
-> a checkpoint can be loaded, so run the model smoke test below after setup.
-
-**MACE CUDA smoke test (required before a long MD run):**
-
-```bash
-nvidia-smi
-.venv-mace/bin/python -c \
-  "import torch,e3nn; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), e3nn.__version__)"
-
-.venv-mace/bin/mlipx md test.vasp --model mace.model \
-  --model-type mace --task bulk --device cuda \
-  --steps 1 --save-interval 1 --no-pre-relax \
-  --output /tmp/mlipx-mace-smoke --name smoke
-```
-
-Success means step 1 completes, the process exits with code 0, and complete
-`vasp/OUTCAR`, `vasp/XDATCAR`, and `raw/mlipx_results.json` files are produced.
-Only then submit the long job with `.venv-mace/bin/mlipx tui`.
+**GRACE neighbour caching (enabled by default)** uses a Verlet candidate table
+at `cutoff + NEIGHBOR_SKIN` and still applies the model's exact cutoff every
+step. It rebuilds when atom count, species, cell, or PBC changes, or when any
+atom's general minimum-image displacement exceeds `skin/2`; skew cells and
+repeated periodic images are retained. Cached and uncached paths use the same
+canonical neighbour order and are cross-checked by unit tests plus a short
+200-frame GPU random trajectory. If a TensorPotential export cannot safely
+accept the cache, mlipx errors instead of silently falling back. Disable it
+explicitly with INCAR `NEIGHBOR_CACHE=False` or CLI `--no-neighbor-cache`.
+A historical V100/400-atom LGPS run measured about 51 ms/step versus 66
+ms/step uncached; that is a hardware/model-specific reference, not a general
+performance guarantee.
 
 ### Task Mapping & Periodic Boundaries (PBC)
 
@@ -1065,15 +975,15 @@ displacements and checked for half-cell ambiguity. Variable-cell trajectories
 are rejected because the current implementation cannot reliably separate
 affine cell deformation from migration. Drift removal is never enabled
 silently: choose `none`, `nonmobile`, or explicit `indices`; the choice is
-recorded in provenance. An ordinary-least-squares slope is fitted over the
-full analysis lag range by default; supply both `--fit-start-ps` and
-`--fit-stop-ps` to restrict it to a linear window. It is a diagnostic, not a
-substitute for a transport estimate with covariance and uncertainty, and the
-default full-range fit is not an automatic diffusive-regime detector.
+recorded in provenance. An ordinary-least-squares diagnostic slope is produced
+only when both `--fit-start-ps` and `--fit-stop-ps` are explicit. Without a
+window mlipx reports MSD and the local log-log exponent but does not guess a
+diffusion coefficient. OLS is not a substitute for covariance-aware transport
+and uncertainty analysis.
 
 #### Diffusion and conductivity
 
-Production transport fitting uses kinisi v2:
+Covariance-aware transport fitting uses kinisi v2:
 
 ```bash
 mlipx analyze RUN transport \
@@ -1105,6 +1015,15 @@ convergence check. kinisi's documentation notes that evaluating every possible
 time interval can be excessive for full covariance analysis. Without an
 explicit grid, mlipx retains kinisi's native behavior for small grids but
 rejects pathological dense defaults and asks for explicit parameters.
+
+kinisi 2.x's triclinic parser creates several `frames × atoms × 8` arrays.
+mlipx first applies kinisi's unweighted mean-framework drift definition once,
+then passes only mobile atoms to the parser and estimates peak allocation
+before creating frames. The default guard is 4 GiB and can be changed with
+`--parser-memory-limit-gib`; raise it only after checking available RAM.
+Results record source/parser atom counts, triclinic dispatch, estimated bytes,
+and the limit. This guards peak allocation; it is not an exact prediction of
+total process RSS.
 
 kinisi reports posterior mean, standard deviation, and 95% interval in both
 m²/s and cm²/s. Directional diffusion follows `D = slope / (2d)`, where `d` is
@@ -1266,7 +1185,7 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --name NAME, -n NAME  Job name (output goes to DIR/NAME)
 ```
 
-> `--model-type` applies to all calculation commands (sp/opt/md/batch). Default `uma`, fully backward compatible.
+> `--model-type` applies to all calculation commands (sp/opt/md/batch); the default remains `uma`.
 
 ##### `mlipx opt` — Geometry Optimization
 
@@ -1548,6 +1467,8 @@ INCAR files use a VASP-style `KEY = VALUE` format. Lines starting with `#` or `!
 | `INFERENCE_MODE` | string | `default` | Inference mode: `default`, `turbo` |
 | `DEFAULT_DTYPE` | string | `float64` | MACE dtype for every calculation type. MACE only. |
 | `HEAD` | string | - | MACE head or DeepMD/DPA multi-task branch. |
+| `NEIGHBOR_CACHE` | boolean | `.TRUE.` | GRACE Verlet neighbour cache preserving the exact cutoff and complete periodic-image semantics. Floating bond vectors may differ by about 1e-14 Å rounding. GRACE only. |
+| `NEIGHBOR_SKIN` | float | `1.5` | GRACE neighbour-cache skin in Å; the neighbour table is rebuilt when any atom moves more than `NEIGHBOR_SKIN/2`. GRACE only. |
 
 #### Output Control
 
@@ -1868,7 +1789,7 @@ atoms.info["spin"] = 1      # Spin multiplicity = 2S+1
 write("molecule.xyz", atoms)
 ```
 
-For periodic systems (omat, oc20, oc25, odac, omc), PBC is automatically set to `True` and the cell is validated. For molecules (omol), PBC is set to `False`.
+mlipx validates but never rewrites PBC: periodic tasks (omat, oc20, oc25, odac, omc) require full 3-D PBC and a nondegenerate cell; omol requires a fully nonperiodic input.
 
 ### 9.2 Generic Tasks (MACE / DPA / GRACE)
 
@@ -1886,7 +1807,7 @@ Non-UMA engines are not task-aware; `task` only controls the periodic-boundary (
 mlipx sp molecule.xyz --model dpa2.pth --model-type dpa --task molecule
 ```
 
-For periodic systems (omat, oc20, oc25, odac, omc), PBC is automatically set to `True` and the cell is validated. For molecules (omol), PBC is set to `False`.
+mlipx validates but never rewrites PBC: periodic tasks require full 3-D PBC and a nondegenerate cell, while molecular tasks require a fully nonperiodic input.
 
 ---
 

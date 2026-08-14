@@ -31,7 +31,7 @@ git clone https://github.com/hydrogen1222/mlipx.git
 cd mlipx
 
 # Environment 1: UMA
-uv sync
+uv sync --frozen
 uv run mlipx doctor --engine uma --device auto
 ```
 
@@ -226,8 +226,14 @@ exact standard VASP XDATCAR layout (unwrapped coordinates).
 | **INCAR** | `mlipx run -i INCAR` | VASP-style batch configuration |
 
 Run `mlipx doctor` for a side-effect-free package inventory. For an actual
-readiness check, select the same engine and device you will use, for example
-`uv run mlipx doctor --engine uma --device cuda:0`.
+runtime check, select the same engine and device you will use; doctor executes
+a real tensor operation rather than stopping at import. Add a model, explicit
+task/head, and structure for a no-output single-point smoke test:
+
+```bash
+.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0 \
+  --model dpa.pt --task bulk --head Domains_SSE_PBE --structure POSCAR
+```
 
 ---
 

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 2}
+_TASK_OUTPUT_REVISIONS = {"msd": 6, "transport": 3}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:

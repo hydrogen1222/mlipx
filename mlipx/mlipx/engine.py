@@ -44,7 +44,8 @@ class EngineConfig:
         model_type: MLIP engine (uma, mace, dpa, grace).
         task: Task type. UMA: omat/omol/...; others: bulk/molecule.
         device: cpu, cuda, gpu or cuda:N.
-        inference_mode: default or turbo (UMA only; ignored by other engines).
+        inference_mode: default or turbo (UMA only; non-default values are
+            rejected for other engines).
         output_dir: Directory for output files.
         job_name: Optional job name.
         calculator_options: Engine-specific options that reach the underlying
@@ -187,6 +188,8 @@ class CalculationEngine:
         "activation_checkpointing",
         "gpu_memory_growth",
         "gpu_memory_limit_mb",
+        "neighbor_cache",
+        "neighbor_skin",
     }
 
     def _effective_calculator_options(self) -> dict:

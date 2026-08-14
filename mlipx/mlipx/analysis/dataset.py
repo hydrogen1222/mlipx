@@ -342,18 +342,32 @@ class TrajectoryDataset:
         if phases is None:
             phases = np.full(nframes, "production", dtype="U16")
 
-        convention = positions_convention
-        if convention is None:
-            value = str(trajectory_meta.get("positions_convention", "")).lower()
-            legacy = str(trajectory_meta.get("positions", "")).lower()
-            if value in {"wrapped", "unwrapped"}:
-                convention = value  # type: ignore[assignment]
-            elif "unwrapped" in legacy:
-                convention = "unwrapped"
-            elif "wrapped" in legacy:
-                convention = "wrapped"
-            else:
-                convention = "unknown"
+        value = str(trajectory_meta.get("positions_convention", "")).lower()
+        legacy = str(trajectory_meta.get("positions", "")).lower()
+        if value in {"wrapped", "unwrapped"}:
+            declared_convention: PositionsConvention = value  # type: ignore[assignment]
+        elif "unwrapped" in legacy:
+            declared_convention = "unwrapped"
+        elif "wrapped" in legacy:
+            declared_convention = "wrapped"
+        else:
+            declared_convention = "unknown"
+        if (
+            positions_convention is not None
+            and declared_convention in {"wrapped", "unwrapped"}
+            and positions_convention != declared_convention
+        ):
+            raise ValueError(
+                "Explicit positions_convention conflicts with the mlipx "
+                f"trajectory artifact: requested {positions_convention!r}, "
+                f"artifact declares {declared_convention!r}. Refusing to "
+                "reinterpret periodic image semantics."
+            )
+        convention = (
+            positions_convention
+            if positions_convention is not None
+            else declared_convention
+        )
 
         target_temperature = run_options.get("temperature")
         metadata = {

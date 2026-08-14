@@ -92,6 +92,7 @@ async def test_analysis_transport_parameters_include_lag_and_source_overrides() 
         "collective_conductivity": True,
         "positions_convention": "wrapped",
         "frame_interval_fs": 10.0,
+        "parser_memory_limit_gib": 4.0,
         "random_seed": 0,
     }
 
@@ -301,6 +302,35 @@ async def test_backend_resource_controls_follow_selected_engine() -> None:
         assert config_screen.query_one("#head-input").disabled is True
         assert config_screen.query_one("#head-input").display is False
         assert config_screen.query_one("#torch-threads-input").disabled is False
+        assert config_screen.query_one("#grace-neighbor-cache-row").display is True
+        assert config_screen.query_one("#grace-neighbor-skin-input").disabled is False
+
+
+@pytest.mark.asyncio
+async def test_grace_cache_options_reach_background_command() -> None:
+    app = MlipxApp()
+    app.config.update(
+        {
+            "calc_type": "md",
+            "structure_file": "/tmp/structure.vasp",
+            "model_file": "/tmp/grace-model",
+            "model_type": "grace",
+            "task": "bulk",
+            "device": "cuda:0",
+            "output_dir": "/tmp/out",
+            "neighbor_cache": False,
+            "neighbor_skin": 2.25,
+            "steps": 5,
+        }
+    )
+
+    async with app.run_test(size=(80, 40)):
+        screen = RunScreen()
+        screen._job_id = "test-grace-cache"
+        command = screen._build_command()
+
+    assert "--no-neighbor-cache" in command
+    assert command[command.index("--neighbor-skin") + 1] == "2.25"
 
 
 @pytest.mark.asyncio

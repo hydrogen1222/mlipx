@@ -118,7 +118,7 @@ _SPECS: list[OptionSpec] = [
     OptionSpec(
         "fmax_abort", float, frozenset({"safety"}),
         aliases={"FMAX_ABORT"},
-        minimum=0.0,
+        minimum=1.0e-12,
         description="MD force-safety abort threshold in eV/Angstrom.",
     ),
     # --- model / device (calculator scope) ---
@@ -147,7 +147,9 @@ _SPECS: list[OptionSpec] = [
         "inference_mode", str, frozenset({"calculator"}),
         aliases={"INFERENCE_MODE"},
         choices=("default", "turbo"),
-        description="UMA inference mode (other engines ignore this).",
+        description=(
+            "UMA inference mode. Non-default modes are rejected for other engines."
+        ),
     ),
     # --- MACE calculator options (plan section 11.1 / 12) ---
     OptionSpec(
@@ -188,6 +190,25 @@ _SPECS: list[OptionSpec] = [
         aliases={"GPU_MEMORY_LIMIT_MB"},
         minimum=1,
         description="Hard GRACE TensorFlow logical-device memory limit in MiB.",
+    ),
+    OptionSpec(
+        "neighbor_cache", bool, frozenset({"calculator.grace"}),
+        aliases={"NEIGHBOR_CACHE"},
+        description=(
+            "GRACE verlet-style neighbor-list cache (extended cutoff + exact "
+            "re-filter). The complete periodic-image multiset matches a fresh "
+            "search; pair ordering may differ. Default: True."
+        ),
+    ),
+    OptionSpec(
+        "neighbor_skin", float, frozenset({"calculator.grace"}),
+        aliases={"NEIGHBOR_SKIN"},
+        minimum=1.0e-12,
+        description=(
+            "GRACE neighbor-cache skin in Å: the cached neighbor list is "
+            "rebuilt when any atom moves more than skin/2. Larger values "
+            "rebuild less often but filter longer lists."
+        ),
     ),
     # --- molecular electronic state (applied to atoms.info by every runner) ---
     OptionSpec(

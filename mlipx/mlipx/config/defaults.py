@@ -104,6 +104,10 @@ BUILTIN_DEFAULTS: dict[str, dict[str, Any]] = {
     "calculator.grace": {
         # TensorFlow otherwise commonly reserves nearly all visible VRAM.
         "gpu_memory_growth": True,
+        # Verlet-style neighbor-list cache.  The periodic-image multiset is
+        # equivalent to a fresh search; pair ordering is not a public contract.
+        "neighbor_cache": True,
+        "neighbor_skin": 1.5,
     },
 }
 

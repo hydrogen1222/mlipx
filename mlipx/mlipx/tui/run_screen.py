@@ -151,6 +151,10 @@ class RunScreen(Screen):
             memory_limit = self.app.get_config("gpu_memory_limit_mb")
             if memory_limit is not None:
                 options["gpu_memory_limit_mb"] = memory_limit
+            options["neighbor_cache"] = self.app.get_config(
+                "neighbor_cache", True
+            )
+            options["neighbor_skin"] = self.app.get_config("neighbor_skin", 1.5)
         if calc_type == "opt":
             for key in (
                 "fmax", "max_steps", "optimizer", "cell_opt", "fix_symmetry",

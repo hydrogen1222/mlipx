@@ -111,7 +111,7 @@ Examples:
             type=str,
             default=None,
             choices=["default", "turbo"],
-            help="UMA inference mode (default: task-specific; ignored by other engines).",
+            help="UMA inference mode (default: task-specific; turbo is rejected for other engines).",
         )
         p.add_argument(
             "--cpu-threads",
@@ -145,6 +145,26 @@ Examples:
             default=None,
             metavar="MIB",
             help="GRACE: hard per-process TensorFlow GPU memory limit in MiB.",
+        )
+        p.add_argument(
+            "--neighbor-cache",
+            action=argparse.BooleanOptionalAction,
+            default=None,
+            help=(
+                "GRACE: verlet-style neighbour-list cache (extended cutoff + "
+                "exact per-step re-filter while preserving periodic-image "
+                "semantics; default: enabled)."
+            ),
+        )
+        p.add_argument(
+            "--neighbor-skin",
+            type=float,
+            default=None,
+            metavar="ANGSTROM",
+            help=(
+                "GRACE: neighbour-cache skin in Å; the neighbour table is "
+                "rebuilt when any atom moves more than skin/2 (default: 1.5)."
+            ),
         )
         p.add_argument(
             "--dtype",
@@ -714,7 +734,10 @@ Examples:
             "--positions-convention",
             choices=["wrapped", "unwrapped", "unknown"],
             default=None,
-            help="Explicit coordinate convention for imported trajectories.",
+            help=(
+                "Coordinate convention for external trajectories. A value that "
+                "conflicts with trusted mlipx artifact metadata is rejected."
+            ),
         )
         p.add_argument(
             "--frame-interval-fs",
@@ -829,6 +852,15 @@ Examples:
     transport_parser.add_argument("--n-walkers", type=int, default=32)
     transport_parser.add_argument("--n-burn", type=int, default=500)
     transport_parser.add_argument("--n-thin", type=int, default=10)
+    transport_parser.add_argument(
+        "--parser-memory-limit-gib",
+        type=float,
+        default=4.0,
+        help=(
+            "Fail before kinisi parsing when the estimated trajectory-parser "
+            "peak exceeds this many GiB (default: 4)."
+        ),
+    )
 
     density_parser = analyze_sub.add_parser(
         "density", help="Periodic 3-D mobile-ion density map"
@@ -1014,7 +1046,32 @@ Examples:
         "--model",
         type=str,
         default=None,
-        help="Path to model checkpoint to verify",
+        help="Model checkpoint to load (requires --engine and --task).",
+    )
+    doctor_parser.add_argument(
+        "--task",
+        type=str,
+        default=None,
+        help="Explicit model task/PBC semantic used by the model probe.",
+    )
+    doctor_parser.add_argument(
+        "--head",
+        type=str,
+        default=None,
+        help="Explicit MACE head or DPA/DeepMD branch for the model probe.",
+    )
+    doctor_parser.add_argument(
+        "--structure",
+        type=str,
+        default=None,
+        help="Optional structure for a real energy/force single-point smoke test.",
+    )
+    doctor_parser.add_argument(
+        "--dtype",
+        dest="default_dtype",
+        choices=["float32", "float64"],
+        default="float64",
+        help="MACE dtype used by the model probe (default: float64).",
     )
 
     # setup command
@@ -1096,6 +1153,8 @@ def _build_cli_opts(args: argparse.Namespace, calc_type: str) -> dict:
         "activation_checkpointing",
         "gpu_memory_growth",
         "gpu_memory_limit_mb",
+        "neighbor_cache",
+        "neighbor_skin",
         "default_dtype",
         "head",
         "write_outcar",
@@ -1590,6 +1649,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
         model_path=args.model,
         engine=args.engine,
         device=args.device,
+        task=args.task,
+        head=args.head,
+        structure_path=args.structure,
+        default_dtype=args.default_dtype,
     )
     print(format_diagnostics(checks))
     return 0 if failures == 0 else 1

@@ -5,6 +5,7 @@ import json
 import numpy as np
 import pytest
 from ase import Atoms
+from ase.io.trajectory import Trajectory
 
 from mlipx.analysis import TrajectoryDataset, require_analysis, validate_trajectory
 from mlipx.analysis.thermo import thermodynamic_diagnostics
@@ -62,6 +63,29 @@ def test_mlipx_xdatcar_is_a_direct_msd_source(tmp_path) -> None:
     assert dataset.positions_convention == "unwrapped"
     assert dataset.positions[-1, 0, 0] == pytest.approx(5.2)
     assert validate_trajectory(dataset).eligible_for_msd is True
+
+
+def test_mlipx_artifact_position_semantics_cannot_be_overridden(tmp_path) -> None:
+    run = tmp_path / "run"
+    raw = run / "raw"
+    raw.mkdir(parents=True)
+    with Trajectory(raw / "trajectory.traj", "w") as writer:
+        for atoms in _frames():
+            writer.write(atoms)
+    (run / "artifacts.json").write_text(
+        json.dumps(
+            {
+                "trajectory": {
+                    "frame_interval_fs": 10.0,
+                    "positions_convention": "unwrapped",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="Refusing to reinterpret periodic image"):
+        TrajectoryDataset.load(run, positions_convention="wrapped")
 
 
 def test_nonuniform_time_is_not_replaced_by_median() -> None:

@@ -49,7 +49,13 @@ _CALC_KEYS: dict[str, set[str]] = {
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
     "dpa": {"head"},
-    "grace": {"cpu_threads", "gpu_memory_growth", "gpu_memory_limit_mb"},
+    "grace": {
+        "cpu_threads",
+        "gpu_memory_growth",
+        "gpu_memory_limit_mb",
+        "neighbor_cache",
+        "neighbor_skin",
+    },
 }
 _ALL_CALC_KEYS: set[str] = set().union(*_CALC_KEYS.values())
 
@@ -138,13 +144,23 @@ class CalculatorFactory:
         """
         m_type = (model_type or "uma").lower()
         kwargs = _check_unknown_kwargs(m_type, kwargs, strict=strict)
+        normalized_task = str(task).strip().lower()
+        if m_type not in UMA_ALIASES and normalized_task not in {
+            "bulk",
+            "molecule",
+        }:
+            raise ValueError(
+                f"Invalid task {task!r} for engine {m_type!r}. Non-UMA "
+                "engines require the explicit PBC semantic 'bulk' or "
+                "'molecule'."
+            )
 
         if m_type in UMA_ALIASES:
             from mlipx.calculator import UMACalculator  # noqa: PLC0415
 
             return UMACalculator(
                 model_path=model_path,
-                task=task,
+                task=normalized_task,
                 device=device,
                 inference_mode=kwargs.get("inference_mode", "default"),
                 torch_num_threads=kwargs.get("torch_num_threads"),
@@ -158,7 +174,7 @@ class CalculatorFactory:
             return MACECalculatorWrapper(
                 model_path=model_path,
                 device=device,
-                task=task,
+                task=normalized_task,
                 default_dtype=kwargs.get("default_dtype", "float64"),
                 head=kwargs.get("head"),
             )
@@ -168,7 +184,7 @@ class CalculatorFactory:
             return DPACalculatorWrapper(
                 model_path=model_path,
                 device=device,
-                task=task,
+                task=normalized_task,
                 head=kwargs.get("head"),
             )
         elif m_type == "grace":
@@ -177,10 +193,12 @@ class CalculatorFactory:
             return GRACECalculatorWrapper(
                 model_path=model_path,
                 device=device,
-                task=task,
+                task=normalized_task,
                 cpu_threads=kwargs.get("cpu_threads"),
                 gpu_memory_growth=kwargs.get("gpu_memory_growth", True),
                 gpu_memory_limit_mb=kwargs.get("gpu_memory_limit_mb"),
+                neighbor_cache=kwargs.get("neighbor_cache", True),
+                neighbor_skin=kwargs.get("neighbor_skin", 1.5),
             )
         else:
             raise ValueError(

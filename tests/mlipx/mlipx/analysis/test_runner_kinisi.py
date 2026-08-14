@@ -17,6 +17,8 @@ from mlipx.analysis.runner import run_analysis
 from mlipx.analysis.schema import AnalysisRequest
 from mlipx.analysis.transport import (
     DEFAULT_MAX_NATIVE_KINISI_LAG_POINTS,
+    _kinisi_frames_and_indices,
+    _kinisi_parser_peak_bytes,
     _resolve_kinisi_lag_grid,
     _validate_kinisi_periodic_reconstruction,
     kinisi_transport,
@@ -141,28 +143,23 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
     assert len(outcome["results"]["lag_time_ps"]) == 4
     output = run / "analysis" / "msd" / outcome["analysis_id"]
     request = json.loads((output / "request.json").read_text(encoding="utf-8"))
-    assert request["task_output_revision"] == 5
+    assert request["task_output_revision"] == 6
     assert (output / "msd.csv").is_file()
     assert (output / "msd.png").is_file()
     assert (output / "msd.svg").is_file()
     assert (output / "alpha.png").is_file()
     assert (output / "alpha.svg").is_file()
-    assert (output / "diffusion_fits.csv").is_file()
+    assert not (output / "diffusion_fits.csv").exists()
     with (output / "msd.csv").open(newline="", encoding="utf-8") as handle:
         columns = next(csv.reader(handle))
     for axes in ("x", "y", "z", "xy", "xyz"):
         assert f"alpha_{axes}" in columns
     payload = json.loads((output / "results.json").read_text(encoding="utf-8"))
-    assert {"alpha.png", "alpha.svg", "diffusion_fits.csv"} <= set(payload["artifacts"])
-    assert payload["results"]["fit_window_ps"] == {"start": 0.0, "stop": 0.006}
-    assert payload["results"]["fit_window_source"] == "full_trajectory_default"
-    with (output / "diffusion_fits.csv").open(newline="", encoding="utf-8") as handle:
-        fit_rows = list(csv.DictReader(handle))
-    assert [row["axes"] for row in fit_rows] == ["x", "y", "z", "xy", "xyz"]
-    assert all("self_diffusion_coefficient_m2_s" in row for row in fit_rows)
-    assert all(
-        row["fit_window_source"] == "full_trajectory_default" for row in fit_rows
-    )
+    assert {"alpha.png", "alpha.svg"} <= set(payload["artifacts"])
+    assert "diffusion_fits.csv" not in payload["artifacts"]
+    assert payload["results"]["fit_window_ps"] is None
+    assert payload["results"]["fit_window_source"] is None
+    assert payload["results"]["diagnostic_linear_diffusion_fits"] == {}
 
 
 def test_transport_analysis_id_includes_lag_parameters_and_revision(
@@ -212,7 +209,7 @@ def test_transport_analysis_id_includes_lag_parameters_and_revision(
     provenance = json.loads(
         (first_output / "provenance.json").read_text(encoding="utf-8")
     )
-    assert request["task_output_revision"] == 2
+    assert request["task_output_revision"] == 3
     assert provenance["parameters"]["lag_step_ps"] == 1.0
     assert provenance["transport"]["lag_grid"]["requested_step_ps"] == 1.0
     reused = run_analysis(
@@ -341,6 +338,28 @@ def test_dense_native_guard_runs_before_kinisi(tmp_path, monkeypatch) -> None:
             ionic_charge_e=1,
             fit_start_ps=40.0,
             temperature_K=700.0,
+        )
+
+
+def test_kinisi_parser_memory_estimate_and_guard(monkeypatch) -> None:
+    assert _kinisi_parser_peak_bytes(nframes=100, natoms=10, triclinic=False) == 128000
+    assert _kinisi_parser_peak_bytes(nframes=100, natoms=10, triclinic=True) == 512000
+    dataset = _synthetic_transport_dataset()
+    monkeypatch.setattr(
+        transport_module,
+        "_require_kinisi",
+        lambda: pytest.fail("kinisi must not be imported after a memory guard"),
+    )
+    with pytest.raises(UnsupportedAnalysisError, match="parser peak memory"):
+        kinisi_transport(
+            dataset,
+            mobile_species="Li",
+            ionic_charge_e=1,
+            fit_start_ps=0.07,
+            lag_step_ps=0.02,
+            lag_stop_ps=0.2,
+            temperature_K=600.0,
+            parser_memory_limit_gib=1.0e-9,
         )
 
 
@@ -522,6 +541,85 @@ def test_kinisi_adapter_matches_official_ase_api() -> None:
     assert adapter["kinisi_time_mapping"]["resulting_frame_interval_fs"] == 2.0
     assert adapter["tracer_diffusion"]["D_posterior_m2_s"]["mean"] == pytest.approx(
         float(np.mean(official.D.to(unit="m^2/s").values))
+    )
+
+
+def test_mobile_only_precorrected_parser_matches_kinisi_framework_drift() -> None:
+    """The lower-memory adapter must preserve kinisi's drift-corrected MSD."""
+
+    sc = pytest.importorskip("scipp")
+    kinisi = pytest.importorskip("kinisi.analyze")
+    rng = np.random.default_rng(23)
+    n_frames = 70
+    cell = np.asarray([[12.0, 0.0, 0.0], [2.0, 11.0, 0.0], [1.0, 0.8, 10.0]])
+    initial_fractional = np.asarray(
+        [
+            [0.20, 0.20, 0.20],
+            [0.35, 0.30, 0.25],
+            [0.45, 0.55, 0.40],
+            [0.65, 0.45, 0.60],
+            [0.25, 0.75, 0.70],
+            [0.75, 0.70, 0.30],
+        ]
+    )
+    framework_drift = np.arange(n_frames)[:, None, None] * np.asarray(
+        [0.003, -0.002, 0.001]
+    )
+    li_walk = np.concatenate(
+        (
+            np.zeros((1, 4, 3)),
+            np.cumsum(rng.normal(scale=0.003, size=(n_frames - 1, 4, 3)), axis=0),
+        ),
+        axis=0,
+    )
+    fractional = np.broadcast_to(
+        initial_fractional, (n_frames, 6, 3)
+    ).copy()
+    fractional += framework_drift
+    fractional[:, :4] += li_walk
+    frames = [
+        Atoms("Li4S2", scaled_positions=frame, cell=cell, pbc=True)
+        for frame in fractional
+    ]
+    dataset = TrajectoryDataset.from_frames(
+        frames,
+        times_fs=np.arange(n_frames, dtype=float),
+        positions_convention="unwrapped",
+    )
+    mobile = dataset.select("Li")
+    compact_frames, local_mobile, reference = _kinisi_frames_and_indices(
+        dataset,
+        mobile=mobile,
+        drift_reference="nonmobile",
+        drift_indices=None,
+    )
+    common = {
+        "time_step": sc.scalar(1.0, unit="fs"),
+        "step_skip": sc.scalar(1, unit="dimensionless"),
+        "dimension": "xyz",
+        "progress": False,
+    }
+    official = kinisi.DiffusionAnalyzer.from_ase(
+        trajectory=frames,
+        specie="Li",
+        **common,
+    )
+    compact = kinisi.DiffusionAnalyzer.from_ase(
+        trajectory=compact_frames,
+        specie=None,
+        specie_indices=sc.array(
+            dims=["particle"], values=local_mobile, unit="dimensionless"
+        ),
+        **common,
+    )
+
+    np.testing.assert_array_equal(reference, [4, 5])
+    np.testing.assert_allclose(compact.dt.values, official.dt.values)
+    np.testing.assert_allclose(
+        compact.msd.to(unit="angstrom^2").values,
+        official.msd.to(unit="angstrom^2").values,
+        rtol=1.0e-12,
+        atol=1.0e-12,
     )
 
 

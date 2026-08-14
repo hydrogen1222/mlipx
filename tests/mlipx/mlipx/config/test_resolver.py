@@ -163,6 +163,37 @@ def test_grace_gpu_memory_policy_is_a_calculator_option() -> None:
         assert "gpu_memory_limit_mb" not in rc.run_options
 
 
+def test_engine_builtins_are_materialized_in_resolved_config() -> None:
+    mace = resolve_config(
+        calc_type="md", cli={"model_type": "mace", "model_path": "m.model"}
+    )
+    grace = resolve_config(
+        calc_type="md", cli={"model_type": "grace", "model_path": "grace"}
+    )
+
+    assert mace.calculator_options["default_dtype"] == "float64"
+    assert mace.sources["default_dtype"].source == (
+        "built-in defaults (calculator.mace)"
+    )
+    assert mace.inference_mode == "default"
+    assert grace.calculator_options["neighbor_cache"] is True
+    assert grace.calculator_options["neighbor_skin"] == 1.5
+    assert grace.calculator_options["gpu_memory_growth"] is True
+    assert grace.inference_mode == "default"
+
+
+def test_non_uma_turbo_mode_fails_instead_of_being_ignored() -> None:
+    with pytest.raises(ValueError, match="UMA-only"):
+        resolve_config(
+            calc_type="md",
+            cli={
+                "model_type": "dpa",
+                "model_path": "dpa.pt",
+                "inference_mode": "turbo",
+            },
+        )
+
+
 # ---------------------------------------------------------------------------
 # Model aliases
 # ---------------------------------------------------------------------------

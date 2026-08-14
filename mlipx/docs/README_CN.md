@@ -103,6 +103,13 @@ archive 中的 Analysis v1。使用方法见本手册
 | DPA | `.venv-dpa/bin/mlipx` | `.venv-dpa` | DeepMD 需要 PyTorch 2.10 和 CXX11 ABI |
 | GRACE | `.venv-grace/bin/mlipx` | `.venv-grace` | TensorFlow 的 CUDA/cuDNN 不能覆盖 PyTorch 环境 |
 
+下面的版本组合是本仓库截至 2026-08-14 的**已验证配置**，不是对所有硬件的
+“永远最新版”承诺。换版本前应先核对
+[uv 安装文档](https://docs.astral.sh/uv/getting-started/installation/)、
+[DeePMD 安装文档](https://docs.deepmodeling.com/projects/deepmd/en/latest/getting-started/install.html)
+和 [GRACE/TensorPotential 安装文档](https://gracemaker.readthedocs.io/en/latest/gracemaker/install/)，
+然后重新执行 doctor 的运行时与模型探针。
+
 这里的“环境”只是四个互不干扰的 Python 软件目录，不是四份源代码。四套环境
 共用当前仓库、结构文件和模型文件。请在仓库根目录依次执行下面的命令；只使用
 某一个引擎时，只安装对应的一段即可。
@@ -121,7 +128,7 @@ cd mlipx
 #### 第 1 套：UMA（默认，建议先装）
 
 ```bash
-uv sync
+uv sync --frozen
 uv run mlipx doctor --engine uma --device auto
 ```
 
@@ -223,32 +230,15 @@ TUI 也遵循同一规则。例如 MACE 必须运行
 | Python | 3.10–3.12 | 3.12 |
 | 内存 | 8 GB | 32 GB |
 | 磁盘 | 15 GB（单个环境与小模型） | 60+ GB（四个环境与多个模型） |
-| GPU（可选） | CUDA 11.8+ | CUDA 12.x，8+ GB 显存 |
+| GPU（可选） | 与所选 PyTorch/TensorFlow wheel 匹配的 NVIDIA 驱动 | 已验证的 CUDA 12.x 组合，8+ GB 显存 |
 
 ### 2.3 UMA 环境说明
 
-> **注意：** `fairchem-core` 已发布到
-> [PyPI](https://pypi.org/project/fairchem-core/)。本仓库同时保留了上游源码
-> `packages/fairchem-core/`，根目录的 uv workspace 显式选择该本地成员，因此在
-> **本仓库内**执行 `uv sync` 时安装的是本地 editable workspace 版本，而不是重新
-> 从 PyPI 下载。普通的非 workspace 安装仍可从 PyPI 解析该包。
-
-```bash
-# 克隆仓库
-git clone https://github.com/hydrogen1222/mlipx.git
-cd mlipx
-
-# 第 1 步：创建锁定的 venv（Python 3.12，由 .python-version 指定）并按
-#         lockfile 安装全部依赖（含 PyTorch）。uv 自动创建 .venv。
-uv sync
-
-# 第 2 步（可选）：检测 GPU 并验证 PyTorch CUDA 匹配。使用 nvidia-smi。
-uv run mlipx setup
-```
-
-> 如果克隆后直接运行 `uv run mlipx doctor`，uv 也会隐式执行同步并创建
-> `.venv`；该环境仍然是 UMA 专用环境。推荐先显式执行 `uv sync`，以免误以为
-> doctor 创建的是可同时安装所有引擎的通用环境。
+`fairchem-core` 虽已发布到
+[PyPI](https://pypi.org/project/fairchem-core/)，本仓库根 workspace 明确使用
+`packages/fairchem-core/` 的本地成员。因此 §2.1 的 `uv sync --frozen` 安装的是
+锁文件与本地源码组合；不要再用裸 `uv pip install` 覆盖 `.venv`。需要查看 GPU
+架构和推荐 wheel 时运行 `uv run mlipx setup`。
 
 ### 2.4 CUDA GPU 与 CPU
 
@@ -292,9 +282,9 @@ uv run python -c "import torch; print('CUDA 可用' if torch.cuda.is_available()
 的 GPU（如 GTX 10 系列 Pascal，sm_61）和纯 CPU 环境也可使用，但安装命令
 可能不同。*
 
-### 2.5 如何运行命令
+### 2.5 命令前缀与环境激活
 
-两种等价方式：
+以下两种写法只针对 UMA `.venv`，彼此等价：
 
 ```bash
 # 方式 A：uv run（推荐——自动检测 .venv，跨平台通用）
@@ -308,6 +298,9 @@ source .venv/bin/activate      # Linux/Mac
 mlipx --help
 mlipx tui
 ```
+
+其他后端把 `.venv` 换成 `.venv-mace`、`.venv-dpa` 或 `.venv-grace`。直接写
+`环境/bin/mlipx` 最不容易误用解释器，也适合脚本和 TUI。
 
 ### 2.6 模型检查点
 
@@ -332,16 +325,10 @@ hf download facebook/UMA checkpoints/uma-s-1p2p1.pt --local-dir models/uma
 > 它作为推荐起点。mlipx 接受任意本地检查点路径，例如
 > `--model models/uma/checkpoints/uma-s-1p2p1.pt`。
 
-**其他引擎（可选）：** MACE / DPA / GRACE 的模型由各项目单独发布。
-为避免 e3nn、PyTorch ABI 和 CUDA/cuDNN 的二进制依赖互相覆盖，推荐四个后端
-各用一个环境：UMA `.venv`、MACE `.venv-mace`、DPA `.venv-dpa`、GRACE
-`.venv-grace`。不要把其他后端直接装进 UMA `.venv`。
-
-| 引擎 | 后端安装 | 模型格式 |
-|------|----------|----------|
-| MACE | 使用 §2.1 的 `.venv-mace` 命令 | `.model` / `.pt` |
-| DPA | 使用 §2.1 的 `.venv-dpa` 命令 | 冻结/导出的 `.pt` / `.pth` |
-| GRACE | 使用 §2.1 的 `.venv-grace` 命令 | TensorFlow SavedModel 目录 |
+**其他引擎（可选）：** MACE / DPA / GRACE 的模型由各项目单独发布。MACE 使用
+`.model`/`.pt`，DPA 使用冻结或导出的 `.pt`/`.pth`（不是训练 checkpoint），
+GRACE 的路径必须是完整 TensorFlow SavedModel 目录。安装环境仍以 §2.1 为唯一
+说明。
 
 > **不要执行 `uv pip install mace-torch`。** `uv pip` 默认目标就是项目的
 > `.venv`；此时 doctor 虽能看到两个引擎，却会报告
@@ -369,10 +356,22 @@ uv run mlipx doctor --engine uma --device auto
 .venv-grace/bin/mlipx doctor --engine grace --device cpu
 ```
 
-指定后端后，运行时导入会在隔离子进程中完成；导入错误、CUDA 不可见和
-PyTorch 架构不匹配都会返回非零退出码。纯 CPU 目标不要求 CUDA。可再加
-`--model PATH` 检查路径是否存在以及文件/目录类型是否符合后端；该选项不会
-加载大型模型，所以正式计算前仍需做一次小体系 SP 冒烟测试。
+指定后端后，doctor 会在隔离子进程中导入后端，并在目标 CPU/GPU 上执行一个
+真实张量运算；导入错误、CUDA 不可见、算子执行失败和 PyTorch 架构不匹配都会
+返回非零退出码。纯 CPU 目标不要求 CUDA。
+
+要验证“这个模型、这个 task/head、这个结构”能否真正计算，使用完整探针。此命令
+会加载模型并执行一次能量/力计算；周期模型支持应力时也会检查应力，但不会写入
+OUTCAR、轨迹或结果目录：
+
+```bash
+.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0 \
+  --model models/dpa/DPA-3.2-5M.pt --task bulk \
+  --head Domains_SSE_PBE --structure structure.vasp
+```
+
+`--model` 必须同时给出 `--engine` 和 `--task`。多 head 的 MACE/DPA 模型还必须
+显式给出 `--head`；doctor 不会猜测势能面。
 
 查看完整命令列表：
 ```bash
@@ -577,125 +576,38 @@ result = run_single_point(
 )
 ```
 
-### 各引擎后端安装与环境隔离
+### 环境、模型 task/head 与运行前验证
 
-仓库的 `uv sync` 会从本地 workspace 安装 `fairchem-core`，所以 UMA 运行时代码
-可直接导入；模型权重仍须按 §2.6 从 Hugging Face 单独申请和下载。其他引擎需单独
-安装后端包：
+安装命令只在 §2 维护；本节不再复制第二套容易过期的安装教程。运行时必须使用
+对应环境的命令前缀。若曾把 MACE 装进 UMA 的 `.venv`，执行
+`uv sync --frozen` 可恢复锁文件规定的 UMA 环境，再按 §2.1 重建
+`.venv-mace`。
 
-| 引擎 | 安装命令 | 模型格式 |
-|------|----------|----------|
-| MACE | 仅安装到 `.venv-mace`（见紧接着的完整命令） | `.model` / `.pt` |
-| DPA | 按下方命令安装到 `.venv-dpa` | 冻结/导出的 `.pt` / `.pth` |
-| GRACE | 按下方命令安装到 `.venv-grace` | TensorFlow SavedModel 目录 |
+`task` 与模型 `head` 是两件不同的事：非 UMA 的 `bulk|molecule` 明确声明
+周期性语义，MACE head / DPA branch 则选择势能面。mlipx 不会再自动改写输入
+结构的 PBC；`bulk` 必须是完整三维 PBC，`molecule` 必须完全非周期。多 head
+的 MACE/DPA 模型若没有显式 `--head` 会直接报错。DPA 可用
+`dp show MODEL model-branch` 查看规范分支名和 alias。
 
-> ⚠️ **环境隔离警告**：`mace-torch` 锁定 `e3nn==0.4.4`，与 `fairchem-core`（`e3nn>=0.5`）**根本冲突**，二者不能装在同一 Python 环境中。
->
-> **推荐做法**：保留 `uv sync` 创建的 `.venv` 专供 UMA，并创建另一个
-> `.venv-mace`。不要在 UMA 环境里执行 `pip install mace-torch`：
-> ```bash
-> # 在仓库根目录执行；明确使用 Python 3.12（项目不支持 3.13+）
-> uv venv --python 3.12 .venv-mace
-> uv pip install --python .venv-mace/bin/python \
->   torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-> uv pip install --python .venv-mace/bin/python -e ./mlipx
-> uv pip install --python .venv-mace/bin/python "e3nn==0.4.4" mace-torch
->
-> # UMA：始终使用仓库的 uv 环境
-> uv run mlipx doctor --engine uma --device auto
-> uv run mlipx tui
->
-> # MACE：始终显式使用 MACE 环境
-> .venv-mace/bin/mlipx doctor --engine mace --device auto
-> .venv-mace/bin/mlipx tui
-> ```
-
-根工作区为保留 Pascal GPU 所需的 `sm_60` 内核，显式将 UMA 的 PyTorch 固定为
-2.6.0+cu124；当前 fairchem-core 元数据则声明 `torch~=2.8.0`。因此
-`uv pip check --python .venv/bin/python` 会报告这一项已知覆盖。mlipx 的 UMA
-推理路径已用真实模型验证，但这不代表 fairchem-core 的所有其他功能都受该
-非上游版本组合支持。
-
-近期 DeePMD-kit wheel 使用 PyTorch 的 CXX11 ABI 编译，而 UMA 环境所需的
-PyTorch 2.6 使用旧 ABI。因此 DPA 也应隔离；ABI 不匹配时
-`import deepmd` 可能成功，但加载 PyTorch 模型时会立即失败：
+正式 MD 前先用 doctor 做不落盘的单结构探针，例如：
 
 ```bash
-uv venv --python 3.12 .venv-dpa
-uv pip install --no-config --python .venv-dpa/bin/python \
-  "torch==2.10.0+cu126" --index-url https://download.pytorch.org/whl/cu126
-uv pip install --no-config --python .venv-dpa/bin/python \
-  -e ./mlipx "deepmd-kit[torch]==3.1.3"
+.venv-mace/bin/mlipx doctor --engine mace --device cuda:0 \
+  --model mace.model --task bulk --head default --structure test.vasp
 
-.venv-dpa/bin/mlipx sp structure.vasp \
-  --model models/dpa/DPA-3.2-5M.pt --model-type dpa --task bulk \
-  --head Domains_SSE_PBE --device cuda:0
+.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0 \
+  --model models/dpa/DPA-3.2-5M.pt --task bulk \
+  --head Domains_SSE_PBE --structure test.vasp
 ```
 
-若选择其他版本，必须确保 DeePMD-kit 声明的 PyTorch 版本和 CXX11 ABI
-一致。无 NVIDIA GPU 时，按 §2.1 把 Torch 安装命令替换为 CPU wheel，并把
-运行参数改为 `--device cpu`。DPA 需要冻结/导出的推理模型，不能直接使用
-原始训练 checkpoint。
-
-`DPA-3.2-5M.pt` 是多任务模型：`head` 决定实际使用的势能面，而 mlipx 的
-`task=bulk|molecule` 只控制 PBC。LGPS 应选择明确覆盖
-Li–Si/Ge/Sn–P–S 固态电解质的 `--head Domains_SSE_PBE`；一般分子可用
-`--head OMol25`。用 `dp show MODEL model-branch` 查看分支，不能因为默认
-分支“能算完”就认为势能面选择正确。
-
-GRACE 使用 TensorFlow。CPU 推理技术上可以留在 UMA 环境，但为保证 CPU/GPU
-命令一致并避免 TensorFlow 覆盖 UMA/PyTorch 的 CUDA 库，推荐始终使用独立
-`.venv-grace`：
-
-```bash
-uv venv --python 3.12 .venv-grace
-uv pip install --no-config --python .venv-grace/bin/python \
-  -e ./mlipx "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
-
-# V100/Volta 实测需要此固定；过新的 cuDNN 9.24 会在卷积算法探测时报错
-uv pip install --no-config --python .venv-grace/bin/python \
-  "nvidia-cudnn-cu12==9.3.0.75"
-
-.venv-grace/bin/mlipx sp structure.vasp \
-  --model models/grace/GRACE-2L-SMAX-large --model-type grace \
-  --task bulk --device cuda:0
-```
-
-仅 `import tensorflow` 或列出 GPU 不能证明 GPU 计算图可执行。安装后应先做
-真实 TensorFlow GPU 算子测试和单结构 GRACE SP 冒烟测试，再开始 GRACE MD。
-
-如果已经误执行了 `uv pip install mace-torch`，无需删除仓库，按下面恢复：
-
-```bash
-# 恢复 UMA 项目环境；uv 会移除不在 uv.lock 中的 mace-torch
-uv sync
-uv run mlipx doctor       # 清单中 MACE 应显示未安装，e3nn 约束应兼容
-uv run mlipx doctor --engine uma --device auto
-
-# 再按上方三条 --python .venv-mace/bin/python 命令创建 MACE 环境
-```
->
-> `doctor` 会检查已安装发行包的依赖约束；如果同一环境中同时出现
-> `mace-torch`、`fairchem-core` 和不兼容的 e3nn，会明确显示
-> `UMA/MACE dependencies: incompatible`。但“后端可以 import”仍不等于模型一定
-> 可加载，因此安装后应按下文执行一次模型冒烟测试。
-
-**MACE CUDA 冒烟测试（正式长 MD 前必须先跑）：**
-
-```bash
-nvidia-smi
-.venv-mace/bin/python -c \
-  "import torch,e3nn; print(torch.__version__, torch.version.cuda, torch.cuda.is_available(), e3nn.__version__)"
-
-.venv-mace/bin/mlipx md test.vasp --model mace.model \
-  --model-type mace --task bulk --device cuda \
-  --steps 1 --save-interval 1 --no-pre-relax \
-  --output /tmp/mlipx-mace-smoke --name smoke
-```
-
-成功标准：日志完成第 1 步、退出码为 0，并生成完整的
-`vasp/OUTCAR`、`vasp/XDATCAR` 和 `raw/mlipx_results.json`。之后再通过
-`.venv-mace/bin/mlipx tui` 提交长任务。
+**GRACE 邻居缓存（默认开启）**使用 `cutoff + NEIGHBOR_SKIN` 的 Verlet 候选表，
+每一步仍按模型精确 cutoff 过滤。原子数、元素、晶胞或 PBC 改变，或者任一原子的
+一般最小像位移超过 `skin/2` 时立即重建；倾斜晶胞和重复周期像均保留。缓存与
+无缓存路径使用同一规范化邻居顺序，已用单元测试和 200 帧短 GPU 随机轨迹交叉
+检查。若当前 TensorPotential 导出格式不支持安全安装缓存，mlipx 会报错而不是
+静默退回。可用 INCAR `NEIGHBOR_CACHE=False` 或 CLI
+`--no-neighbor-cache` 显式关闭。历史 V100/400 原子 LGPS 测试约为 51 ms/步，
+无缓存约 66 ms/步；这是特定硬件/模型的参考值，不是通用性能保证。
 
 ### 任务映射与周期性边界 (PBC)
 
@@ -1017,13 +929,13 @@ MSD 使用多时间原点平均，默认 FFT 实现，也可用 `--method direct
 最小镜像重建，并报告可能跨越半个晶胞的歧义。变胞轨迹会被拒绝，因为当前
 实现不能可靠地区分晶胞仿射形变和真实迁移。漂移修正从不暗中启用，可选
 `none`、`nonmobile` 或明确的 `indices`，选择会写入 provenance。只有同时给出
-未给出拟合区间时，普通最小二乘斜率默认使用整个分析 lag 范围；同时给出
-`--fit-start-ps` 和 `--fit-stop-ps` 可以限定拟合区间。它只是诊断值，不代替带
-协方差和不确定度的输运估计；默认全范围拟合也不会自动判断真正的扩散区间。
+`--fit-start-ps` 和 `--fit-stop-ps` 时才计算普通最小二乘诊断斜率；
+没有显式窗口时只输出 MSD 和局部 log–log 指数，不猜测扩散系数。OLS 仍只是
+诊断值，不代替带协方差和不确定度的输运估计。
 
 #### 扩散系数和电导率
 
-生产级输运拟合使用 kinisi v2：
+协方差感知的输运拟合使用 kinisi v2：
 
 ```bash
 mlipx analyze RUN transport \
@@ -1050,6 +962,13 @@ mlipx analyze RUN transport \
 再比较例如 0.5、1、2 ps 的间距做 convergence check。kinisi 文档指出，在完整
 协方差分析中计算每一个可能的时间间隔通常过度；未指定网格时，小轨迹仍保留
 kinisi 原生行为，但过密的默认网格会被 mlipx 拒绝并要求显式指定参数。
+
+kinisi 2.x 的三斜晶胞解析器会创建多组 `帧数 × 原子数 × 8` 数组。mlipx 先按
+kinisi 的非加权框架平均位移定义做一次漂移修正，再只把移动原子交给解析器，
+并在分配内存前做保守估算。默认上限为 4 GiB，可用
+`--parser-memory-limit-gib` 调整；仅在确认可用 RAM 后提高。结果会记录原始/
+解析器原子数、三斜路径、估算字节数和上限。这是峰值分配保护，不是进程总 RSS
+的精确预测。
 
 kinisi 会输出后验均值、标准差和 95% 区间，并同时记录 m²/s 与 cm²/s。方向
 扩散遵循 `D = slope / (2d)`，其中 `d` 是所选方向数。`--charge` 必须显式给出，
@@ -1192,7 +1111,7 @@ mlipx sp STRUCTURE --model MODEL [--model-type TYPE] [--task TASK] [--device DEV
   --name NAME, -n NAME  任务名称（输出至 DIR/NAME）
 ```
 
-> `--model-type` 适用于所有计算命令（sp/opt/md/batch）。默认 `uma`，与旧版完全兼容。
+> `--model-type` 适用于所有计算命令（sp/opt/md/batch），默认仍为 `uma`。
 
 ##### `mlipx opt` — 几何优化
 
@@ -1470,6 +1389,8 @@ INCAR 文件采用 VASP 风格的 `KEY = VALUE` 格式。以 `#` 或 `!` 开头�
 | `INFERENCE_MODE` | 字符串 | `default` | 推理模式：`default`、`turbo` |
 | `DEFAULT_DTYPE` | 字符串 | `float64` | 所有计算类型的 MACE 精度默认值。仅 MACE。 |
 | `HEAD` | 字符串 | - | MACE head 或 DeepMD/DPA 多任务分支。 |
+| `NEIGHBOR_CACHE` | 布尔 | `.TRUE.` | GRACE Verlet 邻居缓存；保留精确 cutoff 与完整周期像语义。浮点 bond 向量可有约 1e-14 Å 舍入差。仅 GRACE。 |
+| `NEIGHBOR_SKIN` | 浮点数 | `1.5` | GRACE 邻居缓存的皮肤距离（Å）：任意原子位移超过 `NEIGHBOR_SKIN/2` 时重建邻居表。仅 GRACE。 |
 
 #### 输出控制
 
@@ -1692,7 +1613,7 @@ atoms.info["spin"] = 1      # 自旋多重度 = 2S+1
 write("molecule.xyz", atoms)
 ```
 
-对于周期性体系（omat、oc20、oc25、odac、omc），PBC 自动设为 `True` 并验证晶胞。对于分子（omol），PBC 设为 `False`。
+mlipx 只验证、不改写 PBC：周期任务（omat、oc20、oc25、odac、omc）要求输入为完整三维 PBC 和非退化晶胞；omol 要求输入完全非周期。
 
 ### 9.2 通用任务（MACE / DPA / GRACE）
 

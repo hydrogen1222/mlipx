@@ -59,6 +59,29 @@ def test_triclinic_crossing_unwrap_known_answer() -> None:
     )
 
 
+def test_skew_cell_unwrap_uses_general_minimum_image_not_fractional_rounding() -> None:
+    cell = np.asarray([[5.0, 0, 0], [4.6, 1.2, 0], [0.4, 0.7, 4.0]])
+    start_fractional = np.asarray([0.6, 0.6, 0.1])
+    raw_fractional_step = np.asarray(
+        [-0.3814205852010938, -0.32241417053740273, 0.5027611849508486]
+    )
+    start = start_fractional @ cell
+    second = (start_fractional + raw_fractional_step) @ cell
+    positions = np.asarray([[start], [second], [second], [second]])
+    frames = [Atoms("Li", positions=frame, cell=cell, pbc=True) for frame in positions]
+    dataset = TrajectoryDataset.from_frames(
+        frames,
+        times_fs=[0.0, 1.0, 2.0, 3.0],
+        positions_convention="wrapped",
+    )
+
+    continuous, _ = unwrap_positions(dataset)
+    expected_step = np.asarray([1.0108963635028174, 0.4650358248207108, -1.9889552601966054])
+    naive_step = (raw_fractional_step - np.rint(raw_fractional_step)) @ cell
+    np.testing.assert_allclose(continuous[1, 0] - continuous[0, 0], expected_step)
+    assert not np.allclose(expected_step, naive_step)
+
+
 def test_fft_and_direct_windowed_msd_match() -> None:
     rng = np.random.default_rng(7)
     walk = np.cumsum(rng.normal(size=(64, 5, 3)), axis=0)
@@ -113,14 +136,9 @@ def test_directional_msd_identity() -> None:
         result["msd_by_axes_A2"]["xyz"],
         result["msd_x_A2"] + result["msd_y_A2"] + result["msd_z_A2"],
     )
-    assert result["fit_window_source"] == "full_trajectory_default"
-    assert set(result["diagnostic_linear_diffusion_fits"]) == {
-        "x",
-        "y",
-        "z",
-        "xy",
-        "xyz",
-    }
+    assert result["fit_window_ps"] is None
+    assert result["fit_window_source"] is None
+    assert result["diagnostic_linear_diffusion_fits"] == {}
 
 
 def test_simple_cubic_coordination_is_six_and_has_no_self_peak() -> None:

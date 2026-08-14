@@ -7,6 +7,8 @@ LICENSE file in the root directory of this source tree.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from mlipx.doctor import (
     _installed_dependency_conflicts,
     _should_warn_torch_mismatch,
@@ -38,7 +40,9 @@ def test_doctor_runs_without_crashing():
         assert c["status"] in ("ok", "fail", "warn", "skip")
 
 
-def test_doctor_format_output():
+def test_doctor_format_output(monkeypatch):
+    _controlled_environment(monkeypatch)
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
     checks, _ = run_diagnostics()
     output = format_diagnostics(checks)
     assert "mlipx Environment Diagnostic" in output
@@ -119,11 +123,16 @@ def test_dpa_pb_model_selects_tensorflow_runtime_probe(monkeypatch, tmp_path):
         }
 
     monkeypatch.setattr("mlipx.doctor._runtime_probe", fake_probe)
+    monkeypatch.setattr(
+        "mlipx.doctor._model_probe",
+        lambda *args, **kwargs: {"ok": True, "task": "bulk"},
+    )
 
     _, failures = run_diagnostics(
         model_path=model,
         engine="dpa",
         device="cpu",
+        task="bulk",
     )
 
     assert observed == {
@@ -131,6 +140,97 @@ def test_dpa_pb_model_selects_tensorflow_runtime_probe(monkeypatch, tmp_path):
         "device": "cpu",
         "framework": "tensorflow",
     }
+    assert failures == 0
+
+
+def test_model_probe_requires_explicit_task(monkeypatch, tmp_path):
+    _controlled_environment(monkeypatch, **{"deepmd-kit": "3.1.3"})
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
+    monkeypatch.setattr(
+        "mlipx.doctor._runtime_probe",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "framework": "torch",
+            "torch_version": "2.10.0",
+            "cuda_available": False,
+            "device_count": 0,
+            "arch_list": [],
+            "gpus": [],
+        },
+    )
+    monkeypatch.setattr(
+        "mlipx.doctor._model_probe",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("model load must not run without an explicit task")
+        ),
+    )
+    model = tmp_path / "model.pt"
+    model.write_bytes(b"placeholder")
+
+    checks, failures = run_diagnostics(
+        model_path=model,
+        engine="dpa",
+        device="cpu",
+    )
+
+    load = next(check for check in checks if check["name"] == "Model load")
+    assert load["status"] == "fail"
+    assert "explicit --task" in load["detail"]
+    assert failures == 1
+
+
+def test_model_and_structure_probe_is_reported(monkeypatch, tmp_path):
+    _controlled_environment(monkeypatch, **{"mace-torch": "0.3.16"})
+    monkeypatch.setattr("mlipx.doctor.detect_gpus", lambda: None)
+    monkeypatch.setattr(
+        "mlipx.doctor._runtime_probe",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "framework": "torch",
+            "torch_version": "2.6.0",
+            "cuda_available": False,
+            "device_count": 0,
+            "arch_list": [],
+            "gpus": [],
+        },
+    )
+    model = tmp_path / "model.model"
+    structure = tmp_path / "POSCAR"
+    model.write_bytes(b"placeholder")
+    structure.write_text("placeholder", encoding="utf-8")
+    observed = {}
+
+    def fake_model_probe(engine, device, **kwargs):
+        observed.update(engine=engine, device=device, **kwargs)
+        return {
+            "ok": True,
+            "task": "bulk",
+            "active_head": "PBE",
+            "model_precision": "float64",
+            "evaluation": {
+                "atoms": 2,
+                "energy_eV": -1.25,
+                "max_force_eV_A": 0.05,
+                "stress_checked": True,
+            },
+        }
+
+    monkeypatch.setattr("mlipx.doctor._model_probe", fake_model_probe)
+    checks, failures = run_diagnostics(
+        model_path=model,
+        engine="mace",
+        device="cpu",
+        task="bulk",
+        head="PBE",
+        structure_path=structure,
+    )
+
+    names = {check["name"]: check for check in checks}
+    assert names["Model load"]["status"] == "ok"
+    assert names["Single-point smoke"]["status"] == "ok"
+    assert observed["model_path"] == Path(model)
+    assert observed["structure_path"] == Path(structure)
+    assert observed["head"] == "PBE"
     assert failures == 0
 
 

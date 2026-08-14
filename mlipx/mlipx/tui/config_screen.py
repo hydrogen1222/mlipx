@@ -209,6 +209,25 @@ class ConfigScreen(Screen):
                     id="grace-memory-limit-input",
                 )
 
+                yield Horizontal(
+                    Label("GRACE Neighbour Cache:", id="grace-neighbor-cache-label"),
+                    Switch(
+                        value=bool(self.app.get_config("neighbor_cache", True)),
+                        id="grace-neighbor-cache-switch",
+                    ),
+                    id="grace-neighbor-cache-row",
+                    classes="switch-row",
+                )
+                yield Label(
+                    "GRACE Neighbour Skin (Å):",
+                    id="grace-neighbor-skin-label",
+                )
+                yield Input(
+                    value=str(self.app.get_config("neighbor_skin", 1.5)),
+                    placeholder="positive length, e.g., 1.5",
+                    id="grace-neighbor-skin-input",
+                )
+
                 checkpointing = self.app.get_config("activation_checkpointing")
                 checkpointing_value = (
                     "auto"
@@ -549,6 +568,9 @@ class ConfigScreen(Screen):
         for selector in (
             "#grace-memory-limit-label",
             "#grace-memory-limit-input",
+            "#grace-neighbor-cache-row",
+            "#grace-neighbor-skin-label",
+            "#grace-neighbor-skin-input",
         ):
             self.query_one(selector).display = is_grace
 
@@ -560,12 +582,16 @@ class ConfigScreen(Screen):
         ).disabled = not is_uma
         self.query_one("#torch-threads-input", Input).disabled = False
         self.query_one("#grace-memory-limit-input", Input).disabled = not is_grace
+        self.query_one(
+            "#grace-neighbor-cache-switch", Switch
+        ).disabled = not is_grace
+        self.query_one("#grace-neighbor-skin-input", Input).disabled = not is_grace
 
         head_label = self.query_one("#head-label", Label)
         if model_type == "mace":
-            head_label.update("MACE Model Head (optional):")
+            head_label.update("MACE Model Head (required for multi-head models):")
         elif model_type == "dpa":
-            head_label.update("DPA Model Branch (optional):")
+            head_label.update("DPA Model Branch (required for multi-task models):")
 
         note = self.query_one("#engine-options-note", Static)
         if is_uma:
@@ -810,6 +836,28 @@ class ConfigScreen(Screen):
             else:
                 self.app.update_config("gpu_memory_limit_mb", None)
             self.app.update_config("gpu_memory_growth", True)
+            skin_text = self.query_one(
+                "#grace-neighbor-skin-input", Input
+            ).value.strip()
+            try:
+                neighbor_skin = float(skin_text)
+            except ValueError:
+                self.notify(
+                    "GRACE neighbour skin must be a positive number in Å",
+                    severity="error",
+                )
+                return
+            if not math.isfinite(neighbor_skin) or neighbor_skin <= 0:
+                self.notify(
+                    "GRACE neighbour skin must be finite and greater than 0 Å",
+                    severity="error",
+                )
+                return
+            self.app.update_config(
+                "neighbor_cache",
+                self.query_one("#grace-neighbor-cache-switch", Switch).value,
+            )
+            self.app.update_config("neighbor_skin", neighbor_skin)
 
         # Get calculation-specific options
         calc_type = self.app.get_config("calc_type")

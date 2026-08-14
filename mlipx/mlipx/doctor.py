@@ -40,7 +40,7 @@ _ENGINE_SPECS: dict[str, dict[str, str]] = {
         "distribution": "fairchem-core",
         "module": "fairchem.core",
         "framework": "torch",
-        "install": "Run `uv sync` from the repository root.",
+        "install": "Run `uv sync --frozen` from the repository root.",
     },
     "mace": {
         "label": "MACE",
@@ -139,7 +139,7 @@ def _runtime_probe(
     *,
     framework: str | None = None,
 ) -> dict[str, Any]:
-    """Import one selected backend in an isolated subprocess.
+    """Import one selected backend and execute a tiny framework operation.
 
     TensorFlow, tensorpotential and DeepMD may configure global runtime state
     during import. Capturing that import in a child process keeps ``doctor``
@@ -147,6 +147,7 @@ def _runtime_probe(
     """
     spec = _ENGINE_SPECS[engine]
     selected_framework = framework or spec["framework"]
+    compute_target = "cpu" if device == "cpu" else "cuda"
     script = f"""
 import importlib
 import json
@@ -175,6 +176,17 @@ try:
                     "minor": int(minor),
                     "total_memory": int(props.total_memory),
                 }})
+        target = {compute_target!r}
+        if target == "cuda" and not payload["cuda_available"]:
+            raise RuntimeError("PyTorch cannot see the requested CUDA device")
+        tensor_device = torch.device("cuda:0" if target == "cuda" else "cpu")
+        x = torch.tensor([1.0, 2.0, 3.0], device=tensor_device)
+        probe_value = float(torch.dot(x, x).item())
+        if target == "cuda":
+            torch.cuda.synchronize(tensor_device)
+        if probe_value != 14.0:
+            raise RuntimeError(f"unexpected PyTorch probe value {{probe_value}}")
+        payload["compute_probe"] = f"tensor dot product on {{tensor_device}}"
     else:
         import tensorflow as tf
         physical = list(tf.config.list_physical_devices("GPU"))
@@ -184,6 +196,17 @@ try:
             device_count=len(physical),
             gpus=[{{"name": str(item.name)}} for item in physical],
         )
+        target = {compute_target!r}
+        if target == "cuda" and not physical:
+            raise RuntimeError("TensorFlow cannot see the requested CUDA device")
+        tf.config.set_soft_device_placement(False)
+        tensor_device = "/GPU:0" if target == "cuda" else "/CPU:0"
+        with tf.device(tensor_device):
+            x = tf.constant([1.0, 2.0, 3.0])
+            probe_value = float(tf.reduce_sum(x * x).numpy())
+        if probe_value != 14.0:
+            raise RuntimeError(f"unexpected TensorFlow probe value {{probe_value}}")
+        payload["compute_probe"] = f"tensor dot product on {{tensor_device}}"
     payload["ok"] = True
 except BaseException as exc:
     payload.update(
@@ -252,6 +275,155 @@ raise SystemExit(0 if payload["ok"] else 1)
     return payload
 
 
+def _model_probe(
+    engine: str,
+    device: str,
+    *,
+    model_path: Path,
+    task: str,
+    head: str | None = None,
+    structure_path: Path | None = None,
+    default_dtype: str = "float64",
+) -> dict[str, Any]:
+    """Load a selected model and optionally evaluate one structure in a child."""
+    probe_device = "cuda" if device.startswith("cuda") else device
+    request = {
+        "engine": engine,
+        "device": probe_device,
+        "model_path": str(model_path.resolve()),
+        "task": task,
+        "head": head,
+        "structure_path": (
+            str(structure_path.resolve()) if structure_path is not None else None
+        ),
+        "default_dtype": default_dtype,
+    }
+    script = f"""
+import json
+import tempfile
+
+import numpy as np
+
+request = {request!r}
+payload = {{"ok": False}}
+try:
+    from ase.io import read
+    from mlipx.calculators.factory import CalculatorFactory
+    from mlipx.runners.singlepoint import SinglePointRunner
+
+    options = {{}}
+    if request["head"] is not None:
+        options["head"] = request["head"]
+    if request["engine"] == "mace":
+        options["default_dtype"] = request["default_dtype"]
+    wrapper = CalculatorFactory.create(
+        request["engine"],
+        request["model_path"],
+        device=request["device"],
+        task=request["task"],
+        strict=True,
+        **options,
+    )
+    calculator = wrapper.get_calculator()
+    info = wrapper.info()
+    payload.update(
+        model_type=str(info.get("model_type", request["engine"])),
+        task=str(wrapper.task),
+        requested_head=info.get("requested_head", info.get("head")),
+        active_head=info.get("active_head"),
+        available_heads=info.get("available_heads", []),
+        model_precision=info.get("model_precision", info.get("default_dtype")),
+    )
+    if request["structure_path"] is not None:
+        atoms = read(request["structure_path"], index=-1)
+        with tempfile.TemporaryDirectory(prefix="mlipx-doctor-") as directory:
+            runner = SinglePointRunner(
+                wrapper,
+                output_dir=directory,
+                write_outcar=False,
+                write_json=False,
+                write_contcar=False,
+                verbose=False,
+            )
+            atoms = runner._prepare_atoms(atoms)
+        atoms.calc = calculator
+        energy = float(atoms.get_potential_energy())
+        forces = np.asarray(atoms.get_forces(), dtype=float)
+        if not np.isfinite(energy) or not np.all(np.isfinite(forces)):
+            raise RuntimeError("model returned a non-finite energy or force")
+        evaluation = {{
+            "atoms": int(len(atoms)),
+            "energy_eV": energy,
+            "max_force_eV_A": float(np.max(np.linalg.norm(forces, axis=1))),
+        }}
+        if atoms.pbc.all() and wrapper.has_stress:
+            stress = np.asarray(atoms.get_stress(), dtype=float)
+            if not np.all(np.isfinite(stress)):
+                raise RuntimeError("model returned non-finite stress")
+            evaluation["stress_checked"] = True
+        else:
+            evaluation["stress_checked"] = False
+        payload["evaluation"] = evaluation
+    payload["ok"] = True
+except BaseException as exc:
+    payload.update(error_type=type(exc).__name__, error=str(exc))
+
+print({_PROBE_SENTINEL!r} + json.dumps(payload, sort_keys=True))
+raise SystemExit(0 if payload["ok"] else 1)
+"""
+    env = os.environ.copy()
+    if device == "cpu":
+        env["CUDA_VISIBLE_DEVICES"] = ""
+    elif device.startswith("cuda:"):
+        env["CUDA_VISIBLE_DEVICES"] = device.split(":", 1)[1]
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=300,
+            env=env,
+            check=False,
+        )
+    except subprocess.TimeoutExpired:
+        return {
+            "ok": False,
+            "error_type": "TimeoutExpired",
+            "error": "Model probe did not finish within 300 seconds",
+        }
+    except OSError as exc:
+        return {"ok": False, "error_type": type(exc).__name__, "error": str(exc)}
+
+    payload_line = next(
+        (
+            line[len(_PROBE_SENTINEL) :]
+            for line in reversed(completed.stdout.splitlines())
+            if line.startswith(_PROBE_SENTINEL)
+        ),
+        None,
+    )
+    if payload_line is None:
+        return {
+            "ok": False,
+            "error_type": "ProbeProtocolError",
+            "error": _probe_output_tail(completed.stdout, completed.stderr)
+            or f"Model probe exited with status {completed.returncode}",
+        }
+    try:
+        payload = json.loads(payload_line)
+    except json.JSONDecodeError as exc:
+        return {
+            "ok": False,
+            "error_type": type(exc).__name__,
+            "error": f"Invalid model probe response: {exc}",
+        }
+    if not payload.get("ok"):
+        tail = _probe_output_tail(completed.stdout, completed.stderr)
+        if tail:
+            payload["detail"] = tail
+    return payload
+
+
 def _should_warn_torch_mismatch(
     *,
     uma_installed: bool,
@@ -305,13 +477,21 @@ def run_diagnostics(
     *,
     engine: str = "auto",
     device: str = "auto",
+    task: str | None = None,
+    head: str | None = None,
+    structure_path: str | Path | None = None,
+    default_dtype: str = "float64",
 ) -> tuple[list[dict[str, Any]], int]:
     """Run inventory checks and, when selected, one engine runtime probe.
 
     Args:
-        model_path: Optional path to model checkpoint to check.
+        model_path: Optional model to load in an isolated subprocess.
         engine: ``auto`` for package inventory, or one explicit MLIP engine.
         device: ``auto``, ``cpu``, ``cuda``, ``gpu``, or ``cuda:N``.
+        task: Explicit model task/PBC semantic, required with ``model_path``.
+        head: Optional MACE head or DPA branch.
+        structure_path: Optional structure for a real energy/force smoke test.
+        default_dtype: MACE dtype used for the model probe.
 
     Returns:
         Tuple of (results list, number of failures).
@@ -323,6 +503,8 @@ def run_diagnostics(
     if target_engine != "auto" and target_engine not in _ENGINE_SPECS:
         raise ValueError("engine must be auto, uma, mace, dpa, or grace")
     requested_device = _normalize_device(device)
+    if default_dtype not in {"float32", "float64"}:
+        raise ValueError("default_dtype must be float32 or float64")
     hw_gpus = list(detect_gpus() or [])
 
     if target_engine == "auto":
@@ -611,8 +793,9 @@ def run_diagnostics(
             checks.append(
                 {
                     "name": "Engine runtime",
-                    "value": f"{_ENGINE_SPECS[target_engine]['module']} import succeeded",
+                    "value": f"{_ENGINE_SPECS[target_engine]['module']} compute succeeded",
                     "status": "ok",
+                    "detail": runtime.get("compute_probe"),
                 }
             )
             if runtime.get("framework") == "torch":
@@ -642,7 +825,7 @@ def run_diagnostics(
             checks.append(
                 {
                     "name": "Engine runtime",
-                    "value": "import failed",
+                    "value": "compute probe failed",
                     "status": "fail",
                     "detail": error,
                 }
@@ -756,51 +939,183 @@ def run_diagnostics(
                     }
                 )
 
-    # A model is optional for environment readiness, but an explicitly supplied
-    # path is a required check and therefore fails closed.
-    if model_path:
-        mp = Path(model_path).expanduser()
-        if not mp.exists():
-            checks.append(
-                {
-                    "name": "Model file",
-                    "value": f"{mp} — not found",
-                    "status": "fail",
-                    "detail": "Check the model path and selected engine.",
-                }
-            )
-        else:
-            wrong_kind = (target_engine == "grace" and not mp.is_dir()) or (
-                target_engine in {"uma", "mace", "dpa"} and not mp.is_file()
-            )
-            if wrong_kind:
-                expected = (
-                    "SavedModel directory" if target_engine == "grace" else "model file"
-                )
-                checks.append(
-                    {
-                        "name": "Model file",
-                        "value": str(mp),
-                        "status": "fail",
-                        "detail": f"{_ENGINE_SPECS[target_engine]['label']} expects a {expected}.",
-                    }
-                )
-            else:
-                value = (
-                    f"{mp.name} (directory)"
-                    if mp.is_dir()
-                    else f"{mp.name} ({mp.stat().st_size / (1024**3):.2f} GB)"
-                )
-                checks.append({"name": "Model file", "value": value, "status": "ok"})
-    else:
+    # Explicit model checks load the checkpoint.  A structure adds one real
+    # energy/force evaluation; neither mode writes scientific output files.
+    model_ready = False
+    mp = Path(model_path).expanduser() if model_path else None
+    if mp is None:
         checks.append(
             {
                 "name": "Model file",
                 "value": "not requested",
                 "status": "skip",
-                "detail": "Pass --model PATH to validate a model path and its basic type.",
+                "detail": (
+                    "Pass --model PATH --task TASK to load a model; add "
+                    "--structure FILE for a real single-point smoke test."
+                ),
             }
         )
+        if head is not None or structure_path is not None or task is not None:
+            checks.append(
+                {
+                    "name": "Model request",
+                    "value": "incomplete",
+                    "status": "fail",
+                    "detail": "--task, --head, and --structure require --model.",
+                }
+            )
+    elif not mp.exists():
+        checks.append(
+            {
+                "name": "Model file",
+                "value": f"{mp} — not found",
+                "status": "fail",
+                "detail": "Check the model path and selected engine.",
+            }
+        )
+    else:
+        wrong_kind = (target_engine == "grace" and not mp.is_dir()) or (
+            target_engine in {"uma", "mace", "dpa"} and not mp.is_file()
+        )
+        if wrong_kind:
+            expected = "SavedModel directory" if target_engine == "grace" else "model file"
+            checks.append(
+                {
+                    "name": "Model file",
+                    "value": str(mp),
+                    "status": "fail",
+                    "detail": f"{_ENGINE_SPECS[target_engine]['label']} expects a {expected}.",
+                }
+            )
+        else:
+            value = (
+                f"{mp.name} (directory)"
+                if mp.is_dir()
+                else f"{mp.name} ({mp.stat().st_size / (1024**3):.2f} GB)"
+            )
+            checks.append({"name": "Model file", "value": value, "status": "ok"})
+            model_ready = True
+
+    structure_ready = structure_path is None
+    structure = Path(structure_path).expanduser() if structure_path else None
+    if structure is not None:
+        if structure.is_file():
+            checks.append(
+                {
+                    "name": "Smoke structure",
+                    "value": str(structure),
+                    "status": "ok",
+                }
+            )
+            structure_ready = True
+        else:
+            checks.append(
+                {
+                    "name": "Smoke structure",
+                    "value": f"{structure} — not found",
+                    "status": "fail",
+                }
+            )
+
+    request_ready = model_ready and structure_ready
+    if model_ready and target_engine == "auto":
+        request_ready = False
+        checks.append(
+            {
+                "name": "Model load",
+                "value": "not attempted",
+                "status": "fail",
+                "detail": "Loading a model requires an explicit --engine.",
+            }
+        )
+    elif model_ready and task is None:
+        request_ready = False
+        checks.append(
+            {
+                "name": "Model load",
+                "value": "not attempted",
+                "status": "fail",
+                "detail": (
+                    "Loading a model requires an explicit --task so doctor "
+                    "cannot guess PBC or model-task semantics."
+                ),
+            }
+        )
+    elif model_ready and target_engine != "auto":
+        if installed_versions[target_engine] is None or not runtime or not runtime.get("ok"):
+            checks.append(
+                {
+                    "name": "Model load",
+                    "value": "not attempted",
+                    "status": "skip",
+                    "detail": "Resolve the selected engine runtime failure first.",
+                }
+            )
+        elif request_ready:
+            assert resolved_device is not None
+            probe = _model_probe(
+                target_engine,
+                resolved_device,
+                model_path=mp,
+                task=str(task),
+                head=head,
+                structure_path=structure,
+                default_dtype=default_dtype,
+            )
+            if probe.get("ok"):
+                details: list[str] = [f"task={probe.get('task', task)}"]
+                if probe.get("active_head") is not None:
+                    details.append(f"active_head={probe['active_head']}")
+                if probe.get("model_precision"):
+                    details.append(f"precision={probe['model_precision']}")
+                checks.append(
+                    {
+                        "name": "Model load",
+                        "value": "checkpoint loaded",
+                        "status": "ok",
+                        "detail": ", ".join(details),
+                    }
+                )
+                evaluation = probe.get("evaluation")
+                if isinstance(evaluation, dict):
+                    checks.append(
+                        {
+                            "name": "Single-point smoke",
+                            "value": (
+                                f"{evaluation['atoms']} atoms, "
+                                f"E={evaluation['energy_eV']:.8g} eV"
+                            ),
+                            "status": "ok",
+                            "detail": (
+                                f"max|F|={evaluation['max_force_eV_A']:.8g} eV/Å; "
+                                f"stress_checked={evaluation['stress_checked']}"
+                            ),
+                        }
+                    )
+            else:
+                error = (
+                    f"{probe.get('error_type', 'Error')}: "
+                    f"{probe.get('error', '')}"
+                ).strip()
+                if probe.get("detail"):
+                    error += f"\n{probe['detail']}"
+                checks.append(
+                    {
+                        "name": "Model load",
+                        "value": "failed",
+                        "status": "fail",
+                        "detail": error,
+                    }
+                )
+        else:
+            checks.append(
+                {
+                    "name": "Model load",
+                    "value": "not attempted",
+                    "status": "skip",
+                    "detail": "Resolve the smoke-structure path first.",
+                }
+            )
 
     failures = sum(check["status"] == "fail" for check in checks)
     return checks, failures

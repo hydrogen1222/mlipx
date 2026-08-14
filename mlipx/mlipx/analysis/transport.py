@@ -290,6 +290,15 @@ def _kinisi_frames_and_indices(
     drift_reference: str,
     drift_indices: Iterable[int] | None,
 ):
+    """Build mobile-only frames with explicit unweighted drift correction.
+
+    kinisi corrects drift by subtracting the unweighted mean displacement of
+    every non-mobile atom.  Carrying that framework through its triclinic
+    parser creates several ``time × atoms × 8`` arrays.  Apply the identical
+    mean-displacement definition once, validate that the corrected mobile
+    steps remain minimum-image reconstructible, and pass only mobile atoms to
+    kinisi so its automatic complement is empty.
+    """
     mode = drift_reference.lower()
     if mode == "none":
         reference = np.asarray([], dtype=int)
@@ -307,21 +316,60 @@ def _kinisi_frames_and_indices(
             raise ValueError("Drift reference indices overlap the mobile selection")
     else:
         raise ValueError("drift_reference must be none, indices, or nonmobile")
-    retained = np.concatenate((mobile, reference))
+    continuous, _ = unwrap_positions(dataset)
+    if len(reference):
+        reference_displacement = (
+            continuous[:, reference] - continuous[0, reference]
+        )
+        drift = np.mean(reference_displacement, axis=1)
+    else:
+        drift = np.zeros((dataset.nframes, 3), dtype=float)
+    corrected = continuous[:, mobile] - drift[:, None, :]
+    corrected_steps = np.diff(corrected, axis=0)
+    if corrected_steps.size:
+        mic_steps, _ = find_mic(
+            corrected_steps.reshape(-1, 3),
+            np.asarray(dataset.cells[0], dtype=float),
+            pbc=np.asarray(dataset.pbc, dtype=bool),
+        )
+        difference = np.linalg.norm(
+            corrected_steps - np.asarray(mic_steps).reshape(corrected_steps.shape),
+            axis=-1,
+        )
+        maximum = float(np.max(difference))
+        if maximum > _KINISI_RECONSTRUCTION_ATOL_A:
+            raise UnsupportedAnalysisError(
+                "Framework-corrected mobile displacements cannot be reconstructed "
+                "from wrapped saved frames without losing an image crossing. Save "
+                "the trajectory more frequently."
+            )
     frames: list[Atoms] = []
-    for positions, cell in zip(dataset.positions, dataset.cells, strict=True):
+    symbols = [dataset.symbols[index] for index in mobile]
+    for positions, cell in zip(corrected, dataset.cells, strict=True):
         atoms = Atoms(
-            symbols=[dataset.symbols[index] for index in retained],
-            positions=positions[retained],
+            symbols=symbols,
+            positions=positions,
             cell=cell,
             pbc=dataset.pbc,
         )
         atoms.wrap()
         frames.append(atoms)
-    # Mobile atoms are deliberately first. kinisi's parser then applies its
-    # supported drift correction exactly once using the retained complement.
     local_mobile = np.arange(len(mobile), dtype=int)
     return frames, local_mobile, reference
+
+
+def _kinisi_parser_peak_bytes(
+    *, nframes: int, natoms: int, triclinic: bool
+) -> int:
+    """Conservative estimate of kinisi's trajectory-parser peak allocation."""
+    points = max(0, int(nframes)) * max(0, int(natoms))
+    if triclinic:
+        # coordinates plus the integer images, Cartesian images, norms and
+        # unavoidable result/temporary arrays in kinisi 2.x.
+        return int(points * 512)
+    # Orthorhombic parser has no eight-image expansion but still materialises
+    # wrapped coordinates, differences, image corrections and cumulative sums.
+    return int(points * 128)
 
 
 def _validate_kinisi_periodic_reconstruction(
@@ -457,8 +505,9 @@ def kinisi_transport(
     n_walkers: int = 32,
     n_burn: int = 500,
     n_thin: int = 10,
+    parser_memory_limit_gib: float = 4.0,
 ) -> dict[str, Any]:
-    """Estimate publication-grade scalar tracer diffusion with kinisi."""
+    """Estimate covariance-aware scalar tracer diffusion with kinisi."""
 
     if not dimensions or any(axis not in "xyz" for axis in dimensions):
         raise ValueError("dimensions must be a non-empty subset of xyz")
@@ -468,6 +517,8 @@ def kinisi_transport(
         raise ValueError("fit_start_ps must be explicitly provided and >= 0")
     if n_samples < 1 or n_walkers < 2 or n_burn < 0 or n_thin < 1:
         raise ValueError("Invalid kinisi sampling parameters")
+    if not np.isfinite(parser_memory_limit_gib) or parser_memory_limit_gib <= 0:
+        raise ValueError("parser_memory_limit_gib must be finite and positive")
     require_analysis(dataset, "transport")
     view = dataset.analysis_view(include_equilibration=False)
     total_duration_ps = (view.times_fs[-1] - view.times_fs[0]) / 1000.0
@@ -479,6 +530,25 @@ def kinisi_transport(
         lag_stop_ps=lag_stop_ps,
     )
     mobile = view.select(mobile_species)
+    cell_matrix = np.asarray(view.cells[0], dtype=float)
+    # Match kinisi 2.x's actual parser dispatch: it calls a cell
+    # "orthorhombic" only when exactly the six off-diagonal entries are zero.
+    triclinic = np.count_nonzero(np.isclose(cell_matrix.reshape(9), 0.0)) != 6
+    parser_peak_bytes = _kinisi_parser_peak_bytes(
+        nframes=view.nframes + 1,
+        natoms=len(mobile),
+        triclinic=triclinic,
+    )
+    parser_limit_bytes = int(parser_memory_limit_gib * 1024**3)
+    if parser_peak_bytes > parser_limit_bytes:
+        raise UnsupportedAnalysisError(
+            "Estimated kinisi trajectory-parser peak memory is "
+            f"{parser_peak_bytes / 1024**3:.2f} GiB for {view.nframes} frames "
+            f"and {len(mobile)} mobile atoms, above the configured "
+            f"{parser_memory_limit_gib:.2f} GiB limit. Increase "
+            "--parser-memory-limit-gib only after confirming available RAM, "
+            "or analyze a shorter production window."
+        )
     _, unwrap_diagnostics = unwrap_positions(view)
     if (
         view.positions_convention == "wrapped"
@@ -644,7 +714,10 @@ def kinisi_transport(
             "mode": drift_reference,
             "reference_indices": reference,
             "reference_species": sorted({view.symbols[index] for index in reference}),
-            "backend_semantics": "kinisi mean framework displacement; applied once",
+            "backend_semantics": (
+                "mlipx unweighted mean framework displacement (kinisi "
+                "definition), pre-applied once; kinisi receives mobile atoms only"
+            ),
         },
         "unwrap_diagnostics": unwrap_diagnostics,
         "kinisi_position_semantics": position_semantics,
@@ -654,6 +727,11 @@ def kinisi_transport(
             "single_float64_square_matrix_lower_bound_bytes": int(
                 8 * n_lag_points_in_fit**2
             ),
+            "parser_atom_count": int(len(mobile)),
+            "source_atom_count": int(view.natoms),
+            "triclinic_eight_image_path": bool(triclinic),
+            "estimated_parser_peak_bytes": parser_peak_bytes,
+            "parser_memory_limit_bytes": parser_limit_bytes,
         },
         "lag_time_ps": lag_time_ps,
         "kinisi_msd_A2": np.asarray(

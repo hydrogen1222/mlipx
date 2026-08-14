@@ -42,3 +42,7 @@ OUTPUT_FORMAT = VASP
 # - TIMESTEP of 1 fs is typical, can increase to 2 fs for light elements
 # - Turbo mode is recommended for MD (1.5-2x faster)
 # - Use cuda device for MD (much faster than CPU)
+# - GRACE: NEIGHBOR_CACHE = .TRUE. (default) enables the verlet-style
+#   neighbour-list cache (same exact cutoff/periodic-image semantics; tiny
+#   floating-point rounding differences are possible, ~1.3x on tested MD);
+#   NEIGHBOR_SKIN = 1.5 controls how often the neighbour table is rebuilt

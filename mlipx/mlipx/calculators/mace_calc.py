@@ -85,12 +85,16 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
         # torch/mace use "cuda"; accept mlipx's legacy "gpu" synonym.
         self._device = "cuda" if dev == "gpu" else dev
         self._default_dtype = str(default_dtype).lower()
-        self._task = task
-        self._head = head
+        self._task = str(task).strip().lower()
+        self._head = str(head).strip() if head is not None else None
         self._calculator: Calculator | None = None
 
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path}")
+        if self._task not in {"bulk", "molecule"}:
+            raise ValueError("MACE task must be 'bulk' or 'molecule'.")
+        if head is not None and not self._head:
+            raise ValueError("MACE head must be a non-empty head name.")
 
     def get_calculator(self) -> Calculator:
         """Return the cached MACE ASE calculator (lazy import)."""
@@ -143,6 +147,13 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
                 # metadata. Do not treat an arbitrary proxy object as an
                 # iterable; the backend still receives the requested head.
                 available_heads = []
+            if self._head is None and len(available_heads) > 1:
+                self._calculator = None
+                raise ValueError(
+                    "This MACE model exposes multiple energy heads, so "
+                    "--head/HEAD is required. Available heads: "
+                    f"{available_heads}"
+                )
             if (
                 self._head is not None
                 and available_heads

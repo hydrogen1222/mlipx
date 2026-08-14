@@ -187,6 +187,8 @@ class MlipxApp(App):
             "activation_checkpointing": None,
             "gpu_memory_growth": True,
             "gpu_memory_limit_mb": None,
+            "neighbor_cache": True,
+            "neighbor_skin": 1.5,
             "default_dtype": "float64",
             "head": None,
             "output_dir": "./results",

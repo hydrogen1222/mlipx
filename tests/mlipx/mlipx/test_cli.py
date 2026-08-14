@@ -394,7 +394,7 @@ def test_template_sp() -> None:
 # doctor / setup smoke (these need additional deps; just check exit)
 # ---------------------------------------------------------------------------
 
-def test_doctor_parser_accepts_engine_device_and_model() -> None:
+def test_doctor_parser_accepts_engine_device_model_and_smoke_options() -> None:
     parser = create_parser()
     args = parser.parse_args(
         [
@@ -405,12 +405,24 @@ def test_doctor_parser_accepts_engine_device_and_model() -> None:
             "cuda:2",
             "--model",
             "model.pt",
+            "--task",
+            "bulk",
+            "--head",
+            "Domains_SSE_PBE",
+            "--structure",
+            "POSCAR",
+            "--dtype",
+            "float32",
         ]
     )
 
     assert args.engine == "dpa"
     assert args.device == "cuda:2"
     assert args.model == "model.pt"
+    assert args.task == "bulk"
+    assert args.head == "Domains_SSE_PBE"
+    assert args.structure == "POSCAR"
+    assert args.default_dtype == "float32"
 
 
 def test_doctor_parser_rejects_invalid_device() -> None:

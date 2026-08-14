@@ -112,7 +112,7 @@ _CALCULATOR_KEYS_BY_ENGINE: dict[str, set[str]] = {
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
     "dpa": {"head"},
-    "grace": {"gpu_memory_growth", "gpu_memory_limit_mb"},
+    "grace": {"gpu_memory_growth", "gpu_memory_limit_mb", "neighbor_cache", "neighbor_skin"},
 }
 
 
@@ -230,13 +230,34 @@ def resolve_config(
     incar_layer.pop("calc_type", None)
     cli_layer = _canonicalize_layer(cli or {}, schema)
     cli_layer.pop("calc_type", None)
-
-    # Layer 2: settings.ini (calculation section + selected engine defaults).
     settings_layer = _canonicalize_layer(
         _settings_layer(settings, calc_type), schema
     )
+
+    # Select the final engine before applying any settings so its *built-in*
+    # defaults participate at the correct lowest precedence.  Previously only
+    # [engine:*] settings were merged; factory fallbacks such as MACE dtype and
+    # GRACE cache policy therefore affected execution but were absent from
+    # resolved_config.json.
+    engine_name = "uma"
+    for candidate in (
+        settings_layer,
+        alias_layer,
+        profile_layer,
+        incar_layer,
+        cli_layer,
+    ):
+        if "model_type" in candidate:
+            engine_name = str(candidate["model_type"]).lower()
+    engine_builtin_scope = f"calculator.{engine_name}"
+    _merge_layer(
+        sources,
+        _canonicalize_layer(BUILTIN_DEFAULTS.get(engine_builtin_scope, {}), schema),
+        f"built-in defaults ({engine_builtin_scope})",
+    )
+
+    # Layer 2: settings.ini (calculation section + selected engine defaults).
     if settings is not None:
-        engine_name = "uma"
         for candidate in (
             settings_layer,
             alias_layer,
@@ -277,6 +298,22 @@ def resolve_config(
     inference_mode = str(
         sources.get("inference_mode", ResolvedValue(_default_inference, "built-in defaults")).value
 )
+    if model_type not in {"uma", "fairchem"}:
+        inference_source = sources.get("inference_mode")
+        if (
+            inference_source is not None
+            and not inference_source.source.startswith("built-in defaults")
+            and str(inference_source.value).lower() != "default"
+        ):
+            raise ValueError(
+                f"inference_mode={inference_source.value!r} is UMA-only; engine "
+                f"{model_type!r} would ignore it. Remove the option instead of "
+                "recording a mode that does not execute."
+            )
+        inference_mode = "default"
+        sources["inference_mode"] = ResolvedValue(
+            "default", f"built-in defaults ({model_type}: not applicable)"
+        )
     # Resolve model path relative to settings.ini when it is not absolute.
     settings_path = str(settings.path) if settings and settings.path else None
     if settings_path and model_path and not Path(model_path).is_absolute():

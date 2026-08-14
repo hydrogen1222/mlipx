@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import numpy as np
+from ase.geometry import find_mic
 
 from mlipx.analysis.structure import cell_heights_A
 from mlipx.analysis.units import (
@@ -42,24 +43,25 @@ def unwrap_positions(dataset: TrajectoryDataset) -> tuple[np.ndarray, dict[str, 
     cell = dataset.cells[0]
     inverse = np.linalg.inv(cell)
     minimum_height = float(np.min(cell_heights_A(cell)))
-    fractional = np.einsum("fai,ij->faj", dataset.positions, inverse)
-    delta_fractional = np.diff(fractional, axis=0)
+    raw_steps = np.diff(dataset.positions, axis=0)
     if dataset.positions_convention == "wrapped":
-        step_fractional = delta_fractional - np.round(delta_fractional)
-        continuous_fractional = np.empty_like(fractional)
-        continuous_fractional[0] = fractional[0]
-        continuous_fractional[1:] = fractional[0] + np.cumsum(step_fractional, axis=0)
-        continuous = continuous_fractional @ cell
-        reconstruction = "consecutive fractional minimum-image"
+        flat_steps = raw_steps.reshape(-1, 3)
+        mic_steps, _ = find_mic(flat_steps, cell, pbc=dataset.pbc)
+        cartesian_steps = np.asarray(mic_steps, dtype=float).reshape(raw_steps.shape)
+        continuous = np.empty_like(dataset.positions, dtype=float)
+        continuous[0] = dataset.positions[0]
+        continuous[1:] = dataset.positions[0] + np.cumsum(cartesian_steps, axis=0)
+        step_fractional = cartesian_steps @ inverse
+        reconstruction = "consecutive ASE general minimum-image"
         exact_images_available = False
     elif dataset.positions_convention == "unwrapped":
-        step_fractional = delta_fractional
+        cartesian_steps = raw_steps
+        step_fractional = cartesian_steps @ inverse
         continuous = dataset.positions.copy()
         reconstruction = "source unwrapped Cartesian coordinates"
         exact_images_available = True
     else:  # protected by validation, retained for a precise direct-call error
         raise ValueError("Position convention must be wrapped or unwrapped")
-    cartesian_steps = step_fractional @ cell
     cartesian_norms = np.linalg.norm(cartesian_steps, axis=-1)
     maximum_cartesian = float(np.max(cartesian_norms)) if cartesian_norms.size else 0.0
     maximum_fractional = (
@@ -286,14 +288,14 @@ def calculate_msd(
     fit_start_ps: float | None = None,
     fit_stop_ps: float | None = None,
 ) -> dict[str, Any]:
-    """Calculate directional MSD and a diagnostic fit over an explicit/default window."""
+    """Calculate directional MSD and, only when requested, a diagnostic fit."""
 
     selected_axes = _normalize_axes(axes)
     if (fit_start_ps is None) != (fit_stop_ps is None):
         raise ValueError(
             "Both fit_start_ps and fit_stop_ps are required for a diagnostic fit"
         )
-    fit_window_source = "explicit" if fit_start_ps is not None else "full_trajectory_default"
+    fit_window_source = "explicit" if fit_start_ps is not None else None
     view = dataset.analysis_view(
         include_equilibration=include_equilibration, start=start, stop=stop
     )
@@ -313,20 +315,22 @@ def calculate_msd(
     lag_ps = np.arange(view.nframes, dtype=float) * view.frame_interval_fs / 1000.0
     values = {axis: _axis_msd(components, axis) for axis in selected_axes}
     alpha = {axis: _log_log_alpha(lag_ps, values[axis]) for axis in selected_axes}
-    if fit_start_ps is None and fit_stop_ps is None:
-        fit_start_ps = 0.0
-        fit_stop_ps = float(lag_ps[-1])
-    fits = {
-        axis: diagnostic_linear_diffusion_fit(
-            lag_ps,
-            values[axis],
-            axes=axis,
-            fit_start_ps=fit_start_ps,
-            fit_stop_ps=fit_stop_ps,
-            fit_window_source=fit_window_source,
-        )
-        for axis in selected_axes
-    }
+    if fit_start_ps is None:
+        fit_window = None
+        fits: dict[str, dict[str, Any]] = {}
+    else:
+        fit_window = {"start": float(fit_start_ps), "stop": float(fit_stop_ps)}
+        fits = {
+            axis: diagnostic_linear_diffusion_fit(
+                lag_ps,
+                values[axis],
+                axes=axis,
+                fit_start_ps=fit_start_ps,
+                fit_stop_ps=fit_stop_ps,
+                fit_window_source="explicit",
+            )
+            for axis in selected_axes
+        }
     return {
         "lag_time_ps": lag_ps,
         "time_origin_counts": view.nframes - np.arange(view.nframes),
@@ -335,7 +339,7 @@ def calculate_msd(
         "msd_z_A2": components[:, 2],
         "msd_by_axes_A2": values,
         "log_log_alpha_by_axes": alpha,
-        "fit_window_ps": {"start": float(fit_start_ps), "stop": float(fit_stop_ps)},
+        "fit_window_ps": fit_window,
         "fit_window_source": fit_window_source,
         "diagnostic_linear_diffusion_fits": fits,
         "method": f"{method}_windowed_msd",

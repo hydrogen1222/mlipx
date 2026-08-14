@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -113,10 +114,15 @@ class TestGenericWrappers:
         with pytest.raises(FileNotFoundError):
             MACECalculatorWrapper(tmp_path / "nope.model")
 
-    def test_mace_missing_package_raises_importerror(self, tmp_path):
+    def test_mace_missing_package_raises_importerror(self, tmp_path, monkeypatch):
         """get_calculator raises ImportError when mace-torch is absent (lazy)."""
         model = tmp_path / "mace.model"
         model.write_text("x")
+        monkeypatch.setattr(
+            "mlipx.doctor._installed_dependency_conflicts", lambda _: []
+        )
+        monkeypatch.setitem(sys.modules, "mace", None)
+        monkeypatch.setitem(sys.modules, "mace.calculators", None)
         w = MACECalculatorWrapper(model)
         with pytest.raises(ImportError, match="mace-torch"):
             w.get_calculator()
@@ -170,6 +176,27 @@ class TestGenericWrappers:
         with pytest.raises(ValueError, match="Available heads"):
             wrapper.get_calculator()
 
+    def test_mace_multihead_model_requires_explicit_head(self, tmp_path, monkeypatch):
+        """Never let a backend default select a PES from a multi-head model."""
+        model = tmp_path / "multihead.model"
+        model.write_bytes(b"placeholder")
+        fake = MagicMock()
+        fake.available_heads = ["PBE", "r2SCAN"]
+        fake.implemented_properties = ["energy", "forces", "stress"]
+        fake.models = []
+        monkeypatch.setitem(
+            sys.modules,
+            "mace.calculators",
+            SimpleNamespace(MACECalculator=MagicMock(return_value=fake)),
+        )
+        monkeypatch.setattr(
+            "mlipx.doctor._installed_dependency_conflicts", lambda _: []
+        )
+
+        wrapper = MACECalculatorWrapper(model)
+        with pytest.raises(ValueError, match="multiple energy heads"):
+            wrapper.get_calculator()
+
     def test_factory_creates_mace_wrapper(self, tmp_path):
         model = tmp_path / "mace.model"
         model.write_text("x")
@@ -188,6 +215,77 @@ class TestGenericWrappers:
         )
         assert isinstance(w, DPACalculatorWrapper)
         assert w._head == "Domains_SSE_PBE"
+
+    def test_dpa_multitask_model_requires_explicit_head(
+        self, tmp_path, monkeypatch
+    ):
+        class _Eval:
+            def get_model_def_script(self):
+                return {
+                    "model_dict": {
+                        "branch_a": {"model_branch_alias": ["A"]},
+                        "branch_b": {"model_branch_alias": ["B"]},
+                    }
+                }
+
+        class _FakeDPCalc:
+            implemented_properties: ClassVar = ["energy", "forces", "stress"]
+            dp = _Eval()
+
+        fake_dp_cls = MagicMock(return_value=_FakeDPCalc())
+        mod = MagicMock(DP=fake_dp_cls)
+        monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
+        monkeypatch.setitem(sys.modules, "deepmd.calculator", mod)
+        model = tmp_path / "multi.pt"
+        model.write_text("x")
+
+        wrapper = DPACalculatorWrapper(model, device="cpu", task="bulk")
+        with pytest.raises(ValueError, match="multi-task.*required"):
+            wrapper.get_calculator()
+
+    def test_dpa_records_canonical_active_head_and_precision(
+        self, tmp_path, monkeypatch
+    ):
+        class _Eval:
+            def get_model_def_script(self):
+                return {
+                    "model_dict": {
+                        "Domains_SSE_PBE": {
+                            "model_branch_alias": ["Huang2021Deep-PBE"],
+                            "descriptor": {"precision": "float32"},
+                            "fitting_net": {"precision": "float64"},
+                        }
+                    }
+                }
+
+        class _FakeDPCalc:
+            implemented_properties: ClassVar = ["energy", "forces", "stress"]
+            dp = _Eval()
+
+        fake_dp_cls = MagicMock(return_value=_FakeDPCalc())
+        mod = MagicMock(DP=fake_dp_cls)
+        monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
+        monkeypatch.setitem(sys.modules, "deepmd.calculator", mod)
+        model = tmp_path / "multi.pt"
+        model.write_text("x")
+
+        wrapper = DPACalculatorWrapper(
+            model, device="cpu", task="bulk", head="Huang2021Deep-PBE"
+        )
+        wrapper.get_calculator()
+        info = wrapper.info()
+        assert info["requested_head"] == "Huang2021Deep-PBE"
+        assert info["active_head"] == "Domains_SSE_PBE"
+        assert info["model_precision"] == ["float32", "float64"]
+        fake_dp_cls.assert_called_once_with(
+            model=str(model), type_dict=None, head="Huang2021Deep-PBE"
+        )
+
+    def test_non_uma_task_is_restricted_to_explicit_pbc_semantics(self, tmp_path):
+        model = tmp_path / "dpa.pt"
+        model.write_text("x")
+        with pytest.raises(ValueError, match="bulk.*molecule"):
+            CalculatorFactory.create("dpa", model, task="omat")
 
     def test_factory_mace_default_dtype_is_float64(self, tmp_path):
         """Direct factory construction defaults to accuracy-first float64."""
@@ -227,7 +325,11 @@ class TestDpaGraceDevice:
 
     def test_dpa_cpu_hides_gpus(self, tmp_path, monkeypatch):
         monkeypatch.delenv("CUDA_VISIBLE_DEVICES", raising=False)
-        fake_dp_cls = MagicMock(return_value=MagicMock())
+
+        class _FakeDPCalc:
+            dp = None
+
+        fake_dp_cls = MagicMock(return_value=_FakeDPCalc())
         mod = MagicMock()
         mod.DP = fake_dp_cls
         monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
@@ -240,7 +342,11 @@ class TestDpaGraceDevice:
 
     def test_dpa_explicit_device_overrides_inherited_env(self, tmp_path, monkeypatch):
         monkeypatch.setenv("CUDA_VISIBLE_DEVICES", "2")
-        fake_dp_cls = MagicMock(return_value=MagicMock())
+
+        class _FakeDPCalc:
+            dp = None
+
+        fake_dp_cls = MagicMock(return_value=_FakeDPCalc())
         mod = MagicMock()
         mod.DP = fake_dp_cls
         monkeypatch.setitem(sys.modules, "deepmd", MagicMock())
@@ -268,7 +374,9 @@ class TestDpaGraceDevice:
         monkeypatch.setitem(sys.modules, "tensorflow", fake_tf)
         model = tmp_path / "grace_model"
         model.mkdir()
-        w = GRACECalculatorWrapper(model, device="cuda:1", task="bulk")
+        w = GRACECalculatorWrapper(
+            model, device="cuda:1", task="bulk", neighbor_cache=False
+        )
         w.get_calculator()
         assert os.environ.get("CUDA_VISIBLE_DEVICES") == "1"
         info = w.info()

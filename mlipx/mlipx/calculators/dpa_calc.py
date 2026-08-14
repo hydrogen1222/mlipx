@@ -46,12 +46,19 @@ class DPACalculatorWrapper(BaseMLIPCalculator):
         """
         self.model_path = Path(model_path)
         self._device = device
-        self._task = task
-        self._head = head
+        self._task = str(task).strip().lower()
+        self._head = str(head).strip() if head is not None else None
+        self._active_head: str | None = None
+        self._available_heads: list[str] = []
+        self._model_precision: list[str] = []
         self._calculator: Calculator | None = None
 
         if not self.model_path.exists():
             raise FileNotFoundError(f"Model file not found: {self.model_path}")
+        if self._task not in {"bulk", "molecule"}:
+            raise ValueError("DPA task must be 'bulk' or 'molecule'.")
+        if head is not None and not str(head).strip():
+            raise ValueError("DPA head must be a non-empty branch name.")
         dev = str(device).lower()
         if dev not in {"cpu", "cuda", "gpu"} and not (
             dev.startswith("cuda:") and dev[5:].isdigit()
@@ -79,7 +86,74 @@ class DPACalculatorWrapper(BaseMLIPCalculator):
             if self._head is not None:
                 kwargs["head"] = self._head
             self._calculator = DP(**kwargs)
+            self._inspect_loaded_model()
         return self._calculator
+
+    def _inspect_loaded_model(self) -> None:
+        """Resolve the active DeepMD branch and fail closed for multi-task PESs."""
+        import json  # noqa: PLC0415
+
+        evaluator = getattr(self._calculator, "dp", None)
+        getter = getattr(evaluator, "get_model_def_script", None)
+        if not callable(getter):
+            # Older single-task backends do not expose model metadata.  A
+            # requested head was already validated by DP construction; with no
+            # head there is no evidence that this is a multi-task model.
+            self._active_head = self._head
+            return
+        model_def = getter()
+        if isinstance(model_def, str):
+            model_def = json.loads(model_def)
+        if not isinstance(model_def, dict):
+            raise RuntimeError(
+                "DeepMD returned an unreadable model definition; refusing to "
+                "guess the active task/head."
+            )
+        branches = model_def.get("model_dict")
+        if not isinstance(branches, dict) or not branches:
+            self._active_head = None
+            self._model_precision = _deepmd_precisions(model_def)
+            return
+
+        self._available_heads = list(branches)
+        if self._head is None:
+            preview = ", ".join(self._available_heads[:12])
+            suffix = " ..." if len(self._available_heads) > 12 else ""
+            self._calculator = None
+            raise ValueError(
+                "The DPA/DeepMD model is multi-task, so --head/HEAD is "
+                f"required. Available canonical branches: {preview}{suffix}. "
+                "Use `dp show MODEL model-branch` for canonical names and aliases."
+            )
+
+        requested = str(self._head)
+        matches: list[str] = []
+        for canonical, branch in branches.items():
+            aliases = (
+                branch.get("model_branch_alias", [])
+                if isinstance(branch, dict)
+                else []
+            )
+            if isinstance(aliases, str):
+                aliases = [aliases]
+            elif not isinstance(aliases, (list, tuple, set)):
+                aliases = []
+            if requested == canonical or requested in aliases:
+                matches.append(str(canonical))
+        if len(matches) != 1:
+            self._calculator = None
+            if not matches:
+                raise ValueError(
+                    f"DPA head {requested!r} is not present in this model. "
+                    f"Available canonical branches: {', '.join(self._available_heads)}"
+                )
+            raise ValueError(
+                f"DPA head alias {requested!r} is ambiguous across branches: "
+                f"{', '.join(matches)}"
+            )
+        self._active_head = matches[0]
+        selected = branches[self._active_head]
+        self._model_precision = _deepmd_precisions(selected)
 
     def _apply_device_env(self) -> None:
         """Honour a requested device for DeepMD (plan section 6.2).
@@ -169,6 +243,29 @@ class DPACalculatorWrapper(BaseMLIPCalculator):
             "device": self._device,
             "task": self._task,
             "head": self._head,
+            "requested_head": self._head,
+            "active_head": self._active_head,
+            "available_heads": list(self._available_heads),
+            "model_precision": list(self._model_precision),
             "implemented_properties": self.implemented_properties,
             "has_stress": self.has_stress,
         }
+
+
+def _deepmd_precisions(model_def: dict) -> list[str]:
+    """Collect explicitly declared DeepMD descriptor/fitting precisions."""
+    values: set[str] = set()
+
+    def visit(value) -> None:
+        if isinstance(value, dict):
+            precision = value.get("precision")
+            if isinstance(precision, str):
+                values.add(precision)
+            for child in value.values():
+                visit(child)
+        elif isinstance(value, list):
+            for child in value:
+                visit(child)
+
+    visit(model_def)
+    return sorted(values)
