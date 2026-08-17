@@ -14,7 +14,7 @@ dependencies = [
     "numpy",
     "packaging",
     "tqdm",
-    "textual>=0.40.0",
+    "textual>=8.2.8",
 ]
 
 [project.optional-dependencies]
