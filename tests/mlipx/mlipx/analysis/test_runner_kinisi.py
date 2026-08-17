@@ -143,7 +143,7 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
     assert len(outcome["results"]["lag_time_ps"]) == 4
     output = run / "analysis" / "msd" / outcome["analysis_id"]
     request = json.loads((output / "request.json").read_text(encoding="utf-8"))
-    assert request["task_output_revision"] == 6
+    assert request["task_output_revision"] == 5
     assert (output / "msd.csv").is_file()
     assert (output / "msd.png").is_file()
     assert (output / "msd.svg").is_file()
@@ -158,7 +158,6 @@ def test_analysis_runner_msd_defaults_to_production(tmp_path) -> None:
     assert {"alpha.png", "alpha.svg"} <= set(payload["artifacts"])
     assert "diffusion_fits.csv" not in payload["artifacts"]
     assert payload["results"]["fit_window_ps"] is None
-    assert payload["results"]["fit_window_source"] is None
     assert payload["results"]["diagnostic_linear_diffusion_fits"] == {}
 
 

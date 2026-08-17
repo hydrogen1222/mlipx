@@ -139,7 +139,6 @@ def test_directional_msd_identity() -> None:
         result["msd_x_A2"] + result["msd_y_A2"] + result["msd_z_A2"],
     )
     assert result["fit_window_ps"] is None
-    assert result["fit_window_source"] is None
     assert result["diagnostic_linear_diffusion_fits"] == {}
 
 

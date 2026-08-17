@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 6, "transport": 3}
+_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 3}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
@@ -315,7 +315,6 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
                     "dimensions": [fit["dimensions"] for fit in fits],
                     "fit_start_ps": [fit["fit_start_ps"] for fit in fits],
                     "fit_stop_ps": [fit["fit_stop_ps"] for fit in fits],
-                    "fit_window_source": [fit["fit_window_source"] for fit in fits],
                     "actual_fit_start_ps": [fit["actual_fit_start_ps"] for fit in fits],
                     "actual_fit_stop_ps": [fit["actual_fit_stop_ps"] for fit in fits],
                     "fit_points": [fit["fit_points"] for fit in fits],

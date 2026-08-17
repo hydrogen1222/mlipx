@@ -217,7 +217,6 @@ def diagnostic_linear_diffusion_fit(
     axes: str,
     fit_start_ps: float,
     fit_stop_ps: float,
-    fit_window_source: str = "explicit",
 ) -> dict[str, Any]:
     """Explicit-range OLS diagnostic; not a publication uncertainty model."""
 
@@ -253,7 +252,6 @@ def diagnostic_linear_diffusion_fit(
         "dimensions": dimensions,
         "fit_start_ps": float(fit_start_ps),
         "fit_stop_ps": float(fit_stop_ps),
-        "fit_window_source": fit_window_source,
         "actual_fit_start_ps": float(x[0]),
         "actual_fit_stop_ps": float(x[-1]),
         "fit_points": int(np.count_nonzero(mask)),
@@ -295,7 +293,6 @@ def calculate_msd(
         raise ValueError(
             "Both fit_start_ps and fit_stop_ps are required for a diagnostic fit"
         )
-    fit_window_source = "explicit" if fit_start_ps is not None else None
     view = dataset.analysis_view(
         include_equilibration=include_equilibration, start=start, stop=stop
     )
@@ -327,7 +324,6 @@ def calculate_msd(
                 axes=axis,
                 fit_start_ps=fit_start_ps,
                 fit_stop_ps=fit_stop_ps,
-                fit_window_source="explicit",
             )
             for axis in selected_axes
         }
@@ -340,7 +336,6 @@ def calculate_msd(
         "msd_by_axes_A2": values,
         "log_log_alpha_by_axes": alpha,
         "fit_window_ps": fit_window,
-        "fit_window_source": fit_window_source,
         "diagnostic_linear_diffusion_fits": fits,
         "method": f"{method}_windowed_msd",
         "mobile_species": mobile_species,
