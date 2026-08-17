@@ -4,7 +4,13 @@ from __future__ import annotations
 
 from unittest import mock
 
-from mlipx.gpu_setup import cc_arch_name, detect_gpus, recommend_torch
+from mlipx.gpu_setup import (
+    GpuInfo,
+    cc_arch_name,
+    detect_gpus,
+    engine_install_commands,
+    recommend_torch,
+)
 
 
 def test_detect_gpus_parses_plain_csv() -> None:
@@ -12,7 +18,7 @@ def test_detect_gpus_parses_plain_csv() -> None:
         returncode=0,
         stdout="NVIDIA GeForce RTX 4090,8.9,535.104.05,24564\n",
     )
-    with mock.patch("mlipx.gpu_setup.subprocess.run", return_value=fake):
+    with mock.patch("mlipx.install.hardware.subprocess.run", return_value=fake):
         gpus = detect_gpus()
     assert gpus is not None and len(gpus) == 1
     g = gpus[0]
@@ -23,13 +29,11 @@ def test_detect_gpus_parses_plain_csv() -> None:
 
 
 def test_detect_gpus_handles_quoted_commas_in_name() -> None:
-    """Regression: a GPU name containing a comma is quoted by nvidia-smi;
-    a naive split(',') corrupted it into extra fields."""
     fake = mock.Mock(
         returncode=0,
         stdout='"Tesla V100-SXM2-16GB, Special",7.0,535.104.05,16384\n',
     )
-    with mock.patch("mlipx.gpu_setup.subprocess.run", return_value=fake):
+    with mock.patch("mlipx.install.hardware.subprocess.run", return_value=fake):
         gpus = detect_gpus()
     assert gpus is not None and len(gpus) == 1
     assert gpus[0].name == "Tesla V100-SXM2-16GB, Special"
@@ -42,7 +46,7 @@ def test_detect_gpus_skips_malformed_rows() -> None:
         stdout="bad row without enough fields\n"
         'NVIDIA A100,8.0,535.104.05,40960\n',
     )
-    with mock.patch("mlipx.gpu_setup.subprocess.run", return_value=fake):
+    with mock.patch("mlipx.install.hardware.subprocess.run", return_value=fake):
         gpus = detect_gpus()
     assert gpus is not None and len(gpus) == 1
     assert gpus[0].name == "NVIDIA A100"
@@ -50,7 +54,7 @@ def test_detect_gpus_skips_malformed_rows() -> None:
 
 def test_detect_gpus_missing_nvidia_smi() -> None:
     with mock.patch(
-        "mlipx.gpu_setup.subprocess.run",
+        "mlipx.install.hardware.subprocess.run",
         side_effect=FileNotFoundError("nvidia-smi"),
     ):
         assert detect_gpus() is None
@@ -58,13 +62,13 @@ def test_detect_gpus_missing_nvidia_smi() -> None:
 
 def test_detect_gpus_nonzero_returncode() -> None:
     fake = mock.Mock(returncode=1, stdout="")
-    with mock.patch("mlipx.gpu_setup.subprocess.run", return_value=fake):
+    with mock.patch("mlipx.install.hardware.subprocess.run", return_value=fake):
         assert detect_gpus() is None
 
 
 def test_detect_gpus_empty_output() -> None:
     fake = mock.Mock(returncode=0, stdout="")
-    with mock.patch("mlipx.gpu_setup.subprocess.run", return_value=fake):
+    with mock.patch("mlipx.install.hardware.subprocess.run", return_value=fake):
         assert detect_gpus() is None
 
 
@@ -86,13 +90,88 @@ def test_recommend_torch_kepler_unsupported() -> None:
     assert rec.supported is False
 
 
-def test_recommend_torch_pascal_uses_2_6() -> None:
+def test_recommend_torch_pascal_uses_cu126() -> None:
+    """Pascal (sm_61) → torch 2.8.0+cu126 via legacy channel."""
     rec = recommend_torch(6, 1)
     assert rec.supported is True
-    assert rec.version == "2.6.0+cu124"
+    assert "2.8.0" in rec.version
+    assert "cu126" in rec.version
 
 
-def test_recommend_torch_blackwell_uses_2_8() -> None:
+def test_recommend_torch_blackwell_uses_modern() -> None:
+    """Blackwell (sm_100) → torch 2.8.0+cu128 via modern channel."""
     rec = recommend_torch(10, 0)
     assert rec.supported is True
-    assert rec.version == "2.8.0+cu128"
+    assert "2.8.0" in rec.version
+    assert "cu128" in rec.version
+
+
+def _gpu(cc_major: int, cc_minor: int) -> GpuInfo:
+    return GpuInfo(
+        name="fake",
+        cc_major=cc_major,
+        cc_minor=cc_minor,
+        driver_version="1.0",
+        vram_mib=8192,
+    )
+
+
+def test_engine_install_commands_pascal_mace_uses_cu126() -> None:
+    """Pascal (sm_61) MACE → torch 2.8.0+cu126."""
+    cmds = engine_install_commands([_gpu(6, 1)], "mace")
+    joined = "\n".join(cmds)
+    assert "torch==2.8.0" in joined
+    assert "cu126" in joined
+    assert "e3nn==0.4.4" in joined
+
+
+def test_engine_install_commands_pascal_dpa_uses_cu126() -> None:
+    """Pascal DPA → torch 2.10.0+cu126."""
+    cmds = engine_install_commands([_gpu(6, 1)], "dpa")
+    joined = "\n".join(cmds)
+    assert "torch==2.10.0" in joined
+    assert "cu126" in joined
+
+
+def test_engine_install_commands_volta_dpa_uses_cu126() -> None:
+    """Volta (sm_70) DPA → torch 2.10.0+cu126."""
+    cmds = engine_install_commands([_gpu(7, 0)], "dpa")
+    joined = "\n".join(cmds)
+    assert "torch==2.10.0" in joined
+    assert "cu126" in joined
+
+
+def test_engine_install_commands_ada_mace_uses_modern() -> None:
+    """Ada (sm_89) MACE → torch 2.8.0+cu128."""
+    cmds = engine_install_commands([_gpu(8, 9)], "mace")
+    joined = "\n".join(cmds)
+    assert "torch==2.8.0" in joined
+    assert "cu128" in joined
+
+
+def test_engine_install_commands_blackwell_uses_cu128() -> None:
+    cmds = engine_install_commands([_gpu(10, 0)], "mace")
+    joined = "\n".join(cmds)
+    assert "torch==2.8.0" in joined
+    assert "cu128" in joined
+
+
+def test_engine_install_commands_cpu_only_uses_cpu_wheels() -> None:
+    mace = "\n".join(engine_install_commands(None, "mace"))
+    assert "https://download.pytorch.org/whl/cpu" in mace
+    grace = "\n".join(engine_install_commands(None, "grace"))
+    assert "tensorflow==" in grace
+    assert "[and-cuda]" not in grace
+
+
+def test_engine_install_commands_uma_uses_uv_sync() -> None:
+    cmds = engine_install_commands(None, "uma")
+    assert "uv sync --frozen" in "\n".join(cmds)
+
+
+def test_engine_install_commands_maxwell_experimental() -> None:
+    """Maxwell (sm_52) should still give commands but mark experimental."""
+    cmds = engine_install_commands([_gpu(5, 2)], "uma")
+    joined = "\n".join(cmds)
+    # Should still produce uv sync for UMA
+    assert "uv sync --frozen" in joined

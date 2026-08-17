@@ -112,7 +112,7 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
                     "MACE and UMA must not share the same virtual environment.\n"
                     "Create .venv-mace and launch the TUI with:\n"
                     "  .venv-mace/bin/mlipx tui\n"
-                    "See mlipx/docs/README_CN.md or README_EN.md."
+                    "See the repository root README.md or README_CN.md."
                 )
             try:
                 from mace.calculators import MACECalculator  # noqa: PLC0415
@@ -120,7 +120,7 @@ class MACECalculatorWrapper(BaseMLIPCalculator):
                 raise ImportError(
                     "MACE support requires the 'mace-torch' package.\n"
                     "Install it in the dedicated .venv-mace environment; "
-                    "see mlipx/docs/README_CN.md or README_EN.md."
+                    "see the repository root README.md or README_CN.md."
                 ) from e
 
             kwargs: dict[str, Any] = {

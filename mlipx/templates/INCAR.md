@@ -1,5 +1,6 @@
 # Molecular Dynamics Settings
 # mlipx - VASP-style input
+# Supports engines: UMA (default), MACE, DPA, GRACE
 
 # Calculation Type
 CALC_TYPE = MD
@@ -7,8 +8,9 @@ TASK = omat
 
 # Model Settings
 MODEL_PATH = uma-s-1.pt
+MODEL_TYPE = uma          # uma (default), mace, dpa, grace
 DEVICE = cuda              # MD benefits from GPU
-INFERENCE_MODE = turbo     # Turbo mode for better performance
+INFERENCE_MODE = turbo     # Turbo mode for better performance (UMA only)
 
 # MD Settings
 MD_ENSEMBLE = NVT          # NVT or NVE (Velocity Verlet)
@@ -29,20 +31,10 @@ SAVE_INTERVAL = 10         # Save trajectory every N steps
 # PRE_RELAX_STEPS = 50
 # PRE_RELAX_FMAX = 0.1
 
-# Output Control
-WRITE_TRAJECTORY = .TRUE.
-OUTPUT_FORMAT = VASP
-
 # Notes:
-# - NVT uses only the coupling parameter for the selected THERMOSTAT
-# - For NVE ensemble, initial temperature is set but not controlled
-# - Thermostat choice/coupling can influence dynamical and transport properties;
-#   check thermostat sensitivity for transport-oriented calculations
-# - Pre-relaxation is on by default for NVT, off for NVE (override with PRE_RELAX)
-# - TIMESTEP of 1 fs is typical, can increase to 2 fs for light elements
-# - Turbo mode is recommended for MD (1.5-2x faster)
-# - Use cuda device for MD (much faster than CPU)
-# - GRACE: NEIGHBOR_CACHE = .TRUE. (default) enables the verlet-style
-#   neighbour-list cache (same exact cutoff/periodic-image semantics; tiny
-#   floating-point rounding differences are possible, ~1.3x on tested MD);
-#   NEIGHBOR_SKIN = 1.5 controls how often the neighbour table is rebuilt
+# - TASK: omat (materials, UMA), omol (molecules, UMA), oc20 (catalysis, UMA),
+#   bulk (MACE/DPA/GRACE), molecule (MACE/DPA/GRACE)
+# - MODEL_TYPE=mace: add HEAD=default
+# - MODEL_TYPE=dpa:  add HEAD=<branch>
+# - MODEL_TYPE=grace: MODEL_PATH is a SavedModel directory
+# - DEVICE: cpu or cuda[:N]

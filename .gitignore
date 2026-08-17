@@ -174,3 +174,18 @@ results/
 
 
 LGPS*
+
+# ------------------------------------------------------------------
+# PRIVATE / LOCAL-ONLY DATA — never push to GitHub
+# ------------------------------------------------------------------
+# Research analysis workspace (batch runs, trajectories, NEB, relax,
+# figures, private LGPS transport studies)
+/sp_crosscheck_v2/
+# Scratch / working directories
+/_tmp_md_test/
+/raw/
+/vasp/
+# Private development plans & notes (not project documentation)
+/mlipx_analysis_v2_final_transport_hardening_plan.md
+# Private structure / model files
+LGPS*.vasp

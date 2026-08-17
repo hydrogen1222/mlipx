@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from src.fairchem.core.models.uma.nn.layer_norm import (
+from fairchem.core.models.uma.nn.layer_norm import (
     get_l_to_all_m_expand_index,
     EquivariantLayerNormArray,
     EquivariantLayerNormArraySphericalHarmonics,

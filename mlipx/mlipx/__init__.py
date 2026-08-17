@@ -4,7 +4,7 @@ Copyright (c) Meta Platforms, Inc. and affiliates.
 This source code is licensed under the MIT license found in the
 LICENSE file in the root directory of this source tree.
 
-mlipx - VASP-like interface for MLIP models.
+mlipx - VASP-like interface for MLIP models (UMA, MACE, DPA, GRACE).
 """
 
 from __future__ import annotations
@@ -15,12 +15,14 @@ __all__ = [
     "BatchRunner",
     "BaseMLIPCalculator",
     "CalculationEngine",
+    "CalculatorFactory",
     "IncarConfig",
     "JobManager",
     "MDRunner",
     "OptimizationRunner",
     "ProgressEvent",
     "SinglePointRunner",
+    "SUPPORTED_TYPES",
     "UMACalculator",
     "calculate_energy",
     "run_md",
@@ -30,11 +32,13 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    """Lazy import to avoid loading fairchem/torch at import time."""
+    """Lazy import to avoid loading torch/tensorflow backends at import time."""
     _imports = {
         "IncarConfig": ".config",
         "BaseMLIPCalculator": ".base_calculator",
         "UMACalculator": ".calculator",
+        "CalculatorFactory": ".calculators.factory",
+        "SUPPORTED_TYPES": ".calculators.factory",
         "OptimizationRunner": ".runners.optimization",
         "MDRunner": ".runners.md",
         "BatchRunner": ".runners.batch",

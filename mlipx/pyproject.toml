@@ -58,9 +58,10 @@ target-version = "py39"
 # before torch is installed) to detect your GPU and get the exact torch command.
 # Support floor: Maxwell (GTX 900 series, sm_50/52). Kepler (GTX 700/600) not
 # supported (no prebuilt PyTorch wheel).
-#   Maxwell/Pascal (sm_50/52/60/61) + Volta~Hopper (sm_70~90):
-#     uv pip install torch==2.6.0 --index-url https://download.pytorch.org/whl/cu124
-#     (torch 2.7+ dropped sm_50/sm_60; sm_50/sm_60 kernels binary-compat with sm_52/sm_61)
-#   Blackwell (RTX 50, sm_100/120):
-#     uv pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu128
-#   or build from source: TORCH_CUDA_ARCH_LIST="6.0;6.1" python setup.py develop
+#   Maxwell/Pascal/Volta (sm_50–sm_70): use the cu126 Legacy channel, e.g.
+#     uv pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu126
+#     (PyTorch 2.8+ dropped Maxwell/Pascal from cu128; 2.11+ dropped Volta)
+#   Turing+ (sm_75+): use the modern channel matching the torch version,
+#     e.g. torch 2.8.0 -> cu128, torch 2.12+ -> cu130.
+#   The one-command installer `scripts/install_mlipx.sh` picks the right
+#   channel automatically from the compatibility matrix in mlipx/install/.

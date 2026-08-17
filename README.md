@@ -2,76 +2,150 @@
 
 **A VASP-style CLI / TUI / Python API for machine-learning interatomic potentials (MLIPs).**
 
-mlipx wraps multiple MLIP engines behind one unified interface — **UMA (FAIRChem)** (default), **MACE**, **DPA (DeepMD-kit)**, and **GRACE** — so you can run single-point, optimization, molecular-dynamics, and batch calculations with VASP-compatible output (OUTCAR, CONTCAR, XDATCAR, OSZICAR) regardless of which model you choose.
+mlipx wraps four MLIP engines behind one unified interface — **UMA (FAIRChem)** (default), **MACE**, **DPA (DeepMD-kit)**, and **GRACE** — and provides single-point (SP), geometry optimization (OPT), molecular dynamics (MD), batch processing, and validated trajectory analysis with VASP-compatible outputs (OUTCAR, CONTCAR, XDATCAR, OSZICAR).
 
-Switch engines with a single flag: `--model-type` (CLI) or the `MODEL_TYPE` key (INCAR). Default is `uma`; existing UMA workflows keep working unchanged.
-
-> ℹ️ This repository contains the full source of [mlipx](mlipx/) — a multi-engine MLIP CLI/TUI/API tool — built on top of [fairchem-core](packages/fairchem-core/). The underlying fairchem library (UMA model, training, datasets) is preserved under [`src/`](src/), [`packages/`](packages/), and [`docs/`](docs/). Originally forked from [FAIRChem](https://github.com/FAIR-Chem/fairchem).
-
----
-
-## 📖 Documentation
-
-| Language | Manual |
-|----------|--------|
-| 🇨🇳 中文 | [mlipx/docs/README_CN.md](mlipx/docs/README_CN.md) — 完整中文手册 |
-| 🇬🇧 English | [mlipx/docs/README_EN.md](mlipx/docs/README_EN.md) — Complete reference |
-
-Both manuals are wiki-level references covering: installation, quick start, architecture, all calculation types, CLI/TUI/API, every INCAR keyword, output-file formats, task types, the **multi-engine guide**, background jobs, resource control, worked examples, troubleshooting, and performance.
-
----
-
-## 🚀 Quick Start
-
-### Install: four engines, four isolated environments
-
-```bash
-# Clone the repository
-git clone https://github.com/hydrogen1222/mlipx.git
-cd mlipx
-
-# Environment 1: UMA
-uv sync --frozen
-uv run mlipx doctor --engine uma --device auto
+```
+structure.cif ──▶  MLIP engine (UMA/MACE/DPA/GRACE)  ──▶  energy, forces, stress
 ```
 
-Each optional engine needs its own Python environment. These directories share
-the repository, structures, and models; they only isolate incompatible Python
-and CUDA dependencies.
+---
 
-| Engine | Environment | Always run it as |
-|--------|-------------|------------------|
+## Supported Engines
+
+| `--model-type` | Engine | Backend package | Tasks |
+|---|---|---|---|
+| `uma` (default, alias `fairchem`) | UMA — FAIRChem | `fairchem-core` | `omat` / `omol` / `oc20` / `oc25` / `odac` / `omc` |
+| `mace` | MACE | `mace-torch` | `bulk` / `molecule` |
+| `dpa` | DPA — DeepMD-kit | `deepmd-kit` | `bulk` / `molecule` |
+| `grace` | GRACE | `tensorpotential` | `bulk` / `molecule` |
+
+Each engine runs in its **own isolated Python environment** because their dependencies conflict (UMA needs `e3nn>=0.5`; MACE pins `e3nn==0.4.4`; DPA pins `torch==2.10`; GRACE uses TensorFlow). Do **not** install all four into one environment.
+
+---
+
+## Installation
+
+### One-command installer (recommended)
+
+```bash
+# Clone and install uv (skip if uv already works)
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Auto-detect GPU and install all four engines
+./scripts/install_mlipx.sh
+```
+
+Common variants:
+
+```bash
+./scripts/install_mlipx.sh --device cpu        # CPU-only machine
+./scripts/install_mlipx.sh --engines uma,mace  # only UMA + MACE
+./scripts/install_mlipx.sh --source china      # use China mirrors
+./scripts/install_mlipx.sh --clean             # rebuild every venv
+./scripts/install_mlipx.sh --dry-run           # preview without installing
+```
+
+Run `./scripts/install_mlipx.sh --help` for all options.
+
+### Manual installation (four environments)
+
+If you prefer to install by hand, create one venv per engine:
+
+```bash
+# UMA (default)
+uv sync --frozen
+uv run mlipx doctor --engine uma --device auto
+
+# MACE
+uv venv --python 3.12 .venv-mace
+uv pip install --no-config --python .venv-mace/bin/python \
+  "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-mace/bin/python \
+  -e ./mlipx "e3nn==0.4.4" "mace-torch==0.3.16"
+.venv-mace/bin/mlipx doctor --engine mace --device auto
+
+# DPA / DeepMD
+uv venv --python 3.12 .venv-dpa
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-dpa/bin/python \
+  -e ./mlipx "deepmd-kit==3.1.3"
+.venv-dpa/bin/mlipx doctor --engine dpa --device auto
+
+# GRACE
+uv venv --python 3.12 .venv-grace
+uv pip install --no-config --python .venv-grace/bin/python \
+  -e ./mlipx "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
+uv pip install --no-config --python .venv-grace/bin/python \
+  "nvidia-cudnn-cu12==9.3.0.75"
+.venv-grace/bin/mlipx doctor --engine grace --device auto
+```
+
+Use the matching command prefix:
+
+| Engine | Environment | Prefix |
+|---|---|---|
 | UMA | `.venv` | `uv run mlipx ...` |
 | MACE | `.venv-mace` | `.venv-mace/bin/mlipx ...` |
 | DPA | `.venv-dpa` | `.venv-dpa/bin/mlipx ...` |
 | GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
 
-Copy-ready installation commands for all four environments are at the very
-start of the [English installation guide](mlipx/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
-and [中文安装教程](mlipx/docs/README_CN.md#21-小白先看四个引擎要用四个环境).
-Do not install MACE, DPA, or GRACE into the UMA `.venv`.
+### GPU compatibility
 
-UMA weights are not bundled with either mlipx or `fairchem-core`. They are
-hosted in the manually gated
-[`facebook/UMA` Hugging Face repository](https://huggingface.co/facebook/UMA),
-which currently excludes China, Russia, Belarus, and comprehensively sanctioned
-jurisdictions. Request access and authenticate with a gated-repository token
-before downloading a checkpoint; see the language manuals for exact steps.
+The installer and `mlipx setup` choose the correct PyTorch/CUDA wheel automatically.
 
-### Run a calculation
+| GPU family | Examples | Compute capability | CUDA channel | Status |
+|---|---|---|---|---|
+| Maxwell | GTX 960, TITAN X | sm_50/52 | cu126 Legacy | ⚠️ Experimental |
+| Pascal | **GTX 1080 Ti**, P100 | sm_60/61 | cu126 Legacy | Verified |
+| Volta | **V100** | sm_70 | cu126 Legacy | Verified |
+| Turing | RTX 20xx | sm_75 | cu128+ Modern | Verified |
+| Ampere | **RTX 3080 Ti**, 30xx | sm_80/86 | cu128+ Modern | Verified |
+| Ada | **RTX 4090**, 40xx | sm_89 | cu128+ Modern | Verified |
+| Hopper | H100 | sm_90 | cu128+ Modern | Verified |
+| Blackwell | RTX 50xx | sm_100/120 | cu128+ Modern | Verified |
+| none | CPU only | — | CPU wheels | — |
+
+> **Why two CUDA routes?** Maxwell/Pascal/Volta must use the **cu126 Legacy** channel: PyTorch 2.8+ removed Maxwell/Pascal from cu128 builds, and PyTorch 2.11+ removed Volta from cu128+. Turing+ use the **modern** channel (cu128 for torch 2.8–2.10, cu130 for torch 2.12+). Maxwell is Experimental because TensorFlow 2.20 official wheels start at sm_60.
+
+### Download sources
+
+PyPI packages and PyTorch CUDA wheels are handled separately. The installer never modifies your global `~/.config/uv/uv.toml`; it uses `UV_NO_CONFIG=1` and per-process variables.
+
+| `--source` | PyPI | PyTorch CUDA wheels | Use when |
+|---|---|---|---|
+| `auto` → `official` | pypi.org | download.pytorch.org | Default |
+| `china` | tuna.tsinghua.edu.cn | mirrors.aliyun.com (`--find-links`) | Mainland China |
+| `offline` | cached only | cached only | Air-gapped machines |
+| `custom` | your env vars | your env vars | Advanced |
+
+---
+
+## Quick Start
+
+### Single-point energy (UMA)
 
 ```bash
-# Single-point energy with the default UMA engine
 uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
-
-# Geometry optimization (with cell relaxation)
-uv run mlipx opt structure.cif --model uma-s-1.pt --task omat --cell-opt --fmax 0.02
-
-# Molecular dynamics on GPU with turbo inference
-uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --steps 10000
 ```
 
-### Use a different MLIP engine
+### Geometry optimization
+
+```bash
+uv run mlipx opt structure.cif --model uma-s-1.pt --task omat \
+  --cell-opt --fmax 0.02
+```
+
+### Molecular dynamics
+
+```bash
+uv run mlipx md structure.cif --model uma-s-1.pt --task omat \
+  --device cuda --steps 10000
+```
+
+### Other engines
 
 ```bash
 # MACE
@@ -83,89 +157,197 @@ uv run mlipx md structure.cif --model uma-s-1.pt --task omat --device cuda --ste
   --model-type dpa --task bulk --head Domains_SSE_PBE \
   --device cuda:0 --fmax 0.05
 
-# GRACE: --model points to the complete SavedModel directory
+# GRACE (--model points to a SavedModel directory)
 .venv-grace/bin/mlipx sp bulk.cif --model grace_model/ \
   --model-type grace --task bulk --device cuda:0 \
   --gpu-memory-limit-mb 6144
 ```
 
-GRACE uses TensorFlow memory growth by default, so it no longer reserves the
-whole visible GPU at startup. When sharing a GPU, set an explicit hard limit
-with `--gpu-memory-limit-mb`; choose the value from the other job's measured
-peak plus safety headroom. The example value above is not a universal default.
-
-For MD, `raw/trajectory.traj` and `raw/md.csv` are the reproducible canonical
-outputs. If VASP interoperability files are not needed during a high-throughput
-run, use `--no-write-outcar --no-write-xdatcar` to avoid their duplicate text
-I/O; the canonical trajectory remains enabled.
-
-### Analyze an MD trajectory
-
-Analysis is calculator-independent: a DPA, MACE, or GRACE trajectory can be
-analyzed from the UMA `.venv` without loading the model backend. Validate the
-trajectory contract before calculating MSD or transport properties:
+### INCAR files (VASP-style)
 
 ```bash
-uv run mlipx analyze results/LGPS-800K validate
-uv run mlipx analyze results/LGPS-800K thermo
-uv run mlipx analyze results/LGPS-800K msd \
-  --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
+uv run mlipx template sp          # generate INCAR.sp
+uv run mlipx run -i INCAR.sp -s structure.cif
 ```
 
-MSD and transport require a fixed-cell, three-dimensionally periodic trajectory
-with a uniform time axis and a known wrapped/unwrapped coordinate convention;
-an mlipx run marked failed, aborted, or cancelled is rejected. See the
-[Analysis v2 guide](mlipx/docs/ANALYSIS.md) and
-[transport definitions](mlipx/docs/TRANSPORT.md) before fitting a diffusion
-coefficient; mlipx does not choose an equilibration cutoff or diffusive fitting
-window automatically.
-
-### Or use a VASP-style INCAR file
+Example `INCAR.sp`:
 
 ```ini
 CALC_TYPE   = SP
-MODEL_TYPE  = UMA            # default; or MACE / DPA / GRACE
+MODEL_TYPE  = UMA        # or MACE / DPA / GRACE
 MODEL_PATH  = uma-s-1.pt
-TASK        = omat           # UMA: omat/omol/oc20/...  others: bulk/molecule
+TASK        = omat       # UMA: omat/omol/...; others: bulk/molecule
 DEVICE      = cpu
 ```
 
-```bash
-uv run mlipx run -i INCAR.mlipx -s structure.cif
-```
-
-### Batch calculations
-
-Batch mode is currently CLI-only and processes matching structures
-sequentially while reusing one loaded model:
+### Batch
 
 ```bash
-# UMA batch single-point calculations
 uv run mlipx batch structures/ --model uma-s-1.pt \
   --model-type uma --task omat --device cuda \
   --calc-type sp --pattern "*.cif" --output batch_results
-
-# MACE batch single-point calculations
-.venv-mace/bin/mlipx batch structures/ --model mace.model \
-  --model-type mace --task bulk --device cuda \
-  --calc-type sp --pattern "*.cif" --output mace_batch_results
 ```
 
-Each input gets its own output subdirectory and the root output directory gets
-`batch_summary.json`. The current CLI does not expose `--parallel` or
-`--workers`; do not include them.
+Each input gets its own output subdirectory; the root gets `batch_summary.json`.
 
-### 🎟️ Job queue (Slurm-like, background)
+---
 
-For long or many calculations, submit **queued jobs** instead of running them
-in the foreground. Queued jobs start one at a time by default (single GPU);
-a scheduler promotes `PENDING` jobs to `RUNNING` and automatically starts the
-next job when one finishes. Each task can use its own Python environment
-(venv), engine (UMA/MACE/DPA/GRACE), model, structure and calc type, so a UMA
-OPT task and a GRACE MD task can share one queue.
+## Trajectory Analysis
+
+`mlipx analyze` is calculator-independent: you can analyze a trajectory produced by any engine from the UMA `.venv` without loading the model backend.
 
 ```bash
-# 1. Describe the tasks in a JSON file
+# Validate first (checks time axis, PBC, conventions, eligibility)
+uv run mlipx analyze results/LGPS-800K validate
+
+# Thermodynamics
+uv run mlipx analyze results/LGPS-800K thermo
+
+# RDF / coordination
+uv run mlipx analyze results/LGPS-800K rdf \
+  --center Li --neighbor S --rmax 6 --cn-cutoff 3
+
+# MSD
+uv run mlipx analyze results/LGPS-800K msd \
+  --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
+
+# Density / VACF / spectrum / Arrhenius
+uv run mlipx analyze results/LGPS-800K density --mobile Li --spacing 0.25
+uv run mlipx analyze results/LGPS-800K vacf --species Li
+uv run mlipx analyze results/LGPS-800K spectrum --species Li --taper one-sided-cosine
+
+# Fit multi-temperature Arrhenius from independent transport results
+uv run mlipx analyze RUN arrhenius \
+  --temperature 600,700,800 --diffusivity 1e-10,2e-10,5e-10 \
+  --diffusivity-std 0.1e-10,0.2e-10,0.5e-10
+```
+
+### Transport (diffusion + conductivity)
+
+Covariance-aware transport uses [kinisi 2.x](https://joss.theoj.org/papers/10.21105/joss.05984). It requires an explicit fit start:
+
+```bash
+uv run mlipx analyze RUN transport --mobile Li --charge 1 \
+  --drift-reference nonmobile --fit-start-ps 40 \
+  --lag-step-ps 2 --lag-stop-ps 200 --random-seed 0
+```
+
+Key scientific rules:
+
+- **Never guess.** `--charge` is required; temperature comes from the run (or `--temperature-K` for external trajectories); `wrapped`/`unwrapped` must describe the actual file.
+- **Fixed-cell only.** Variable-cell transport is unsupported.
+- **Drift correction is explicit:** `none`, `nonmobile`, or `indices`.
+- **`--lag-step-ps` / `--lag-stop-ps`** sparsify kinisi's lag-time grid, not the trajectory frames. They must be used together.
+- **MSD diffusion fit** is only produced when both `--fit-start-ps` and `--fit-stop-ps` are given. mlipx does not auto-detect the diffusive regime.
+- **Nernst–Einstein tracer conductivity** (`sigma_NE_tracer`) is reported with posterior mean / SD / 95% CI. It is not a total physical uncertainty and not automatically equal to experimental/collective conductivity.
+
+### Electrolyte mechanisms (optional GEMDAT)
+
+GEMDAT is an optional backend for site mapping, jumps, and percolation:
+
+```bash
+python -m pip install -e './mlipx[analysis,electrolyte]'
+uv run mlipx analyze RUN electrolyte --mobile Li --sites Li_sites.cif \
+  --jump-dimensions 3 --percolation-axes xyz
+```
+
+A site source is mandatory (`--sites` or `--discover-sites-from-density`). GEMDAT endpoint diffusivity is never promoted over the kinisi estimate.
+
+### Outputs & reproducibility
+
+Every analysis task writes under `RUN/analysis/TASK/REQUEST_HASH/`:
+
+```
+request.json
+provenance.json
+results.json
+task-specific CSV/NPZ
+PNG and SVG when applicable
+diagnostics.json when applicable
+```
+
+The request hash includes the source fingerprint, selection, range, axes, drift definition, scientific parameters, and backend versions. Identical requests are reused unless `--force` is supplied.
+
+---
+
+## Interfaces
+
+| Interface | Command | Best for |
+|---|---|---|
+| CLI | `mlipx sp/opt/md/batch/...` | Scripts, HPC, automation |
+| TUI | `mlipx tui` | Interactive exploration |
+| Python API | `from mlipx.api import run_single_point, ...` | Custom workflows |
+| INCAR | `mlipx run -i INCAR` | VASP-style config |
+
+### Python API
+
+```python
+from mlipx.api import run_single_point, run_md, calculate_energy
+
+result = run_single_point("structure.cif", "uma-s-1.pt", task="omat")
+energy = calculate_energy("structure.cif", "uma-s-1.pt", task="omat")
+```
+
+---
+
+## INCAR Configuration
+
+| Category | Key | Default |
+|---|---|---|
+| Calculation | `CALC_TYPE` | — (`SP` / `OPT` / `MD`) |
+| Model | `MODEL_TYPE` | `UMA` |
+| Model | `MODEL_PATH` | — |
+| Model | `TASK` | `omat` (UMA) / `bulk` (others) |
+| Model | `DEVICE` | `cpu` |
+| Model | `HEAD` | — (MACE/DPA multi-task) |
+| Model | `DTYPE` | `float64` (MACE) |
+| Output | `WRITE_OUTCAR` | `.TRUE.` |
+| Output | `WRITE_XDATCAR` | `.TRUE.` |
+| Output | `WRITE_TRAJECTORY` | `.TRUE.` |
+| Output | `WRITE_JSON` | `.TRUE.` |
+| OPT | `FMAX` | `0.05` |
+| OPT | `MAX_STEPS` | `500` |
+| OPT | `OPT_ALGO` | `FIRE` |
+| OPT | `CELL_OPT` | `.FALSE.` |
+| MD | `MD_ENSEMBLE` | `NVT` |
+| MD | `TEMPERATURE` | `300` |
+| MD | `TIMESTEP` | `1.0` |
+| MD | `STEPS` | `1000` |
+| MD | `THERMOSTAT` | `LANGEVIN` |
+| MD | `SAVE_INTERVAL` | `10` |
+
+See the generated templates (`mlipx template sp/opt/md`) for the full keyword list with comments.
+
+---
+
+## Output Files
+
+Each calculation writes a self-contained output directory:
+
+```
+OUTPUT/
+├── OUTCAR                 VASP-like text output
+├── CONTCAR                final structure
+├── XDATCAR                trajectory in VASP layout (if enabled)
+├── mlipx_results.json     machine-readable results
+├── raw/
+│   ├── trajectory.traj    canonical ASE trajectory
+│   └── md.csv             MD time series (if MD)
+└── artifacts.json         provenance / versions / semantics
+```
+
+For high-throughput runs, use `--no-write-outcar --no-write-xdatcar` to skip the VASP interoperability text I/O; the canonical trajectory remains enabled.
+
+---
+
+## Background Jobs & Queue
+
+### Background jobs & queue
+
+Background jobs are submitted through the queue JSON interface:
+
+```bash
+# 1. Describe tasks in JSON
 cat > tasks.json <<'JSON'
 {
   "max_concurrent": 1,
@@ -178,133 +360,109 @@ cat > tasks.json <<'JSON'
       "model_type": "uma",
       "device": "cuda:0",
       "options": {"fmax": 0.05}
-    },
-    {
-      "name": "md-grace-1",
-      "python": "/path/.venv-grace/bin/python",
-      "calc_type": "md",
-      "structure": "/path/b.cif",
-      "model": "/path/grace_model/",
-      "model_type": "grace",
-      "options": {"ensemble": "NVE", "steps": 1000}
     }
   ]
 }
 JSON
 
-# 2. Enqueue the tasks (status PENDING)
+# 2. Submit and start
 uv run mlipx queue submit tasks.json
+uv run mlipx queue start            # background scheduler
+uv run mlipx queue status
 
-# 3. Run the scheduler (background; max_concurrent from the task file)
-uv run mlipx queue start            # stop with: mlipx queue stop
-uv run mlipx queue status           # queued / running / finished counts
-uv run mlipx queue pause <job-id>   # hold one pending job
-uv run mlipx queue resume <job-id>  # resume one paused job
-
-# Or run the scheduler in the foreground of a terminal
-uv run mlipx queue start --foreground
+# 3. Manage
+uv run mlipx jobs                   # list running/done/failed
+uv run mlipx kill <job-id>          # terminate a running job
+uv run mlipx clean                  # remove completed/failed records
 ```
 
-The TUI queues every calculation it submits (visible as `pending` in the
-Jobs screen) and provides **Start/Stop Scheduler** controls plus a concurrency
-setting for multi-GPU machines. Select a pending row and use **Pause Job** or
-**Resume Job** (also `P`/`U`) to control one task; **Pause Queue** and
-**Resume Queue** remain available for the whole pending queue. Running jobs are
-never affected. `mlipx jobs` / `mlipx kill` / `mlipx clean`
-manage individual jobs; `mlipx convert-xdatcar` re-emits a trajectory in the
-exact standard VASP XDATCAR layout (unwrapped coordinates).
-
----
-
-## 🧰 Interfaces
-
-| Interface | Command | Best for |
-|-----------|---------|----------|
-| **CLI** | Use the command prefix for the selected engine in the table above | Scripts, HPC jobs, automation |
-| **TUI** | `<engine-command-prefix> tui` | Interactive SP/OPT/MD, live progress |
-| **Python API** | `from mlipx.api import ...` | Workflows, custom analysis |
-| **INCAR** | `mlipx run -i INCAR` | VASP-style batch configuration |
-
-Run `mlipx doctor` for a side-effect-free package inventory. For an actual
-runtime check, select the same engine and device you will use; doctor executes
-a real tensor operation rather than stopping at import. Add a model, explicit
-task/head, and structure for a no-output single-point smoke test:
+The TUI also has built-in queue controls. Each task may use its own Python environment/engine/model.
 
 ```bash
-.venv-dpa/bin/mlipx doctor --engine dpa --device cuda:0 \
-  --model dpa.pt --task bulk --head Domains_SSE_PBE --structure POSCAR
+# 1. Describe tasks in JSON
+cat > tasks.json <<'JSON'
+{
+  "max_concurrent": 1,
+  "tasks": [
+    {
+      "name": "opt-uma-1",
+      "calc_type": "opt",
+      "structure": "/path/a.cif",
+      "model": "/path/uma-s-1.pt",
+      "model_type": "uma",
+      "device": "cuda:0",
+      "options": {"fmax": 0.05}
+    }
+  ]
+}
+JSON
+
+# 2. Submit and start
+uv run mlipx queue submit tasks.json
+uv run mlipx queue start            # background scheduler
+uv run mlipx queue status
 ```
 
----
-
-## 🔌 Supported Engines
-
-| `MODEL_TYPE` / `--model-type` | Engine | Backend package | Task values |
-|-------------------------------|--------|-----------------|-------------|
-| `uma` (default, alias `fairchem`) | UMA — FAIRChem | `fairchem-core` | `omat` / `omol` / `oc20` / `oc25` / `odac` / `omc` |
-| `mace` | MACE | `mace-torch` | `bulk` / `molecule` |
-| `dpa` | DPA — DeepMD-kit | `deepmd-kit` | `bulk` / `molecule` |
-| `grace` | GRACE | `tensorpotential` | `bulk` / `molecule` |
-
-> ⚠️ **Environment isolation is required.** MACE conflicts with UMA's e3nn;
-> DPA requires a different PyTorch ABI/version; GRACE uses TensorFlow and a
-> separate cuDNN runtime. Use the four command prefixes shown above rather than
-> a globally installed `mlipx`. See the copy-ready
-> [English](mlipx/docs/README_EN.md#21-start-here-four-engines-need-four-environments)
-> or [Chinese](mlipx/docs/README_CN.md#21-小白先看四个引擎要用四个环境)
-> installation guide.
+Each task can use its own Python environment/engine/model. The TUI also has built-in queue controls.
 
 ---
 
-## ✨ Features
+## Resource Control
 
-- **Multi-engine:** UMA / MACE / DPA / GRACE via one ASE Calculator interface
-- **Calculation types:** Single-point (SP), geometry optimization (OPT, FIRE/BFGS/LBFGS), molecular dynamics (MD, NVT/NVE), batch processing
-- **Trajectory analysis:** validation, thermodynamics, RDF/coordination,
-  directional MSD, diffusion/transport, density maps, VACF, and velocity spectra
-- **VASP-compatible output:** OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
-- **Background jobs:** submit, detach, re-attach, kill long-running calculations
-- **INCAR files:** VASP-style `KEY = VALUE` configuration
-- **Cross-platform:** Windows, Linux, macOS | CPU & CUDA
-- **Resource control in TUI and CLI:** indexed GPU selection, backend CPU
-  threads, GRACE TensorFlow GPU limits, and UMA activation
-  checkpointing/inference mode
-- **Live progress:** structured progress events, indeterminate spinner for SP, step counter for OPT/MD
+| Option | Effect |
+|---|---|
+| `--cpu-threads N` | CPU intra-op threads (PyTorch for UMA/MACE/DPA; TF for GRACE) |
+| `--gpu-memory-growth` | GRACE: grow TF GPU memory on demand (default enabled) |
+| `--gpu-memory-limit-mb MIB` | GRACE: hard limit on TF GPU memory |
+| `--inference-mode turbo` | UMA only: fast inference preset |
+| `--activation-checkpointing` | UMA only: save GPU memory |
+| `--dtype float32` | MACE: opt in to float32 for speed (default float64) |
 
 ---
 
-## 📦 Package Layout
+## Troubleshooting
 
-```
-mlipx/
-├── README.md                  # Package README (links to full manuals)
-├── docs/
-│   ├── README_CN.md           # 中文完整手册
-│   ├── ANALYSIS.md            # Trajectory analysis contract and commands
-│   ├── README_EN.md           # English complete manual
-│   └── TRANSPORT.md           # Diffusion and conductivity definitions
-├── mlipx/                     # The Python package
-│   ├── analysis/              # Calculator-independent trajectory analysis
-│   ├── engine.py              # CalculationEngine (unified execution)
-│   ├── base_calculator.py     # BaseMLIPCalculator abstract interface
-│   ├── calculator.py          # UMACalculator wrapper
-│   ├── calculators/           # MACE/DPA/GRACE wrappers + Factory
-│   ├── config.py              # INCAR config parser
-│   ├── api.py                 # Python API functions
-│   ├── cli.py                 # CLI (argparse, sp/opt/md/batch/run/config/queue/...)
-│   ├── runners/               # SinglePoint, Optimization, MD, Batch
-│   ├── tui/                   # Textual TUI (app, screens)
-│   └── writers/               # OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
-├── templates/                 # INCAR template files
-└── examples/                  # Example scripts
+### "no kernel image is available for execution on the device"
+
+Your PyTorch build has no kernel for your GPU. Use the cu126 Legacy channel for Maxwell/Pascal/Volta, or the modern channel for Turing+. Run:
+
+```bash
+uv run mlipx setup     # machine-specific report
+./scripts/install_mlipx.sh --dry-run
 ```
 
+### "No edges found in structure"
+
+Atoms are too far apart (> cutoff), the cell is invalid, or PBC is wrong. Check the input structure and use the correct `--task` (periodic `omat`/`bulk` vs molecular `omol`/`molecule`).
+
+### CUDA out of memory
+
+Use `--device cpu`, a smaller model, or UMA `--activation-checkpointing`. For GRACE set `--gpu-memory-limit-mb`.
+
+### MACE environment incompatible
+
+MACE must not share the UMA environment. Use `.venv-mace/bin/mlipx ...` (the installer creates it automatically).
+
+### Atom explosion in MD
+
+Pre-relaxation is on by default for NVT (up to 50 FIRE steps). For NVE it is off; enable it if needed.
+
 ---
 
-## 📄 License
+## Development
 
-MIT License. mlipx is built upon code from [FAIRChem](https://github.com/FAIR-Chem/fairchem) (Copyright © Meta Platforms, Inc. and affiliates), licensed under MIT. See [`mlipx/LICENSE`](mlipx/LICENSE) and [`LICENSE.md`](LICENSE.md).
+```bash
+# Install dev tools
+uv pip install -e './mlipx[dev]'
 
-## 🙏 Acknowledgements
+# Run tests
+uv run pytest tests/mlipx -q
+```
 
-mlipx builds on [FAIRChem](https://github.com/FAIR-Chem/fairchem) and its UMA foundation model. Multi-engine integration supports [MACE](https://github.com/ACEsuit/mace), [DeepMD-kit](https://github.com/deepmodeling/deepmd-kit), and [GRACE](https://github.com/IBM/grace).
+Core scientific code lives in `mlipx/mlipx/`; the fairchem fork is under `packages/` and `src/`. Installation/compatibility logic is in `mlipx/mlipx/install/`.
+
+---
+
+## License
+
+MIT License. mlipx builds on [FAIRChem](https://github.com/FAIR-Chem/fairchem) (Copyright © Meta Platforms, Inc. and affiliates), licensed under MIT. See [`LICENSE.md`](LICENSE.md) and [`mlipx/LICENSE`](mlipx/LICENSE).

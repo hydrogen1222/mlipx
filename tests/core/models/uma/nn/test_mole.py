@@ -10,7 +10,7 @@ import pytest
 import torch
 import torch.nn as nn
 
-from src.fairchem.core.models.uma.nn.mole import (
+from fairchem.core.models.uma.nn.mole import (
     interval_intersection,
     _softmax,
     _pnorm,

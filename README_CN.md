@@ -1,0 +1,441 @@
+# mlipx — MLIP eXtended
+
+**一个 VASP 风格的 CLI / TUI / Python API，用于机器学习原子间势（MLIP）计算。**
+
+mlipx 将四个 MLIP 引擎统一到同一套接口后面——**UMA (FAIRChem)**（默认）、**MACE**、**DPA (DeepMD-kit)**、**GRACE**——支持单点能（SP）、几何优化（OPT）、分子动力学（MD）、批量计算和带验证的轨迹分析，并输出 VASP 兼容文件（OUTCAR、CONTCAR、XDATCAR、OSZICAR）。
+
+```
+structure.cif ──▶  MLIP 引擎 (UMA/MACE/DPA/GRACE)  ──▶  能量、力、应力
+```
+
+---
+
+## 支持的引擎
+
+| `--model-type` | 引擎 | 后端包 | Task 取值 |
+|---|---|---|---|
+| `uma`（默认，别名 `fairchem`） | UMA — FAIRChem | `fairchem-core` | `omat` / `omol` / `oc20` / `oc25` / `odac` / `omc` |
+| `mace` | MACE | `mace-torch` | `bulk` / `molecule` |
+| `dpa` | DPA — DeepMD-kit | `deepmd-kit` | `bulk` / `molecule` |
+| `grace` | GRACE | `tensorpotential` | `bulk` / `molecule` |
+
+每个引擎必须运行在**独立的 Python 环境**中，因为依赖互相冲突（UMA 需要 `e3nn>=0.5`；MACE 固定 `e3nn==0.4.4`；DPA 固定 `torch==2.10`；GRACE 使用 TensorFlow）。**不要**把四个引擎装进同一个环境。
+
+---
+
+## 安装
+
+### 一键安装（推荐）
+
+```bash
+# 克隆并安装 uv（如果已有 uv 可跳过）
+git clone https://github.com/hydrogen1222/mlipx.git
+cd mlipx
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# 自动检测 GPU 并安装全部四个引擎
+./scripts/install_mlipx.sh
+```
+
+常用变体：
+
+```bash
+./scripts/install_mlipx.sh --device cpu        # 纯 CPU 机器
+./scripts/install_mlipx.sh --engines uma,mace  # 只装 UMA + MACE
+./scripts/install_mlipx.sh --source china      # 使用国内镜像
+./scripts/install_mlipx.sh --clean             # 全部重建
+./scripts/install_mlipx.sh --dry-run           # 预览不安装
+```
+
+运行 `./scripts/install_mlipx.sh --help` 查看全部参数。
+
+### 手动安装（四个环境）
+
+如果喜欢手动安装，请为每个引擎创建一个 venv：
+
+```bash
+# UMA（默认）
+uv sync --frozen
+uv run mlipx doctor --engine uma --device auto
+
+# MACE
+uv venv --python 3.12 .venv-mace
+uv pip install --no-config --python .venv-mace/bin/python \
+  "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-mace/bin/python \
+  -e ./mlipx "e3nn==0.4.4" "mace-torch==0.3.16"
+.venv-mace/bin/mlipx doctor --engine mace --device auto
+
+# DPA / DeepMD
+uv venv --python 3.12 .venv-dpa
+uv pip install --no-config --python .venv-dpa/bin/python \
+  "torch==2.10.0" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv-dpa/bin/python \
+  -e ./mlipx "deepmd-kit==3.1.3"
+.venv-dpa/bin/mlipx doctor --engine dpa --device auto
+
+# GRACE
+uv venv --python 3.12 .venv-grace
+uv pip install --no-config --python .venv-grace/bin/python \
+  -e ./mlipx "tensorflow[and-cuda]==2.20.0" "tensorpotential==0.6.0"
+uv pip install --no-config --python .venv-grace/bin/python \
+  "nvidia-cudnn-cu12==9.3.0.75"
+.venv-grace/bin/mlipx doctor --engine grace --device auto
+```
+
+使用对应的命令前缀：
+
+| 引擎 | 环境 | 前缀 |
+|---|---|---|
+| UMA | `.venv` | `uv run mlipx ...` |
+| MACE | `.venv-mace` | `.venv-mace/bin/mlipx ...` |
+| DPA | `.venv-dpa` | `.venv-dpa/bin/mlipx ...` |
+| GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
+
+### GPU 兼容性
+
+安装器和 `mlipx setup` 会自动选择正确的 PyTorch/CUDA wheel。
+
+| GPU 系列 | 代表显卡 | 计算能力 | CUDA 路线 | 状态 |
+|---|---|---|---|---|
+| Maxwell | GTX 960、TITAN X | sm_50/52 | cu126 Legacy | ⚠️ 实验性 |
+| Pascal | **GTX 1080 Ti**、P100 | sm_60/61 | cu126 Legacy | 已验证 |
+| Volta | **V100** | sm_70 | cu126 Legacy | 已验证 |
+| Turing | RTX 20xx | sm_75 | cu128+ Modern | 已验证 |
+| Ampere | **RTX 3080 Ti**、30xx | sm_80/86 | cu128+ Modern | 已验证 |
+| Ada | **RTX 4090**、40xx | sm_89 | cu128+ Modern | 已验证 |
+| Hopper | H100 | sm_90 | cu128+ Modern | 已验证 |
+| Blackwell | RTX 50xx | sm_100/120 | cu128+ Modern | 已验证 |
+| 无 | 仅 CPU | — | CPU wheels | — |
+
+> **为什么有两条 CUDA 路线？** Maxwell/Pascal/Volta 必须使用 **cu126 Legacy** 通道：PyTorch 2.8+ 从 cu128 构建中移除了 Maxwell/Pascal，PyTorch 2.11+ 从 cu128+ 中移除了 Volta。Turing+ 使用**现代**通道（torch 2.8–2.10 用 cu128，torch 2.12+ 用 cu130）。Maxwell 标记为实验性，因为 TensorFlow 2.20 官方 wheel 从 sm_60 开始构建。
+
+### 下载源
+
+PyPI 包和 PyTorch CUDA wheel 分开处理。安装器**不会修改**你的全局 `~/.config/uv/uv.toml`，而是使用 `UV_NO_CONFIG=1` 和进程级环境变量。
+
+| `--source` | PyPI | PyTorch CUDA wheel | 适用场景 |
+|---|---|---|---|
+| `auto` → `official` | pypi.org | download.pytorch.org | 默认 |
+| `china` | tuna.tsinghua.edu.cn | mirrors.aliyun.com（`--find-links`） | 中国大陆 |
+| `offline` | 仅本地缓存 | 仅本地缓存 | 离线机器 |
+| `custom` | 你的环境变量 | 你的环境变量 | 高级用户 |
+
+---
+
+## 快速开始
+
+### 单点能（UMA）
+
+```bash
+uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
+```
+
+### 几何优化
+
+```bash
+uv run mlipx opt structure.cif --model uma-s-1.pt --task omat \
+  --cell-opt --fmax 0.02
+```
+
+### 分子动力学
+
+```bash
+uv run mlipx md structure.cif --model uma-s-1.pt --task omat \
+  --device cuda --steps 10000
+```
+
+### 其他引擎
+
+```bash
+# MACE
+.venv-mace/bin/mlipx sp bulk.cif --model mace.model \
+  --model-type mace --task bulk --head default --device cuda:0
+
+# DPA / DeepMD
+.venv-dpa/bin/mlipx opt bulk.cif --model dpa.pt \
+  --model-type dpa --task bulk --head Domains_SSE_PBE \
+  --device cuda:0 --fmax 0.05
+
+# GRACE（--model 指向整个 SavedModel 目录）
+.venv-grace/bin/mlipx sp bulk.cif --model grace_model/ \
+  --model-type grace --task bulk --device cuda:0 \
+  --gpu-memory-limit-mb 6144
+```
+
+### INCAR 文件（VASP 风格）
+
+```bash
+uv run mlipx template sp          # 生成 INCAR.sp
+uv run mlipx run -i INCAR.sp -s structure.cif
+```
+
+示例 `INCAR.sp`：
+
+```ini
+CALC_TYPE   = SP
+MODEL_TYPE  = UMA        # 或 MACE / DPA / GRACE
+MODEL_PATH  = uma-s-1.pt
+TASK        = omat       # UMA: omat/omol/...；其他: bulk/molecule
+DEVICE      = cpu
+```
+
+### 批量计算
+
+```bash
+uv run mlipx batch structures/ --model uma-s-1.pt \
+  --model-type uma --task omat --device cuda \
+  --calc-type sp --pattern "*.cif" --output batch_results
+```
+
+每个输入结构会得到独立的输出子目录；根目录生成 `batch_summary.json`。
+
+---
+
+## 轨迹分析
+
+`mlipx analyze` 与计算后端无关：可以在 UMA `.venv` 中分析任意引擎产生的轨迹，而无需加载模型后端。
+
+```bash
+# 先验证（检查时间轴、PBC、坐标约定、任务资格）
+uv run mlipx analyze results/LGPS-800K validate
+
+# 热力学
+uv run mlipx analyze results/LGPS-800K thermo
+
+# RDF / 配位数
+uv run mlipx analyze results/LGPS-800K rdf \
+  --center Li --neighbor S --rmax 6 --cn-cutoff 3
+
+# MSD
+uv run mlipx analyze results/LGPS-800K msd \
+  --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
+
+# 密度 / VACF / 速度谱 / Arrhenius
+uv run mlipx analyze results/LGPS-800K density --mobile Li --spacing 0.25
+uv run mlipx analyze results/LGPS-800K vacf --species Li
+uv run mlipx analyze results/LGPS-800K spectrum --species Li --taper one-sided-cosine
+
+# 由多个温度下的独立输运结果拟合 Arrhenius
+uv run mlipx analyze RUN arrhenius \
+  --temperature 600,700,800 --diffusivity 1e-10,2e-10,5e-10 \
+  --diffusivity-std 0.1e-10,0.2e-10,0.5e-10
+```
+
+### 输运（扩散 + 电导率）
+
+协方差感知的输运分析使用 [kinisi 2.x](https://joss.theoj.org/papers/10.21105/joss.05984)。必须显式给出拟合起点：
+
+```bash
+uv run mlipx analyze RUN transport --mobile Li --charge 1 \
+  --drift-reference nonmobile --fit-start-ps 40 \
+  --lag-step-ps 2 --lag-stop-ps 200 --random-seed 0
+```
+
+关键科学规则：
+
+- **绝不猜测。** `--charge` 必须显式给出；温度来自运行目录（外部轨迹用 `--temperature-K`）；`wrapped`/`unwrapped` 必须描述文件真实情况。
+- **仅支持固定晶胞。** 变晶胞输运不受支持。
+- **漂移校正必须显式选择：** `none`、`nonmobile` 或 `indices`。
+- **`--lag-step-ps` / `--lag-stop-ps`** 只稀疏化 kinisi 的 lag 时间网格，不对轨迹帧降采样；两者必须同时使用。
+- **MSD 扩散拟合** 只有在同时给出 `--fit-start-ps` 和 `--fit-stop-ps` 时才产生。mlipx 不会自动判断扩散区间。
+- **Nernst–Einstein 示踪电导率**（`sigma_NE_tracer`）会报告后验均值 / 标准差 / 95% 置信区间。它不是总物理不确定性，也不自动等于实验或集体电导率。
+
+### 电解质机制分析（可选 GEMDAT）
+
+GEMDAT 是可选的后端，用于位点映射、跳跃和渗流分析：
+
+```bash
+python -m pip install -e './mlipx[analysis,electrolyte]'
+uv run mlipx analyze RUN electrolyte --mobile Li --sites Li_sites.cif \
+  --jump-dimensions 3 --percolation-axes xyz
+```
+
+位点来源是必须的（`--sites` 或 `--discover-sites-from-density`）。GEMDAT 的扩散系数不会被提升为优于 kinisi 的估计。
+
+### 输出与复现
+
+每个分析任务写入 `RUN/analysis/TASK/REQUEST_HASH/`：
+
+```
+request.json
+provenance.json
+results.json
+task-specific CSV/NPZ
+PNG and SVG when applicable
+diagnostics.json when applicable
+```
+
+请求哈希包含源指纹、选择、范围、坐标轴、漂移定义、科学参数和后端版本。相同请求会被复用，除非使用 `--force`。
+
+---
+
+## 接口
+
+| 接口 | 命令 | 适用场景 |
+|---|---|---|
+| CLI | `mlipx sp/opt/md/batch/...` | 脚本、HPC、自动化 |
+| TUI | `mlipx tui` | 交互式探索 |
+| Python API | `from mlipx.api import run_single_point, ...` | 自定义工作流 |
+| INCAR | `mlipx run -i INCAR` | VASP 风格配置 |
+
+### Python API
+
+```python
+from mlipx.api import run_single_point, run_md, calculate_energy
+
+result = run_single_point("structure.cif", "uma-s-1.pt", task="omat")
+energy = calculate_energy("structure.cif", "uma-s-1.pt", task="omat")
+```
+
+---
+
+## INCAR 配置
+
+| 类别 | 键 | 默认值 |
+|---|---|---|
+| 计算 | `CALC_TYPE` | —（`SP` / `OPT` / `MD`） |
+| 模型 | `MODEL_TYPE` | `UMA` |
+| 模型 | `MODEL_PATH` | — |
+| 模型 | `TASK` | `omat`（UMA）/ `bulk`（其他） |
+| 模型 | `DEVICE` | `cpu` |
+| 模型 | `HEAD` | —（MACE/DPA 多任务） |
+| 模型 | `DTYPE` | `float64`（MACE） |
+| 输出 | `WRITE_OUTCAR` | `.TRUE.` |
+| 输出 | `WRITE_XDATCAR` | `.TRUE.` |
+| 输出 | `WRITE_TRAJECTORY` | `.TRUE.` |
+| 输出 | `WRITE_JSON` | `.TRUE.` |
+| 优化 | `FMAX` | `0.05` |
+| 优化 | `MAX_STEPS` | `500` |
+| 优化 | `OPT_ALGO` | `FIRE` |
+| 优化 | `CELL_OPT` | `.FALSE.` |
+| MD | `MD_ENSEMBLE` | `NVT` |
+| MD | `TEMPERATURE` | `300` |
+| MD | `TIMESTEP` | `1.0` |
+| MD | `STEPS` | `1000` |
+| MD | `THERMOSTAT` | `LANGEVIN` |
+| MD | `SAVE_INTERVAL` | `10` |
+
+完整的带注释关键字列表见 `mlipx template sp/opt/md` 生成的模板。
+
+---
+
+## 输出文件
+
+每次计算会生成自包含的输出目录：
+
+```
+OUTPUT/
+├── OUTCAR                 VASP 风格文本输出
+├── CONTCAR                最终结构
+├── XDATCAR                VASP 轨迹（若开启）
+├── mlipx_results.json     机器可读结果
+├── raw/
+│   ├── trajectory.traj    标准 ASE 轨迹
+│   └── md.csv             MD 时间序列（若为 MD）
+└── artifacts.json         provenance / 版本 / 语义
+```
+
+高通量场景下可使用 `--no-write-outcar --no-write-xdatcar` 跳过 VASP 互操作文本输出；标准轨迹仍然保留。
+
+---
+
+## 后台任务与队列
+
+### 后台任务与队列
+
+后台任务通过队列 JSON 接口提交：
+
+```bash
+# 1. 用 JSON 描述任务
+cat > tasks.json <<'JSON'
+{
+  "max_concurrent": 1,
+  "tasks": [
+    {
+      "name": "opt-uma-1",
+      "calc_type": "opt",
+      "structure": "/path/a.cif",
+      "model": "/path/uma-s-1.pt",
+      "model_type": "uma",
+      "device": "cuda:0",
+      "options": {"fmax": 0.05}
+    }
+  ]
+}
+JSON
+
+# 2. 提交并启动
+uv run mlipx queue submit tasks.json
+uv run mlipx queue start            # 后台调度器
+uv run mlipx queue status
+
+# 3. 管理
+uv run mlipx jobs                   # 查看运行中/完成/失败任务
+uv run mlipx kill <job-id>          # 终止运行中任务
+uv run mlipx clean                  # 清理已完成/失败记录
+```
+
+每个任务可以使用自己的 Python 环境 / 引擎 / 模型。TUI 也内置队列控制。
+
+---
+
+## 资源控制
+
+| 选项 | 作用 |
+|---|---|
+| `--cpu-threads N` | CPU 线程数（UMA/MACE/DPA 用 PyTorch；GRACE 用 TF） |
+| `--gpu-memory-growth` | GRACE：按需增长 TF GPU 显存（默认开启） |
+| `--gpu-memory-limit-mb MIB` | GRACE：TF GPU 显存硬上限 |
+| `--inference-mode turbo` | 仅 UMA：快速推理预设 |
+| `--activation-checkpointing` | 仅 UMA：节省显存 |
+| `--dtype float32` | MACE：选择 float32 提速（默认 float64） |
+
+---
+
+## 故障排除
+
+### "no kernel image is available for execution on the device"
+
+你的 PyTorch 构建没有对应 GPU 的内核。Maxwell/Pascal/Volta 使用 cu126 Legacy 通道；Turing+ 使用现代通道。运行：
+
+```bash
+uv run mlipx setup     # 本机报告
+./scripts/install_mlipx.sh --dry-run
+```
+
+### "No edges found in structure"（未找到边）
+
+原子间距离超过截断、晶胞无效或 PBC 设置错误。检查输入结构并使用正确的 `--task`（周期体系 `omat`/`bulk`；分子体系 `omol`/`molecule`）。
+
+### CUDA 显存不足
+
+使用 `--device cpu`、更小的模型，或 UMA `--activation-checkpointing`。GRACE 设置 `--gpu-memory-limit-mb`。
+
+### MACE 环境不兼容
+
+MACE 不能与 UMA 共用环境。使用 `.venv-mace/bin/mlipx ...`（安装器会自动创建）。
+
+### MD 原子爆炸
+
+NVT 默认预弛豫（最多 50 步 FIRE）；NVE 默认关闭，需要时手动开启。
+
+---
+
+## 开发
+
+```bash
+# 安装开发依赖
+uv pip install -e './mlipx[dev]'
+
+# 运行测试
+uv run pytest tests/mlipx -q
+```
+
+核心科学代码位于 `mlipx/mlipx/`；fairchem fork 位于 `packages/` 和 `src/`。安装/兼容性逻辑位于 `mlipx/mlipx/install/`。
+
+---
+
+## 许可证
+
+MIT License。mlipx 基于 [FAIRChem](https://github.com/FAIR-Chem/fairchem)（Copyright © Meta Platforms, Inc. and affiliates），MIT 许可。详见 [`LICENSE.md`](LICENSE.md) 和 [`mlipx/LICENSE`](mlipx/LICENSE)。
