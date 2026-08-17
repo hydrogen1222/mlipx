@@ -441,9 +441,7 @@ Examples:
         dest="equilibration_steps",
         type=int,
         default=None,
-        help=(
-            "Same-ensemble equilibration steps before production (default: 0)."
-        ),
+        help=("Same-ensemble equilibration steps before production (default: 0)."),
     )
     md_parser.add_argument(
         "--thermostat",
@@ -725,9 +723,7 @@ Examples:
         type=str,
         help="mlipx run directory or trajectory file",
     )
-    analyze_sub = analyze_parser.add_subparsers(
-        dest="analysis_task", required=True
-    )
+    analyze_sub = analyze_parser.add_subparsers(dest="analysis_task", required=True)
 
     def _analysis_source_options(p: argparse.ArgumentParser) -> None:
         p.add_argument(
@@ -844,9 +840,7 @@ Examples:
     )
     transport_parser.add_argument("--drift-indices", default=None)
     transport_parser.add_argument("--temperature-K", type=float, default=None)
-    transport_parser.add_argument(
-        "--collective-conductivity", action="store_true"
-    )
+    transport_parser.add_argument("--collective-conductivity", action="store_true")
     transport_parser.add_argument("--random-seed", type=int, default=0)
     transport_parser.add_argument("--n-samples", type=int, default=1000)
     transport_parser.add_argument("--n-walkers", type=int, default=32)
@@ -868,9 +862,7 @@ Examples:
     _analysis_range_options(density_parser)
     density_parser.add_argument("--mobile", dest="mobile_species", required=True)
     density_parser.add_argument("--spacing", dest="spacing_A", type=float, default=0.25)
-    density_parser.add_argument(
-        "--smoothing-sigma-A", type=float, default=None
-    )
+    density_parser.add_argument("--smoothing-sigma-A", type=float, default=None)
     density_parser.add_argument("--stride", type=int, default=1)
 
     arrhenius_parser = analyze_sub.add_parser(
@@ -878,10 +870,18 @@ Examples:
     )
     _analysis_source_options(arrhenius_parser)
     arrhenius_parser.add_argument(
-        "--temperature", dest="temperatures_K", type=float, action="append", required=True
+        "--temperature",
+        dest="temperatures_K",
+        type=float,
+        action="append",
+        required=True,
     )
     arrhenius_parser.add_argument(
-        "--diffusivity", dest="diffusivities_m2_s", type=float, action="append", required=True
+        "--diffusivity",
+        dest="diffusivities_m2_s",
+        type=float,
+        action="append",
+        required=True,
     )
     arrhenius_parser.add_argument(
         "--diffusivity-std", dest="diffusivity_std_m2_s", type=float, action="append"
@@ -893,7 +893,9 @@ Examples:
         action="append",
         default=[],
     )
-    arrhenius_parser.add_argument("--source-run-id", dest="source_run_ids", action="append")
+    arrhenius_parser.add_argument(
+        "--source-run-id", dest="source_run_ids", action="append"
+    )
 
     electrolyte_parser = analyze_sub.add_parser(
         "electrolyte", help="GEMDAT site, jump, and percolation mechanisms"
@@ -902,15 +904,15 @@ Examples:
     electrolyte_parser.add_argument("--mobile", dest="mobile_species", required=True)
     site_group = electrolyte_parser.add_mutually_exclusive_group(required=True)
     site_group.add_argument("--sites", dest="sites_path", default=None)
-    site_group.add_argument(
-        "--discover-sites-from-density", action="store_true"
-    )
+    site_group.add_argument("--discover-sites-from-density", action="store_true")
     electrolyte_parser.add_argument("--temperature-K", type=float, default=None)
     electrolyte_parser.add_argument("--resolution-A", type=float, default=0.5)
     electrolyte_parser.add_argument("--background-level", type=float, default=0.1)
     electrolyte_parser.add_argument("--site-radius-A", type=float, default=None)
     electrolyte_parser.add_argument("--minimal-residence", type=int, default=0)
-    electrolyte_parser.add_argument("--jump-dimensions", type=int, choices=[1, 2, 3], default=3)
+    electrolyte_parser.add_argument(
+        "--jump-dimensions", type=int, choices=[1, 2, 3], default=3
+    )
     electrolyte_parser.add_argument("--percolation-axes", default="xyz")
 
     for name in ("vacf", "spectrum"):
@@ -1669,11 +1671,12 @@ def cmd_setup(args: argparse.Namespace) -> int:
     )
 
     gpus = detect_gpus()
+    # CPU-only detection/report is a successful outcome, not an error.
     if args.json:
         print(json.dumps(setup_report_json(gpus), indent=2, ensure_ascii=False))
-        return 0 if gpus else 1
+        return 0
     print(format_setup_report(gpus))
-    return 0 if gpus else 1
+    return 0
 
 
 def cmd_convert_xdatcar(args: argparse.Namespace) -> int:
@@ -1779,9 +1782,7 @@ def cmd_analyze(args: argparse.Namespace) -> int:
         parameters["stop"] = parameters.pop("stop_frame")
     if "drift_indices" in parameters:
         try:
-            parameters["drift_indices"] = _parse_index_list(
-                parameters["drift_indices"]
-            )
+            parameters["drift_indices"] = _parse_index_list(parameters["drift_indices"])
         except ValueError as exc:
             print(f"Error: {exc}")
             return 1
@@ -1960,7 +1961,6 @@ def cmd_queue(args: argparse.Namespace) -> int:
 
 
 def cmd_jobs(args: argparse.Namespace) -> int:
-
     from mlipx.jobs import JobManager  # noqa: PLC0415
 
     mgr = JobManager()
@@ -2041,9 +2041,8 @@ def main(argv: list[str] | None = None) -> int:
     # subcommands also produce machine/script-oriented output, so suppress the
     # banner for them too.
     suppress_banner = (
-        (args.command == "setup" and getattr(args, "json", False))
-        or args.command in {"config", "analyze"}
-    )
+        args.command == "setup" and getattr(args, "json", False)
+    ) or args.command in {"config", "analyze"}
     if not suppress_banner:
         print_header()
 

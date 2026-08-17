@@ -17,17 +17,13 @@ import copy
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from fairchem.core import FAIRChemCalculator
-from fairchem.core.units.mlip_unit import load_predict_unit
-from fairchem.core.units.mlip_unit.api.inference import guess_inference_settings
-from fairchem.core.units.mlip_unit.api.inference import UMATask
-
 from mlipx.base_calculator import BaseMLIPCalculator
 from mlipx.gpu_compat import arch_supports_device
 
 if TYPE_CHECKING:
     from typing import ClassVar
 
+    from fairchem.core import FAIRChemCalculator
     from fairchem.core.units.mlip_unit import MLIPPredictUnit
 
 
@@ -46,9 +42,26 @@ class UMACalculator(BaseMLIPCalculator):
     # Keep the UI/wrapper boundary tied to the installed fairchem-core API.
     # This version's UMATask enum does not expose OC22; individual checkpoints
     # are subsequently validated by FAIRChemCalculator against their datasets.
-    VALID_TASKS: ClassVar[set[str]] = {task.value for task in UMATask}
     VALID_DEVICES: ClassVar[set[str]] = {"cpu", "cuda", "gpu"}
     VALID_INFERENCE_MODES: ClassVar[set[str]] = {"default", "turbo"}
+
+    # Known UMA tasks (used when fairchem-core is not importable, e.g. in
+    # lightweight parameter-validation tests).  When fairchem-core is installed
+    # its UMATask enum is authoritative.
+    _FALLBACK_TASKS: ClassVar[frozenset[str]] = frozenset(
+        {"omat", "omol", "oc20", "oc25", "odac", "omc"}
+    )
+
+    @property
+    def VALID_TASKS(self) -> set[str]:
+        """Valid UMA tasks, derived lazily from the installed fairchem-core."""
+        try:
+            from fairchem.core.units.mlip_unit.api.inference import (  # noqa: PLC0415
+                UMATask,
+            )
+        except ImportError:
+            return set(self._FALLBACK_TASKS)
+        return {task.value for task in UMATask}
 
     def __init__(
         self,
@@ -114,9 +127,8 @@ class UMACalculator(BaseMLIPCalculator):
                 f"Must be one of: {', '.join(self.VALID_INFERENCE_MODES)}"
             )
         dev = str(self.device).lower()
-        if (
-            dev not in self.VALID_DEVICES
-            and not (dev.startswith("cuda:") and dev[5:].isdigit())
+        if dev not in self.VALID_DEVICES and not (
+            dev.startswith("cuda:") and dev[5:].isdigit()
         ):
             raise ValueError(
                 f"Invalid device {self.device!r}. Use cpu, cuda, gpu, or cuda:N."
@@ -239,6 +251,13 @@ class UMACalculator(BaseMLIPCalculator):
             # actually build a neighbor graph. Building a partial
             # InferenceSettings by hand leaves those as None (checkpoint
             # default) and breaks graph generation for some models.
+            from fairchem.core.units.mlip_unit import (  # noqa: PLC0415
+                load_predict_unit,
+            )
+            from fairchem.core.units.mlip_unit.api.inference import (  # noqa: PLC0415
+                guess_inference_settings,
+            )
+
             settings = copy.deepcopy(guess_inference_settings(self.inference_mode))
             if self.activation_checkpointing is not None:
                 settings.activation_checkpointing = self.activation_checkpointing
@@ -285,6 +304,8 @@ class UMACalculator(BaseMLIPCalculator):
             FAIRChemCalculator instance
         """
         if self._calculator is None:
+            from fairchem.core import FAIRChemCalculator  # noqa: PLC0415
+
             predictor = self.load_predictor()
             self._calculator = FAIRChemCalculator(
                 predict_unit=predictor,

@@ -8,6 +8,7 @@ LICENSE file in the root directory of this source tree.
 from __future__ import annotations
 
 import pytest
+
 from mlipx.protocols import ProgressCallback, ProgressEvent
 
 

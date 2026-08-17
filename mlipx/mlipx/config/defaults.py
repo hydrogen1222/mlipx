@@ -153,7 +153,9 @@ def build_incar_default(calc_type: str) -> str:
 
     lines: list[str] = []
     lines.append("# mlipx Calculation Settings")
-    lines.append(f"# Generated from the single source of defaults (calc_type={calc_type}).")
+    lines.append(
+        f"# Generated from the single source of defaults (calc_type={calc_type})."
+    )
     lines.append("")
     lines.append(f"CALC_TYPE = {calc_type.upper()}")
     lines.append("TASK = omat")

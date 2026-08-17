@@ -58,7 +58,9 @@ if TYPE_CHECKING:
 class ForceSafetyAbort(RuntimeError):
     """Raised after checkpointing an MD frame that exceeds ``fmax_abort``."""
 
-    def __init__(self, *, step: int, max_force: float, atom_index: int, threshold: float):
+    def __init__(
+        self, *, step: int, max_force: float, atom_index: int, threshold: float
+    ):
         self.step = step
         self.max_force = max_force
         self.atom_index = atom_index
@@ -246,9 +248,7 @@ class MDRunner(BaseRunner):
                     f"{', '.join(sorted(self.VALID_THERMOSTATS))}"
                 )
             if self.thermostat == "langevin" and self.friction <= 0:
-                raise ValueError(
-                    "friction must be > 0 fs^-1 for NVT Langevin dynamics"
-                )
+                raise ValueError("friction must be > 0 fs^-1 for NVT Langevin dynamics")
             if self.thermostat == "bussi" and self.bussi_tau <= 0:
                 raise ValueError("bussi_tau must be > 0 fs for NVT Bussi dynamics")
             if self.thermostat == "nhc":
@@ -536,8 +536,7 @@ class MDRunner(BaseRunner):
                 f"(friction={friction_fs:.4f} fs^-1)"
             )
             self.log(
-                "Approx. velocity damping time: "
-                f"{1.0 / friction_fs / 1000.0:.6g} ps"
+                "Approx. velocity damping time: " f"{1.0 / friction_fs / 1000.0:.6g} ps"
             )
             return Langevin(
                 atoms,
@@ -588,9 +587,7 @@ class MDRunner(BaseRunner):
         """Return canonical MD settings, including only the active coupling."""
         provenance: dict[str, Any] = {
             "ensemble": self.ensemble.upper(),
-            "thermostat": self.thermostat.upper()
-            if self.ensemble == "nvt"
-            else None,
+            "thermostat": self.thermostat.upper() if self.ensemble == "nvt" else None,
             "temperature": self.temperature,
             "timestep": float(self.timestep / units.fs),
             "steps": self.steps,
@@ -605,9 +602,7 @@ class MDRunner(BaseRunner):
             provenance.update(
                 {
                     "friction_fs^-1": friction_fs,
-                    "approx_velocity_damping_time_ps": 1.0
-                    / friction_fs
-                    / 1000.0,
+                    "approx_velocity_damping_time_ps": 1.0 / friction_fs / 1000.0,
                 }
             )
         elif self.ensemble == "nvt" and self.thermostat == "bussi":
@@ -788,9 +783,7 @@ class MDRunner(BaseRunner):
         self.log(f"Equilibration:    {self.equilibration_steps} steps")
         self.log(f"Production:       {self.steps} steps")
         self.log(f"Total MD steps:   {self.total_steps}")
-        self.log(
-            f"Save interval:    {self.save_interval} steps (trajectory frames)"
-        )
+        self.log(f"Save interval:    {self.save_interval} steps (trajectory frames)")
         log_step_unit = "step" if self.LOG_INTERVAL_STEPS == 1 else "steps"
         self.log(
             f"Thermodynamic log interval: {self.LOG_INTERVAL_STEPS} "
@@ -876,11 +869,7 @@ class MDRunner(BaseRunner):
                 raise CancellationRequested("MD simulation cancelled by user")
 
             step = dyn.nsteps
-            phase = (
-                "equilibration"
-                if step < self.equilibration_steps
-                else "production"
-            )
+            phase = "equilibration" if step < self.equilibration_steps else "production"
 
             # Calculate temperature with proper DOF handling
             temp = self._calculate_temperature(atoms)
@@ -948,9 +937,7 @@ class MDRunner(BaseRunner):
                     single_point_results["stress"] = np.array(
                         configurational_stress, dtype=float, copy=True
                     )
-                snapshot.calc = SinglePointCalculator(
-                    snapshot, **single_point_results
-                )
+                snapshot.calc = SinglePointCalculator(snapshot, **single_point_results)
                 output_stream.submit(
                     MDFrameSnapshot(
                         atoms=snapshot,
@@ -1100,17 +1087,13 @@ class MDRunner(BaseRunner):
             "timestep_fs": float(self.timestep / units.fs),
             "save_interval": self.save_interval,
             "ensemble": self.ensemble.upper(),
-            "thermostat": self.thermostat.upper()
-            if self.ensemble == "nvt"
-            else None,
+            "thermostat": self.thermostat.upper() if self.ensemble == "nvt" else None,
             "target_temperature": self.temperature,
             "seed": self.seed,
             "velocity_policy": self.velocity_policy,
             "md_provenance": self._md_provenance(),
             "time": md_time,
-            "trajectory": MDTrajectorySummary(
-                md_csv_path, output_stream.stats.count
-            ),
+            "trajectory": MDTrajectorySummary(md_csv_path, output_stream.stats.count),
             "trajectory_frame_count": output_stream.stats.count,
             "trajectory_path": str(traj_path) if self.write_trajectory else None,
             "md_csv_path": str(md_csv_path),

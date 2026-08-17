@@ -63,6 +63,12 @@ class TestCalculatorFactory:
         assert all(thermostat_keys.isdisjoint(keys) for keys in _CALC_KEYS.values())
 
     def test_uma_tasks_match_installed_fairchem_api(self):
+        """When fairchem-core is installed, the UMA task set matches it.
+
+        Skipped when fairchem-core is not importable (external dependency,
+        not installed in the lightweight test environment).
+        """
+        pytest.importorskip("fairchem.core")
         from fairchem.core.units.mlip_unit.api.inference import UMATask
 
         assert {task.value for task in UMATask} == UMACalculator.VALID_TASKS
@@ -210,15 +216,11 @@ class TestGenericWrappers:
         """A DPA multi-task branch is a calculator option, not a PBC task."""
         model = tmp_path / "dpa.pt"
         model.write_text("x")
-        w = CalculatorFactory.create(
-            "dpa", model, task="bulk", head="Domains_SSE_PBE"
-        )
+        w = CalculatorFactory.create("dpa", model, task="bulk", head="Domains_SSE_PBE")
         assert isinstance(w, DPACalculatorWrapper)
         assert w._head == "Domains_SSE_PBE"
 
-    def test_dpa_multitask_model_requires_explicit_head(
-        self, tmp_path, monkeypatch
-    ):
+    def test_dpa_multitask_model_requires_explicit_head(self, tmp_path, monkeypatch):
         class _Eval:
             def get_model_def_script(self):
                 return {
@@ -457,9 +459,7 @@ class TestDpaGraceDevice:
         model = tmp_path / "grace_model"
         model.mkdir()
 
-        wrapper = GRACECalculatorWrapper(
-            model, device="cuda", gpu_memory_limit_mb=6144
-        )
+        wrapper = GRACECalculatorWrapper(model, device="cuda", gpu_memory_limit_mb=6144)
         wrapper.get_calculator()
 
         assert events == ["limit", "calculator"]
@@ -501,13 +501,9 @@ class TestDpaGraceDevice:
         model = tmp_path / "grace_model"
         model.mkdir()
         with pytest.raises(ValueError, match="positive integer"):
-            GRACECalculatorWrapper(
-                model, device="cuda", gpu_memory_limit_mb=0
-            )
+            GRACECalculatorWrapper(model, device="cuda", gpu_memory_limit_mb=0)
         with pytest.raises(ValueError, match="only to a CUDA"):
-            GRACECalculatorWrapper(
-                model, device="cpu", gpu_memory_limit_mb=1024
-            )
+            GRACECalculatorWrapper(model, device="cpu", gpu_memory_limit_mb=1024)
 
 
 class TestEngineModelType:

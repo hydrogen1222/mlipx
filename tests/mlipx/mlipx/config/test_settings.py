@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
 from mlipx.config.settings import (
     DEFAULT_SETTINGS_INI,
     init_settings_file,
@@ -18,10 +19,15 @@ from mlipx.config.settings import (
 # Search paths
 # ---------------------------------------------------------------------------
 
+
 def test_search_paths_includes_cwd() -> None:
     paths = settings_search_paths()
     # CWD settings.ini should be one of the search paths
-    found = any(p.name == "settings.ini" and p.parent == Path.cwd() for p in paths if p.is_absolute())
+    found = any(
+        p.name == "settings.ini" and p.parent == Path.cwd()
+        for p in paths
+        if p.is_absolute()
+    )
     rel_found = any(str(p) == "./settings.ini" for p in paths if not p.is_absolute())
     assert found or rel_found
 
@@ -29,13 +35,15 @@ def test_search_paths_includes_cwd() -> None:
 def test_search_paths_includes_user_config() -> None:
     paths = settings_search_paths()
     user = Path.home() / ".config" / "mlipx" / "settings.ini"
-    assert user in [p.resolve() if p.is_absolute() else Path.cwd() / p
-                    for p in paths] or any("mlipx/settings.ini" in str(p) for p in paths)
+    assert user in [
+        p.resolve() if p.is_absolute() else Path.cwd() / p for p in paths
+    ] or any("mlipx/settings.ini" in str(p) for p in paths)
 
 
 # ---------------------------------------------------------------------------
 # load_settings - no files found
 # ---------------------------------------------------------------------------
+
 
 def test_load_settings_no_files() -> None:
     with tempfile.TemporaryDirectory() as d:
@@ -56,6 +64,7 @@ def test_load_settings_no_files() -> None:
 # load_settings - explicit path
 # ---------------------------------------------------------------------------
 
+
 def test_load_settings_explicit_path() -> None:
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "my-settings.ini"
@@ -68,6 +77,7 @@ def test_load_settings_explicit_path() -> None:
 # ---------------------------------------------------------------------------
 # load_settings - env var
 # ---------------------------------------------------------------------------
+
 
 def test_load_settings_env_var() -> None:
     with tempfile.TemporaryDirectory() as d:
@@ -90,6 +100,7 @@ def test_load_settings_env_var() -> None:
 # Model aliases and profile parsing
 # ---------------------------------------------------------------------------
 
+
 def test_parse_model_alias_in_resolver() -> None:
     """Aliases are resolved via resolve_config, not stored on MlipxSettings."""
     with tempfile.TemporaryDirectory() as d:
@@ -110,11 +121,7 @@ def test_parse_profile_in_settings() -> None:
     """Profile sections loaded via settings, tested in resolver tests."""
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "settings.ini"
-        ini.write_text(
-            "[profile:gpu_prod]\n"
-            "device = cuda:1\n"
-            "max_steps = 2000\n"
-        )
+        ini.write_text("[profile:gpu_prod]\n" "device = cuda:1\n" "max_steps = 2000\n")
         s = load_settings(explicit=str(ini))
         assert s.sections is not None  # settings loaded
         assert str(ini) in [str(p) for p in s.loaded_paths]
@@ -123,6 +130,7 @@ def test_parse_profile_in_settings() -> None:
 # ---------------------------------------------------------------------------
 # Priority: explicit > env > cwd > user
 # ---------------------------------------------------------------------------
+
 
 def test_explicit_beats_env() -> None:
     with tempfile.TemporaryDirectory() as d:
@@ -146,6 +154,7 @@ def test_explicit_beats_env() -> None:
 # ---------------------------------------------------------------------------
 # init_settings_file
 # ---------------------------------------------------------------------------
+
 
 def test_init_settings_file_project() -> None:
     with tempfile.TemporaryDirectory() as d:
@@ -179,6 +188,7 @@ def test_init_settings_file_force_overwrite() -> None:
 # ---------------------------------------------------------------------------
 # DEFAULT_SETTINGS_INI template
 # ---------------------------------------------------------------------------
+
 
 def test_default_settings_ini_has_sections() -> None:
     assert "[general]" in DEFAULT_SETTINGS_INI

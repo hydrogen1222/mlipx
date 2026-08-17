@@ -7,11 +7,13 @@ import tempfile
 from pathlib import Path
 
 import pytest
+
 from mlipx.cli import create_parser, main
 
 # ---------------------------------------------------------------------------
 # Parser creation
 # ---------------------------------------------------------------------------
+
 
 def test_parser_has_all_subcommands() -> None:
     parser = create_parser()
@@ -62,23 +64,39 @@ def test_queue_job_control_accepts_job_id(queue_command: str) -> None:
 
 def test_sp_parser_accepts_known_flags() -> None:
     parser = create_parser()
-    args = parser.parse_args([
-        "sp", "struct.xyz",
-        "--model", "model.pt",
-        "--model-type", "mace",
-        "--task", "bulk",
-        "--device", "cuda:0",
-        "--charge", "-1",
-        "--spin", "2",
-        "--inference-mode", "turbo",
-        "--cpu-threads", "6",
-        "--no-activation-checkpointing",
-        "--dtype", "float64",
-        "--head", "some_head",
-        "--model-alias", "mace_mpa0",
-        "--profile", "gpu_prod",
-        "--output", "./out",
-    ])
+    args = parser.parse_args(
+        [
+            "sp",
+            "struct.xyz",
+            "--model",
+            "model.pt",
+            "--model-type",
+            "mace",
+            "--task",
+            "bulk",
+            "--device",
+            "cuda:0",
+            "--charge",
+            "-1",
+            "--spin",
+            "2",
+            "--inference-mode",
+            "turbo",
+            "--cpu-threads",
+            "6",
+            "--no-activation-checkpointing",
+            "--dtype",
+            "float64",
+            "--head",
+            "some_head",
+            "--model-alias",
+            "mace_mpa0",
+            "--profile",
+            "gpu_prod",
+            "--output",
+            "./out",
+        ]
+    )
     assert args.command == "sp"
     assert args.structure == "struct.xyz"
     assert args.model == "model.pt"
@@ -99,15 +117,22 @@ def test_sp_parser_accepts_known_flags() -> None:
 
 def test_opt_parser_accepts_optimisation_flags() -> None:
     parser = create_parser()
-    args = parser.parse_args([
-        "opt", "struct.xyz",
-        "--model", "model.pt",
-        "--fmax", "0.02",
-        "--max-steps", "100",
-        "--optimizer", "BFGS",
-        "--cell-opt",
-        "--no-fix-symmetry",
-    ])
+    args = parser.parse_args(
+        [
+            "opt",
+            "struct.xyz",
+            "--model",
+            "model.pt",
+            "--fmax",
+            "0.02",
+            "--max-steps",
+            "100",
+            "--optimizer",
+            "BFGS",
+            "--cell-opt",
+            "--no-fix-symmetry",
+        ]
+    )
     assert args.fmax == 0.02
     assert args.max_steps == 100
     assert args.optimizer == "BFGS"
@@ -125,26 +150,44 @@ def test_opt_fix_symmetry_default_is_none() -> None:
 
 def test_md_parser_accepts_ensemble_flags() -> None:
     parser = create_parser()
-    args = parser.parse_args([
-        "md", "struct.xyz",
-        "--model", "model.pt",
-        "--ensemble", "NVE",
-        "--temp", "500",
-        "--timestep", "2.0",
-        "--steps", "5000",
-        "--thermostat", "NHC",
-        "--friction", "0.005",
-        "--bussi-tau", "800",
-        "--nhc-tdamp", "120",
-        "--nhc-tchain", "4",
-        "--nhc-tloop", "2",
-        "--save-interval", "25",
-        "--seed", "42",
-        "--velocity-policy", "initialize",
-        "--fmax-abort", "15",
-        "--pre-relax",
-        "--no-pre-relax",
-    ])
+    args = parser.parse_args(
+        [
+            "md",
+            "struct.xyz",
+            "--model",
+            "model.pt",
+            "--ensemble",
+            "NVE",
+            "--temp",
+            "500",
+            "--timestep",
+            "2.0",
+            "--steps",
+            "5000",
+            "--thermostat",
+            "NHC",
+            "--friction",
+            "0.005",
+            "--bussi-tau",
+            "800",
+            "--nhc-tdamp",
+            "120",
+            "--nhc-tchain",
+            "4",
+            "--nhc-tloop",
+            "2",
+            "--save-interval",
+            "25",
+            "--seed",
+            "42",
+            "--velocity-policy",
+            "initialize",
+            "--fmax-abort",
+            "15",
+            "--pre-relax",
+            "--no-pre-relax",
+        ]
+    )
     assert args.ensemble == "NVE"
     assert args.temp == 500.0
     assert args.timestep == 2.0
@@ -196,11 +239,16 @@ def test_grace_memory_and_md_output_flags_parse() -> None:
 
 def test_batch_parser_accepts_pattern_and_workers() -> None:
     parser = create_parser()
-    args = parser.parse_args([
-        "batch", "input_dir/",
-        "--model", "model.pt",
-        "--pattern", "*.poscar",
-    ])
+    args = parser.parse_args(
+        [
+            "batch",
+            "input_dir/",
+            "--model",
+            "model.pt",
+            "--pattern",
+            "*.poscar",
+        ]
+    )
     assert args.command == "batch"
     assert args.input_dir == "input_dir/"
     assert args.pattern == "*.poscar"
@@ -235,6 +283,7 @@ def test_model_required_without_model_alias() -> None:
 # ---------------------------------------------------------------------------
 # config subcommand
 # ---------------------------------------------------------------------------
+
 
 def test_config_paths() -> None:
     """config paths should run without error."""
@@ -310,12 +359,11 @@ def test_generated_settings_validates() -> None:
 # CLI backward compat: calc_type → temperature alias mapping
 # ---------------------------------------------------------------------------
 
+
 def test_md_temp_alias() -> None:
     """--temp is the historical flag for temperature."""
     parser = create_parser()
-    args = parser.parse_args([
-        "md", "s.xyz", "--model", "m.pt", "--temp", "400"
-    ])
+    args = parser.parse_args(["md", "s.xyz", "--model", "m.pt", "--temp", "400"])
     assert args.temp == 400.0
 
 
@@ -353,9 +401,16 @@ def test_md_prints_banner_once(tmp_path, monkeypatch, capsys) -> None:
 
 def test_batch_parser_basic_flags() -> None:
     parser = create_parser()
-    args = parser.parse_args([
-        "batch", "dir/", "--model", "m.pt", "--pattern", "*.cif",
-    ])
+    args = parser.parse_args(
+        [
+            "batch",
+            "dir/",
+            "--model",
+            "m.pt",
+            "--pattern",
+            "*.cif",
+        ]
+    )
     assert args.command == "batch"
     assert args.input_dir == "dir/"
     assert args.pattern == "*.cif"
@@ -365,9 +420,12 @@ def test_batch_parser_basic_flags() -> None:
 # --settings global option
 # ---------------------------------------------------------------------------
 
+
 def test_settings_global_option_accepted() -> None:
     parser = create_parser()
-    args = parser.parse_args(["--settings", "/tmp/x.ini", "sp", "s.xyz", "--model", "m.pt"])
+    args = parser.parse_args(
+        ["--settings", "/tmp/x.ini", "sp", "s.xyz", "--model", "m.pt"]
+    )
     assert args.settings == "/tmp/x.ini"
     assert args.command == "sp"
 
@@ -375,6 +433,7 @@ def test_settings_global_option_accepted() -> None:
 # ---------------------------------------------------------------------------
 # template command
 # ---------------------------------------------------------------------------
+
 
 def test_template_sp() -> None:
     with tempfile.TemporaryDirectory() as d:
@@ -393,6 +452,7 @@ def test_template_sp() -> None:
 # ---------------------------------------------------------------------------
 # doctor / setup smoke (these need additional deps; just check exit)
 # ---------------------------------------------------------------------------
+
 
 def test_doctor_parser_accepts_engine_device_model_and_smoke_options() -> None:
     parser = create_parser()
@@ -442,6 +502,7 @@ def test_doctor_exits_gracefully() -> None:
 # ---------------------------------------------------------------------------
 # `mlipx run` INCAR calc-type dispatch (regression)
 # ---------------------------------------------------------------------------
+
 
 def _write_poscar(directory: Path) -> Path:
     poscar = directory / "POSCAR"

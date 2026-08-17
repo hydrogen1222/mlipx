@@ -572,9 +572,7 @@ def test_mobile_only_precorrected_parser_matches_kinisi_framework_drift() -> Non
         ),
         axis=0,
     )
-    fractional = np.broadcast_to(
-        initial_fractional, (n_frames, 6, 3)
-    ).copy()
+    fractional = np.broadcast_to(initial_fractional, (n_frames, 6, 3)).copy()
     fractional += framework_drift
     fractional[:, :4] += li_walk
     frames = [

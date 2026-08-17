@@ -106,45 +106,61 @@ def _coerce_bool(value: Any) -> bool:
 _SPECS: list[OptionSpec] = [
     # --- global configuration ---
     OptionSpec(
-        "strict_config", bool, frozenset({"general"}),
+        "strict_config",
+        bool,
+        frozenset({"general"}),
         aliases={"STRICT_CONFIG"},
         description="Treat unknown configuration keys as errors.",
     ),
     OptionSpec(
-        "write_resolved_config", bool, frozenset({"general"}),
+        "write_resolved_config",
+        bool,
+        frozenset({"general"}),
         aliases={"WRITE_RESOLVED_CONFIG"},
         description="Write resolved_config.json before a calculation.",
     ),
     OptionSpec(
-        "fmax_abort", float, frozenset({"safety"}),
+        "fmax_abort",
+        float,
+        frozenset({"safety"}),
         aliases={"FMAX_ABORT"},
         minimum=1.0e-12,
         description="MD force-safety abort threshold in eV/Angstrom.",
     ),
     # --- model / device (calculator scope) ---
     OptionSpec(
-        "model_type", str, frozenset({"calculator"}),
+        "model_type",
+        str,
+        frozenset({"calculator"}),
         aliases={"MODEL_TYPE", "model"},
         choices=("uma", "fairchem", "mace", "dpa", "grace"),
         description="MLIP engine.",
     ),
     OptionSpec(
-        "model_path", str, frozenset({"calculator"}),
+        "model_path",
+        str,
+        frozenset({"calculator"}),
         aliases={"MODEL_PATH", "model"},
         description="Path to the model checkpoint/file.",
     ),
     OptionSpec(
-        "task", str, frozenset({"calculator"}),
+        "task",
+        str,
+        frozenset({"calculator"}),
         aliases={"TASK"},
         description="UMA task (omat/omol/...) or bulk/molecule for other engines.",
     ),
     OptionSpec(
-        "device", str, frozenset({"calculator", "general"}),
+        "device",
+        str,
+        frozenset({"calculator", "general"}),
         aliases={"DEVICE"},
         description="Compute device: cpu, cuda, gpu or cuda:N.",
     ),
     OptionSpec(
-        "inference_mode", str, frozenset({"calculator"}),
+        "inference_mode",
+        str,
+        frozenset({"calculator"}),
         aliases={"INFERENCE_MODE"},
         choices=("default", "turbo"),
         description=(
@@ -153,18 +169,24 @@ _SPECS: list[OptionSpec] = [
     ),
     # --- MACE calculator options (plan section 11.1 / 12) ---
     OptionSpec(
-        "default_dtype", str, frozenset({"calculator.mace"}),
+        "default_dtype",
+        str,
+        frozenset({"calculator.mace"}),
         aliases={"DEFAULT_DTYPE", "dtype"},
         choices=("float32", "float64"),
         description="MACE model dtype (accuracy-first default: float64).",
     ),
     OptionSpec(
-        "head", str, frozenset({"calculator.mace", "calculator.dpa"}),
+        "head",
+        str,
+        frozenset({"calculator.mace", "calculator.dpa"}),
         aliases={"HEAD"},
         description="MACE or DeepMD model head/branch (multi-task models).",
     ),
     OptionSpec(
-        "torch_num_threads", int, frozenset({"calculator"}),
+        "torch_num_threads",
+        int,
+        frozenset({"calculator"}),
         aliases={"TORCH_NUM_THREADS", "CPU_THREADS", "cpu_threads"},
         minimum=1,
         description=(
@@ -173,12 +195,16 @@ _SPECS: list[OptionSpec] = [
         ),
     ),
     OptionSpec(
-        "activation_checkpointing", bool, frozenset({"calculator"}),
+        "activation_checkpointing",
+        bool,
+        frozenset({"calculator"}),
         aliases={"ACTIVATION_CHECKPOINTING"},
         description="GPU memory saving (UMA, overrides inference_mode preset).",
     ),
     OptionSpec(
-        "gpu_memory_growth", bool, frozenset({"calculator.grace"}),
+        "gpu_memory_growth",
+        bool,
+        frozenset({"calculator.grace"}),
         aliases={"GPU_MEMORY_GROWTH"},
         description=(
             "GRACE TensorFlow allocator grows on demand instead of claiming "
@@ -186,13 +212,17 @@ _SPECS: list[OptionSpec] = [
         ),
     ),
     OptionSpec(
-        "gpu_memory_limit_mb", int, frozenset({"calculator.grace"}),
+        "gpu_memory_limit_mb",
+        int,
+        frozenset({"calculator.grace"}),
         aliases={"GPU_MEMORY_LIMIT_MB"},
         minimum=1,
         description="Hard GRACE TensorFlow logical-device memory limit in MiB.",
     ),
     OptionSpec(
-        "neighbor_cache", bool, frozenset({"calculator.grace"}),
+        "neighbor_cache",
+        bool,
+        frozenset({"calculator.grace"}),
         aliases={"NEIGHBOR_CACHE"},
         description=(
             "GRACE verlet-style neighbor-list cache (extended cutoff + exact "
@@ -201,7 +231,9 @@ _SPECS: list[OptionSpec] = [
         ),
     ),
     OptionSpec(
-        "neighbor_skin", float, frozenset({"calculator.grace"}),
+        "neighbor_skin",
+        float,
+        frozenset({"calculator.grace"}),
         aliases={"NEIGHBOR_SKIN"},
         minimum=1.0e-12,
         description=(
@@ -212,14 +244,18 @@ _SPECS: list[OptionSpec] = [
     ),
     # --- molecular electronic state (applied to atoms.info by every runner) ---
     OptionSpec(
-        "charge", int, frozenset({"sp", "opt", "md", "batch"}),
+        "charge",
+        int,
+        frozenset({"sp", "opt", "md", "batch"}),
         aliases={"CHARGE"},
         minimum=-100,
         maximum=100,
         description="Total molecular charge stored in atoms.info.",
     ),
     OptionSpec(
-        "spin", int, frozenset({"sp", "opt", "md", "batch"}),
+        "spin",
+        int,
+        frozenset({"sp", "opt", "md", "batch"}),
         aliases={"SPIN", "SPIN_MULTIPLICITY"},
         minimum=0,
         maximum=100,
@@ -229,150 +265,196 @@ _SPECS: list[OptionSpec] = [
     ),
     # --- OPT run options ---
     OptionSpec(
-        "optimizer", str, frozenset({"opt"}),
+        "optimizer",
+        str,
+        frozenset({"opt"}),
         aliases={"OPT_ALGO", "opt_algo"},
         choices=("FIRE", "BFGS", "LBFGS"),
         description="Geometry optimization algorithm.",
     ),
     OptionSpec(
-        "fmax", float, frozenset({"opt"}),
+        "fmax",
+        float,
+        frozenset({"opt"}),
         aliases={"FMAX"},
         minimum=0.0,
         description="Force convergence threshold in eV/Angstrom.",
     ),
     OptionSpec(
-        "max_steps", int, frozenset({"opt"}),
+        "max_steps",
+        int,
+        frozenset({"opt"}),
         aliases={"MAX_STEPS"},
         minimum=0,
         description="Maximum optimization steps.",
     ),
     OptionSpec(
-        "cell_opt", bool, frozenset({"opt"}),
+        "cell_opt",
+        bool,
+        frozenset({"opt"}),
         aliases={"CELL_OPT"},
         description="Optimize cell parameters (requires stress support).",
     ),
     OptionSpec(
-        "fix_symmetry", bool, frozenset({"opt"}),
+        "fix_symmetry",
+        bool,
+        frozenset({"opt"}),
         aliases={"FIX_SYMMETRY"},
         description="Preserve crystal symmetry during optimization.",
     ),
     # --- MD run options ---
     OptionSpec(
-        "ensemble", str, frozenset({"md"}),
+        "ensemble",
+        str,
+        frozenset({"md"}),
         aliases={"MD_ENSEMBLE"},
         choices=("NVT", "NVE"),
         description="MD ensemble.",
     ),
     OptionSpec(
-        "temperature", float, frozenset({"md"}),
+        "temperature",
+        float,
+        frozenset({"md"}),
         aliases={"TEMPERATURE", "temp"},
         minimum=0.0,
         description="Temperature in Kelvin.",
     ),
     OptionSpec(
-        "timestep", float, frozenset({"md"}),
+        "timestep",
+        float,
+        frozenset({"md"}),
         aliases={"TIMESTEP", "timestep_fs"},
         minimum=0.0,
         description="Time step in femtoseconds.",
     ),
     OptionSpec(
-        "steps", int, frozenset({"md"}),
+        "steps",
+        int,
+        frozenset({"md"}),
         aliases={"STEPS", "production_steps", "PRODUCTION_STEPS"},
         minimum=0,
         description="Number of production MD steps.",
     ),
     OptionSpec(
-        "equilibration_steps", int, frozenset({"md"}),
+        "equilibration_steps",
+        int,
+        frozenset({"md"}),
         aliases={"EQUIL_STEPS", "EQUILIBRATION_STEPS"},
         minimum=0,
         default=0,
-        description=(
-            "Number of same-ensemble equilibration steps before production."
-        ),
+        description=("Number of same-ensemble equilibration steps before production."),
     ),
     OptionSpec(
-        "thermostat", str, frozenset({"md"}),
+        "thermostat",
+        str,
+        frozenset({"md"}),
         aliases={"THERMOSTAT"},
         choices=("LANGEVIN", "BUSSI", "NHC"),
         description="NVT thermostat (Langevin, Bussi/CSVR, or Nose-Hoover chain).",
     ),
     OptionSpec(
-        "friction", float, frozenset({"md"}),
+        "friction",
+        float,
+        frozenset({"md"}),
         aliases={"FRICTION", "friction_per_fs"},
         minimum=0.0,
         description="Langevin friction coefficient (1/fs).",
     ),
     OptionSpec(
-        "bussi_tau", float, frozenset({"md"}),
+        "bussi_tau",
+        float,
+        frozenset({"md"}),
         aliases={"BUSSI_TAU"},
         minimum=0.0,
         description="Bussi/CSVR coupling time in femtoseconds.",
     ),
     OptionSpec(
-        "nhc_tdamp", float, frozenset({"md"}),
+        "nhc_tdamp",
+        float,
+        frozenset({"md"}),
         aliases={"NHC_TDAMP"},
         minimum=0.0,
         description="Nose-Hoover-chain damping time in femtoseconds.",
     ),
     OptionSpec(
-        "nhc_tchain", int, frozenset({"md"}),
+        "nhc_tchain",
+        int,
+        frozenset({"md"}),
         aliases={"NHC_TCHAIN"},
         minimum=1,
         description="Number of Nose-Hoover thermostat variables.",
     ),
     OptionSpec(
-        "nhc_tloop", int, frozenset({"md"}),
+        "nhc_tloop",
+        int,
+        frozenset({"md"}),
         aliases={"NHC_TLOOP"},
         minimum=1,
         description="Nose-Hoover thermostat integration substeps.",
     ),
     OptionSpec(
-        "save_interval", int, frozenset({"md"}),
+        "save_interval",
+        int,
+        frozenset({"md"}),
         aliases={"SAVE_INTERVAL", "trajectory_interval", "TRAJECTORY_INTERVAL"},
         minimum=1,
         description="Interval for saving trajectory frames.",
     ),
     OptionSpec(
-        "pre_relax", bool, frozenset({"md"}),
+        "pre_relax",
+        bool,
+        frozenset({"md"}),
         aliases={"PRE_RELAX"},
         description="Pre-relax the structure before MD (legacy).",
     ),
     OptionSpec(
-        "pre_relax_steps", int, frozenset({"md"}),
+        "pre_relax_steps",
+        int,
+        frozenset({"md"}),
         aliases={"PRE_RELAX_STEPS"},
         minimum=0,
         description="Maximum pre-relaxation steps (legacy).",
     ),
     OptionSpec(
-        "pre_relax_fmax", float, frozenset({"md"}),
+        "pre_relax_fmax",
+        float,
+        frozenset({"md"}),
         aliases={"PRE_RELAX_FMAX"},
         minimum=0.0,
         description="Pre-relaxation force threshold (legacy).",
     ),
     # --- plan vocabulary recognised as aliases / future keys (Phase 3+) ---
     OptionSpec(
-        "pre_relax_mode", str, frozenset({"md"}),
+        "pre_relax_mode",
+        str,
+        frozenset({"md"}),
         aliases={"PRE_RELAX_MODE"},
         choices=("none", "positions", "cell"),
         default="none",
         description="Pre-relaxation mode (plan section 13.2; Phase 3).",
     ),
     OptionSpec(
-        "velocity_policy", str, frozenset({"md"}),
+        "velocity_policy",
+        str,
+        frozenset({"md"}),
         aliases={"VELOCITY_POLICY"},
         choices=("auto", "initialize", "preserve"),
         default="auto",
         description="Velocity initialisation policy (plan section 13.5; Phase 3).",
     ),
     OptionSpec(
-        "seed", int, frozenset({"md", "general"}),
+        "seed",
+        int,
+        frozenset({"md", "general"}),
         aliases={"SEED", "default_seed", "DEFAULT_SEED"},
         minimum=0,
         description="Random seed for reproducible MD.",
     ),
     # --- batch run options ---
     OptionSpec(
-        "sub_calc_type", str, frozenset({"batch"}),
+        "sub_calc_type",
+        str,
+        frozenset({"batch"}),
         aliases={"sub-calc-type"},
         choices=("sp", "opt"),
         description="Sub-calculation type for a sweep batch (sp/opt).",
@@ -380,7 +462,9 @@ _SPECS: list[OptionSpec] = [
     # ``calc_type`` is a meta key: it selects the runner (sp/opt/md/batch).
     # The resolver pops it from every layer; it never becomes a run option.
     OptionSpec(
-        "calc_type", str, frozenset({"meta"}),
+        "calc_type",
+        str,
+        frozenset({"meta"}),
         aliases={"CALC_TYPE"},
         # Keep in sync with CalculationEngine.VALID_CALC_TYPES and
         # IncarConfig.validate(): "analyze" was previously accepted here but
@@ -389,54 +473,71 @@ _SPECS: list[OptionSpec] = [
         description="Top-level calculation type (selects the runner).",
     ),
     OptionSpec(
-        "pattern", str, frozenset({"batch"}),
+        "pattern",
+        str,
+        frozenset({"batch"}),
         aliases={"PATTERN"},
         description="Glob pattern for batch structure discovery.",
     ),
     # --- INCAR output / meta keys (recognised so INCAR flows don't warn).
     # These are consumed by writers, not runners; they land in the settings bag.
     OptionSpec(
-        "write_forces", bool, frozenset({"output"}),
+        "write_forces",
+        bool,
+        frozenset({"output"}),
         aliases={"WRITE_FORCES"},
         description="Write forces to OUTCAR.",
     ),
     OptionSpec(
-        "write_outcar", bool, frozenset({"output"}),
+        "write_outcar",
+        bool,
+        frozenset({"output"}),
         aliases={"WRITE_OUTCAR"},
         description="Write the VASP-like OUTCAR interoperability view.",
     ),
     OptionSpec(
-        "write_xdatcar", bool, frozenset({"output"}),
+        "write_xdatcar",
+        bool,
+        frozenset({"output"}),
         aliases={"WRITE_XDATCAR"},
         description="Write the VASP XDATCAR interoperability trajectory.",
     ),
     OptionSpec(
-        "write_stress", bool, frozenset({"output"}),
+        "write_stress",
+        bool,
+        frozenset({"output"}),
         aliases={"WRITE_STRESS"},
         description="Write stress to OUTCAR.",
     ),
     OptionSpec(
-        "write_trajectory", bool, frozenset({"output"}),
+        "write_trajectory",
+        bool,
+        frozenset({"output"}),
         aliases={"WRITE_TRAJECTORY"},
         description="Write ASE trajectory.",
     ),
     OptionSpec(
-        "write_json", bool, frozenset({"output"}),
+        "write_json",
+        bool,
+        frozenset({"output"}),
         aliases={"WRITE_JSON"},
         description="Write JSON results.",
     ),
     OptionSpec(
-        "output_format", str, frozenset({"output"}),
+        "output_format",
+        str,
+        frozenset({"output"}),
         aliases={"OUTPUT_FORMAT"},
         description="Output format (VASP).",
     ),
     OptionSpec(
-        "job_name", str, frozenset({"meta"}),
+        "job_name",
+        str,
+        frozenset({"meta"}),
         aliases={"JOB_NAME"},
         description="Optional job name.",
     ),
 ]
-
 
 
 def get_schema() -> Schema:
@@ -522,11 +623,7 @@ class Schema:
                     continue
                 if strict:
                     suggestion = self.suggest(key)
-                    hint = (
-                        f" Did you mean {suggestion[0]!r}?"
-                        if suggestion
-                        else ""
-                    )
+                    hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
                     errors.append(f"Unknown key {key!r}{loc}.{hint}")
                 continue
             # Coerce + validate the value.

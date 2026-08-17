@@ -54,9 +54,13 @@ Run `./scripts/install_mlipx.sh --help` for all options.
 If you prefer to install by hand, create one venv per engine:
 
 ```bash
-# UMA (default)
-uv sync --frozen
-uv run mlipx doctor --engine uma --device auto
+# UMA (default) — installed explicitly like every other engine
+uv venv --python 3.12 .venv
+uv pip install --no-config --python .venv/bin/python \
+  "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv/bin/python \
+  -e ./mlipx "fairchem-core==2.21.0"
+.venv/bin/mlipx doctor --engine uma --device auto
 
 # MACE
 uv venv --python 3.12 .venv-mace
@@ -87,7 +91,7 @@ Use the matching command prefix:
 
 | Engine | Environment | Prefix |
 |---|---|---|
-| UMA | `.venv` | `uv run mlipx ...` |
+| UMA | `.venv` | `.venv/bin/mlipx ...` |
 | MACE | `.venv-mace` | `.venv-mace/bin/mlipx ...` |
 | DPA | `.venv-dpa` | `.venv-dpa/bin/mlipx ...` |
 | GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
@@ -96,19 +100,28 @@ Use the matching command prefix:
 
 The installer and `mlipx setup` choose the correct PyTorch/CUDA wheel automatically.
 
-| GPU family | Examples | Compute capability | CUDA channel | Status |
-|---|---|---|---|---|
-| Maxwell | GTX 960, TITAN X | sm_50/52 | cu126 Legacy | ⚠️ Experimental |
-| Pascal | **GTX 1080 Ti**, P100 | sm_60/61 | cu126 Legacy | Verified |
-| Volta | **V100** | sm_70 | cu126 Legacy | Verified |
-| Turing | RTX 20xx | sm_75 | cu128+ Modern | Verified |
-| Ampere | **RTX 3080 Ti**, 30xx | sm_80/86 | cu128+ Modern | Verified |
-| Ada | **RTX 4090**, 40xx | sm_89 | cu128+ Modern | Verified |
-| Hopper | H100 | sm_90 | cu128+ Modern | Verified |
-| Blackwell | RTX 50xx | sm_100/120 | cu128+ Modern | Verified |
-| none | CPU only | — | CPU wheels | — |
+| GPU family | Examples | Compute capability | CUDA route |
+|---|---|---|---|
+| Maxwell | GTX 960, TITAN X | sm_50/52 | cu126 Legacy (⚠️ experimental) |
+| Pascal | **GTX 1080 Ti**, P100 | sm_60/61 | cu126 Legacy |
+| Volta | **V100** | sm_70 | cu126 Legacy |
+| Turing | RTX 20xx | sm_75 | cu128+ Modern |
+| Ampere | **RTX 3080 Ti**, 30xx | sm_80/86 | cu128+ Modern |
+| Ada | **RTX 4090**, 40xx | sm_89 | cu128+ Modern |
+| Hopper | H100 | sm_90 | cu128+ Modern |
+| Blackwell | RTX 50xx | sm_100/120 | cu128+ Modern |
+| none | CPU only | — | CPU wheels |
 
 > **Why two CUDA routes?** Maxwell/Pascal/Volta must use the **cu126 Legacy** channel: PyTorch 2.8+ removed Maxwell/Pascal from cu128 builds, and PyTorch 2.11+ removed Volta from cu128+. Turing+ use the **modern** channel (cu128 for torch 2.8–2.10, cu130 for torch 2.12+). Maxwell is Experimental because TensorFlow 2.20 official wheels start at sm_60.
+
+**Per-engine verification status** (from `mlipx/install/compatibility.py`; only Volta/V100 is mlipx-verified so far — the rest are upstream-supported but need a smoke test on real hardware):
+
+| Engine | Maxwell | Pascal | Volta | Turing+ |
+|---|---|---|---|---|
+| UMA | experimental | needs smoke test | **verified** | needs smoke test |
+| MACE | experimental | needs smoke test | **verified** | needs smoke test |
+| DPA | experimental | needs smoke test | **verified** | needs smoke test |
+| GRACE | experimental | needs smoke test | **verified** | needs smoke test |
 
 ### Download sources
 
@@ -128,20 +141,20 @@ PyPI packages and PyTorch CUDA wheels are handled separately. The installer neve
 ### Single-point energy (UMA)
 
 ```bash
-uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
+.venv/bin/mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
 ```
 
 ### Geometry optimization
 
 ```bash
-uv run mlipx opt structure.cif --model uma-s-1.pt --task omat \
+.venv/bin/mlipx opt structure.cif --model uma-s-1.pt --task omat \
   --cell-opt --fmax 0.02
 ```
 
 ### Molecular dynamics
 
 ```bash
-uv run mlipx md structure.cif --model uma-s-1.pt --task omat \
+.venv/bin/mlipx md structure.cif --model uma-s-1.pt --task omat \
   --device cuda --steps 10000
 ```
 
@@ -166,8 +179,8 @@ uv run mlipx md structure.cif --model uma-s-1.pt --task omat \
 ### INCAR files (VASP-style)
 
 ```bash
-uv run mlipx template sp          # generate INCAR.sp
-uv run mlipx run -i INCAR.sp -s structure.cif
+.venv/bin/mlipx template sp          # generate INCAR.sp
+.venv/bin/mlipx run -i INCAR.sp -s structure.cif
 ```
 
 Example `INCAR.sp`:
@@ -183,7 +196,7 @@ DEVICE      = cpu
 ### Batch
 
 ```bash
-uv run mlipx batch structures/ --model uma-s-1.pt \
+.venv/bin/mlipx batch structures/ --model uma-s-1.pt \
   --model-type uma --task omat --device cuda \
   --calc-type sp --pattern "*.cif" --output batch_results
 ```
@@ -198,28 +211,30 @@ Each input gets its own output subdirectory; the root gets `batch_summary.json`.
 
 ```bash
 # Validate first (checks time axis, PBC, conventions, eligibility)
-uv run mlipx analyze results/LGPS-800K validate
+.venv/bin/mlipx analyze results/LGPS-800K validate
 
 # Thermodynamics
-uv run mlipx analyze results/LGPS-800K thermo
+.venv/bin/mlipx analyze results/LGPS-800K thermo
 
 # RDF / coordination
-uv run mlipx analyze results/LGPS-800K rdf \
+.venv/bin/mlipx analyze results/LGPS-800K rdf \
   --center Li --neighbor S --rmax 6 --cn-cutoff 3
 
 # MSD
-uv run mlipx analyze results/LGPS-800K msd \
+.venv/bin/mlipx analyze results/LGPS-800K msd \
   --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
 
 # Density / VACF / spectrum / Arrhenius
-uv run mlipx analyze results/LGPS-800K density --mobile Li --spacing 0.25
-uv run mlipx analyze results/LGPS-800K vacf --species Li
-uv run mlipx analyze results/LGPS-800K spectrum --species Li --taper one-sided-cosine
+.venv/bin/mlipx analyze results/LGPS-800K density --mobile Li --spacing 0.25
+.venv/bin/mlipx analyze results/LGPS-800K vacf --species Li
+.venv/bin/mlipx analyze results/LGPS-800K spectrum --species Li --taper one-sided-cosine
 
 # Fit multi-temperature Arrhenius from independent transport results
-uv run mlipx analyze RUN arrhenius \
-  --temperature 600,700,800 --diffusivity 1e-10,2e-10,5e-10 \
-  --diffusivity-std 0.1e-10,0.2e-10,0.5e-10
+# (each value is passed as a separate repeated flag)
+.venv/bin/mlipx analyze RUN arrhenius \
+  --temperature 600 --temperature 700 --temperature 800 \
+  --diffusivity 1e-10 --diffusivity 2e-10 --diffusivity 5e-10 \
+  --diffusivity-std 0.1e-10 --diffusivity-std 0.2e-10 --diffusivity-std 0.5e-10
 ```
 
 ### Transport (diffusion + conductivity)
@@ -227,7 +242,7 @@ uv run mlipx analyze RUN arrhenius \
 Covariance-aware transport uses [kinisi 2.x](https://joss.theoj.org/papers/10.21105/joss.05984). It requires an explicit fit start:
 
 ```bash
-uv run mlipx analyze RUN transport --mobile Li --charge 1 \
+.venv/bin/mlipx analyze RUN transport --mobile Li --charge 1 \
   --drift-reference nonmobile --fit-start-ps 40 \
   --lag-step-ps 2 --lag-stop-ps 200 --random-seed 0
 ```
@@ -247,7 +262,7 @@ GEMDAT is an optional backend for site mapping, jumps, and percolation:
 
 ```bash
 python -m pip install -e './mlipx[analysis,electrolyte]'
-uv run mlipx analyze RUN electrolyte --mobile Li --sites Li_sites.cif \
+.venv/bin/mlipx analyze RUN electrolyte --mobile Li --sites Li_sites.cif \
   --jump-dimensions 3 --percolation-axes xyz
 ```
 
@@ -342,8 +357,6 @@ For high-throughput runs, use `--no-write-outcar --no-write-xdatcar` to skip the
 
 ## Background Jobs & Queue
 
-### Background jobs & queue
-
 Background jobs are submitted through the queue JSON interface:
 
 ```bash
@@ -366,44 +379,17 @@ cat > tasks.json <<'JSON'
 JSON
 
 # 2. Submit and start
-uv run mlipx queue submit tasks.json
-uv run mlipx queue start            # background scheduler
-uv run mlipx queue status
+.venv/bin/mlipx queue submit tasks.json
+.venv/bin/mlipx queue start            # background scheduler
+.venv/bin/mlipx queue status
 
 # 3. Manage
-uv run mlipx jobs                   # list running/done/failed
-uv run mlipx kill <job-id>          # terminate a running job
-uv run mlipx clean                  # remove completed/failed records
+.venv/bin/mlipx jobs                   # list running/done/failed
+.venv/bin/mlipx kill <job-id>          # terminate a running job
+.venv/bin/mlipx clean                  # remove completed/failed records
 ```
 
 The TUI also has built-in queue controls. Each task may use its own Python environment/engine/model.
-
-```bash
-# 1. Describe tasks in JSON
-cat > tasks.json <<'JSON'
-{
-  "max_concurrent": 1,
-  "tasks": [
-    {
-      "name": "opt-uma-1",
-      "calc_type": "opt",
-      "structure": "/path/a.cif",
-      "model": "/path/uma-s-1.pt",
-      "model_type": "uma",
-      "device": "cuda:0",
-      "options": {"fmax": 0.05}
-    }
-  ]
-}
-JSON
-
-# 2. Submit and start
-uv run mlipx queue submit tasks.json
-uv run mlipx queue start            # background scheduler
-uv run mlipx queue status
-```
-
-Each task can use its own Python environment/engine/model. The TUI also has built-in queue controls.
 
 ---
 
@@ -427,7 +413,7 @@ Each task can use its own Python environment/engine/model. The TUI also has buil
 Your PyTorch build has no kernel for your GPU. Use the cu126 Legacy channel for Maxwell/Pascal/Volta, or the modern channel for Turing+. Run:
 
 ```bash
-uv run mlipx setup     # machine-specific report
+.venv/bin/mlipx setup     # machine-specific report
 ./scripts/install_mlipx.sh --dry-run
 ```
 
@@ -451,15 +437,26 @@ Pre-relaxation is on by default for NVT (up to 50 FIRE steps). For NVE it is off
 
 ## Development
 
-```bash
-# Install dev tools
-uv pip install -e './mlipx[dev]'
+Use a dedicated dev venv so it never collides with the UMA runtime `.venv`:
 
-# Run tests
-uv run pytest tests/mlipx -q
+```bash
+# 1. Create a dev environment
+uv venv --python 3.12 .venv-dev
+
+# 2. Install mlipx with dev + analysis extras
+uv pip install --python .venv-dev/bin/python -e './mlipx[dev,analysis]'
+
+# 3. Run tests (no heavy ML backend required — backend tests are mocked/skipped)
+.venv-dev/bin/python -m pytest tests -q
 ```
 
-Core scientific code lives in `mlipx/mlipx/`; the fairchem fork is under `packages/` and `src/`. Installation/compatibility logic is in `mlipx/mlipx/install/`.
+UMA is consumed through the external `fairchem-core` dependency. Core code
+lives in `mlipx/mlipx/`; installation/compatibility logic is in
+`mlipx/mlipx/install/`.
+
+Analysis extras (optional): `./mlipx[analysis]` (scipy/matplotlib),
+`./mlipx[transport]` (kinisi), `./mlipx[electrolyte]` (gemdat), or
+`./mlipx[analysis-all]` for all three.
 
 ---
 

@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "mlipx"
 version = "2.0.0"
 description = "VASP-like CLI/TUI interface for MLIP models (UMA, MACE, DPA, GRACE)"
+readme = "README.md"
+license = { text = "MIT License" }
 requires-python = ">=3.10, <3.13"
 dependencies = [
     "ase>=3.26.0",
@@ -16,12 +18,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# NOTE: MACE/DPA/GRACE engine backends (mace-torch, deepmd-kit,
-# tensorpotential) are intentionally NOT declared as installable extras here.
-# mace-torch pins e3nn==0.4.4 which conflicts with fairchem-core (e3nn>=0.5),
-# so they cannot coexist in a single environment. Install the backend you
-# need manually (see `mlipx doctor`), e.g.: pip install mace-torch.
-uma = ["fairchem-core"]
+# NOTE: there is deliberately no `uma` extra. UMA is installed by the
+# compatibility-matrix-driven installer (scripts/install_mlipx.sh), which pins
+# the fairchem-core version in mlipx/install/compatibility.py. A PyPI extra
+# would drift from the matrix and conflicts with fairchem-core's own Python
+# requirement.
 analysis = [
     "scipy>=1.11",
     "matplotlib>=3.7",
@@ -47,21 +48,13 @@ dev = [
 [project.scripts]
 mlipx = "mlipx.cli:main"
 
+[project.urls]
+repository = "https://github.com/hydrogen1222/mlipx"
+documentation = "https://github.com/hydrogen1222/mlipx/blob/main/README.md"
+
 [tool.setuptools.packages.find]
 where = ["."]
 
 [tool.ruff]
 line-length = 88
-target-version = "py39"
-
-# GPU compatibility - run `uv run mlipx setup` (uses nvidia-smi, works
-# before torch is installed) to detect your GPU and get the exact torch command.
-# Support floor: Maxwell (GTX 900 series, sm_50/52). Kepler (GTX 700/600) not
-# supported (no prebuilt PyTorch wheel).
-#   Maxwell/Pascal/Volta (sm_50–sm_70): use the cu126 Legacy channel, e.g.
-#     uv pip install torch==2.8.0 --index-url https://download.pytorch.org/whl/cu126
-#     (PyTorch 2.8+ dropped Maxwell/Pascal from cu128; 2.11+ dropped Volta)
-#   Turing+ (sm_75+): use the modern channel matching the torch version,
-#     e.g. torch 2.8.0 -> cu128, torch 2.12+ -> cu130.
-#   The one-command installer `scripts/install_mlipx.sh` picks the right
-#   channel automatically from the compatibility matrix in mlipx/install/.
+target-version = "py310"

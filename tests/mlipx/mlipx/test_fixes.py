@@ -39,7 +39,7 @@ def _install_fake_mace(monkeypatch, mace_calculator_mock):
 
 def test_mace_head_forwarded_as_singular_string(tmp_path, monkeypatch):
     """A1: ``head`` must reach MACECalculator as ``head=<str>``, not ``heads=[...]``."""
-    from mlipx.calculators.mace_calc import MACECalculatorWrapper  # noqa: PLC0415
+    from mlipx.calculators.mace_calc import MACECalculatorWrapper
 
     captured = {}
 
@@ -59,13 +59,13 @@ def test_mace_head_forwarded_as_singular_string(tmp_path, monkeypatch):
     w = MACECalculatorWrapper(model, device="cpu", default_dtype="float64", head="omol")
     w.get_calculator()
 
-    assert captured.get("head") == "omol"          # singular string
-    assert "heads" not in captured                 # plural list must NOT be passed
+    assert captured.get("head") == "omol"  # singular string
+    assert "heads" not in captured  # plural list must NOT be passed
 
 
 def test_mace_info_reads_correct_attributes(tmp_path):
     """B1: info() enrichment must use MACE's real attribute names."""
-    from mlipx.calculators.mace_calc import MACECalculatorWrapper  # noqa: PLC0415
+    from mlipx.calculators.mace_calc import MACECalculatorWrapper
 
     model = tmp_path / "mace.model"
     model.write_text("x")
@@ -99,7 +99,7 @@ def test_mace_info_reads_correct_attributes(tmp_path):
     [("sp", "float64"), ("opt", "float64"), ("md", "float64")],
 )
 def test_mace_dtype_default_is_float64_all_calc_types(calc_type, expected_dtype):
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     config = EngineConfig(
         calc_type=calc_type,
@@ -128,7 +128,7 @@ def test_mace_dtype_default_is_float64_all_calc_types(calc_type, expected_dtype)
 
 def test_mace_dtype_explicit_override_wins():
     """An explicit default_dtype from the config layer must not be overridden."""
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     config = EngineConfig(
         calc_type="md",
@@ -164,7 +164,7 @@ class _CalcStub:
 
 
 def test_engine_nve_defaults_pre_relax_off():
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     config = EngineConfig(
         calc_type="md",
@@ -182,7 +182,7 @@ def test_engine_nve_defaults_pre_relax_off():
 
 
 def test_engine_nvt_defaults_pre_relax_on():
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     config = EngineConfig(
         calc_type="md",
@@ -200,7 +200,7 @@ def test_engine_nvt_defaults_pre_relax_on():
 
 
 def test_engine_explicit_pre_relax_wins_for_nve():
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     config = EngineConfig(
         calc_type="md",
@@ -222,8 +222,8 @@ def test_resolver_path_nve_pre_relax_off():
     pre_relax=True that overrides the engine's NVE-aware default. The
     earlier B3 tests bypassed the resolver, so this guards the production
     (CLI / INCAR / API) path."""
-    from mlipx.config.resolver import resolve_config  # noqa: PLC0415
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.config.resolver import resolve_config
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     for ens, expect in [("NVE", False), ("NVT", True)]:
         resolved = resolve_config(
@@ -237,11 +237,12 @@ def test_resolver_path_nve_pre_relax_off():
         runner = engine._create_runner(_CalcStub())
         assert runner.pre_relax is expect, f"{ens}: {runner.pre_relax}"
 
+
 # ---------------------------------------------------------------------------
 # A3: MD temperature DOF accounts for FixAtoms via get_removed_dof
 # ---------------------------------------------------------------------------
 def test_temperature_dof_accounts_for_fixatoms():
-    from mlipx.runners.md import MDRunner  # noqa: PLC0415
+    from mlipx.runners.md import MDRunner
 
     atoms = Atoms(
         "Ar4",
@@ -269,15 +270,18 @@ def test_temperature_dof_accounts_for_fixatoms():
 
 def test_temperature_fallback_for_fixsymmetry():
     """A3: FixSymmetry raises NotImplementedError; fall back to 3N-3, no crash."""
-    from ase.constraints import FixSymmetry  # noqa: PLC0415
-    from ase.md.velocitydistribution import (  # noqa: PLC0415
+    from ase.constraints import FixSymmetry
+    from ase.md.velocitydistribution import (
         MaxwellBoltzmannDistribution,
         Stationary,
     )
-    from mlipx.runners.md import MDRunner  # noqa: PLC0415
+
+    from mlipx.runners.md import MDRunner
 
     # A symmetric periodic cell so FixSymmetry can attach.
-    atoms = Atoms("NaCl", positions=[[0, 0, 0], [1.5, 1.5, 1.5]], cell=[3, 3, 3], pbc=True)
+    atoms = Atoms(
+        "NaCl", positions=[[0, 0, 0], [1.5, 1.5, 1.5]], cell=[3, 3, 3], pbc=True
+    )
     MaxwellBoltzmannDistribution(atoms, temperature_K=300, force_temp=True)
     Stationary(atoms, preserve_temperature=True)
     atoms.set_constraint(FixSymmetry(atoms))
@@ -293,6 +297,8 @@ def test_temperature_fallback_for_fixsymmetry():
     temp = runner._calculate_temperature(atoms)
     expected_dof = max(3 * len(atoms) - 3, 1)  # COM removed fallback
     assert temp == pytest.approx(2 * ke / (expected_dof * units.kB))
+
+
 # ---------------------------------------------------------------------------
 # B2: runners abort on NaN/inf
 # ---------------------------------------------------------------------------
@@ -341,7 +347,7 @@ class _CalcWrapperStub:
 
 
 def test_singlepoint_aborts_on_nan_energy(tmp_path):
-    from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
+    from mlipx.runners.singlepoint import SinglePointRunner
 
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 1]], cell=[10, 10, 10], pbc=True)
     calc = _FiniteCalc(float("nan"), np.zeros((2, 3)))
@@ -352,7 +358,7 @@ def test_singlepoint_aborts_on_nan_energy(tmp_path):
 
 
 def test_singlepoint_aborts_on_nan_forces(tmp_path):
-    from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
+    from mlipx.runners.singlepoint import SinglePointRunner
 
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 1]], cell=[10, 10, 10], pbc=True)
     forces = np.array([[float("nan"), 0, 0], [0, 0, 0]])
@@ -365,7 +371,7 @@ def test_singlepoint_aborts_on_nan_forces(tmp_path):
 
 def test_optimization_aborts_on_nan(tmp_path):
     """B2: optimization must abort on NaN energy/forces, not write NaN results."""
-    from mlipx.runners.optimization import OptimizationRunner  # noqa: PLC0415
+    from mlipx.runners.optimization import OptimizationRunner
 
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 1]], cell=[10, 10, 10], pbc=True)
     calc = _FiniteCalc(float("nan"), np.full((2, 3), float("nan")))
@@ -383,7 +389,7 @@ def test_optimization_aborts_on_nan(tmp_path):
 # B5: stress skipped for non-periodic systems even when has_stress is True
 # ---------------------------------------------------------------------------
 def test_singlepoint_skips_stress_for_nonperiodic(tmp_path):
-    from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
+    from mlipx.runners.singlepoint import SinglePointRunner
 
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 1]], cell=[10, 10, 10], pbc=False)
     # MACE-style: advertises stress even for a molecule.
@@ -408,7 +414,7 @@ def test_singlepoint_accepts_molecule_without_cell(tmp_path):
     """A gas molecule loaded from .xyz has no cell (volume 0); the runner must
     not reject it -- this is the path the isolated gas takes in an
     adsorption-energy calculation."""
-    from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
+    from mlipx.runners.singlepoint import SinglePointRunner
 
     # No cell at all, like ase.read('co2.xyz').
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 1]])
@@ -423,7 +429,7 @@ def test_singlepoint_accepts_molecule_without_cell(tmp_path):
 
 def test_singlepoint_rejects_periodic_without_cell(tmp_path):
     """A periodic system still requires a real cell."""
-    from mlipx.runners.singlepoint import SinglePointRunner  # noqa: PLC0415
+    from mlipx.runners.singlepoint import SinglePointRunner
 
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 1]], pbc=True)
     calc = _FiniteCalc(-1.0, np.zeros((2, 3)))

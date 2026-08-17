@@ -577,14 +577,10 @@ class ConfigScreen(Screen):
         self.query_one("#dtype-select", Select).disabled = not is_mace
         self.query_one("#head-input", Input).disabled = not has_head
         self.query_one("#inference-mode-select", Select).disabled = not is_uma
-        self.query_one(
-            "#activation-checkpointing-select", Select
-        ).disabled = not is_uma
+        self.query_one("#activation-checkpointing-select", Select).disabled = not is_uma
         self.query_one("#torch-threads-input", Input).disabled = False
         self.query_one("#grace-memory-limit-input", Input).disabled = not is_grace
-        self.query_one(
-            "#grace-neighbor-cache-switch", Switch
-        ).disabled = not is_grace
+        self.query_one("#grace-neighbor-cache-switch", Switch).disabled = not is_grace
         self.query_one("#grace-neighbor-skin-input", Input).disabled = not is_grace
 
         head_label = self.query_one("#head-label", Label)
@@ -898,7 +894,9 @@ class ConfigScreen(Screen):
                 self.notify("Temperature must be a number", severity="error")
                 return
             if not math.isfinite(temp) or temp < 0:
-                self.notify("Temperature must be a finite value >= 0 K", severity="error")
+                self.notify(
+                    "Temperature must be a finite value >= 0 K", severity="error"
+                )
                 return
             self.app.update_config("temperature", temp)
 
@@ -963,11 +961,11 @@ class ConfigScreen(Screen):
                 self.app.update_config("friction", friction)
             elif self.app.get_config("ensemble") == "NVT" and thermostat == "BUSSI":
                 try:
-                    bussi_tau = float(
-                        self.query_one("#bussi-tau-input", Input).value
-                    )
+                    bussi_tau = float(self.query_one("#bussi-tau-input", Input).value)
                 except ValueError:
-                    self.notify("Bussi coupling time must be a number", severity="error")
+                    self.notify(
+                        "Bussi coupling time must be a number", severity="error"
+                    )
                     return
                 if not math.isfinite(bussi_tau) or bussi_tau <= 0:
                     self.notify(
@@ -978,11 +976,11 @@ class ConfigScreen(Screen):
                 self.app.update_config("bussi_tau", bussi_tau)
             elif self.app.get_config("ensemble") == "NVT" and thermostat == "NHC":
                 try:
-                    nhc_tdamp = float(
-                        self.query_one("#nhc-tdamp-input", Input).value
-                    )
+                    nhc_tdamp = float(self.query_one("#nhc-tdamp-input", Input).value)
                 except ValueError:
-                    self.notify("NHC thermostat time must be a number", severity="error")
+                    self.notify(
+                        "NHC thermostat time must be a number", severity="error"
+                    )
                     return
                 if not math.isfinite(nhc_tdamp) or nhc_tdamp <= 0:
                     self.notify(
@@ -991,24 +989,24 @@ class ConfigScreen(Screen):
                     )
                     return
                 try:
-                    nhc_tchain = int(
-                        self.query_one("#nhc-tchain-input", Input).value
-                    )
+                    nhc_tchain = int(self.query_one("#nhc-tchain-input", Input).value)
                 except ValueError:
                     self.notify("NHC chain length must be an integer", severity="error")
                     return
                 try:
-                    nhc_tloop = int(
-                        self.query_one("#nhc-tloop-input", Input).value
-                    )
+                    nhc_tloop = int(self.query_one("#nhc-tloop-input", Input).value)
                 except ValueError:
-                    self.notify("NHC thermostat substeps must be an integer", severity="error")
+                    self.notify(
+                        "NHC thermostat substeps must be an integer", severity="error"
+                    )
                     return
                 if nhc_tchain < 1:
                     self.notify("NHC chain length must be >= 1", severity="error")
                     return
                 if nhc_tloop < 1:
-                    self.notify("NHC thermostat substeps must be >= 1", severity="error")
+                    self.notify(
+                        "NHC thermostat substeps must be >= 1", severity="error"
+                    )
                     return
                 self.app.update_config("nhc_tdamp", nhc_tdamp)
                 self.app.update_config("nhc_tchain", nhc_tchain)
@@ -1022,7 +1020,9 @@ class ConfigScreen(Screen):
                     self.query_one("#pre-relax-steps-input", Input).value
                 )
             except ValueError:
-                self.notify("Pre-relaxation max steps must be an integer", severity="error")
+                self.notify(
+                    "Pre-relaxation max steps must be an integer", severity="error"
+                )
                 return
             if pre_relax_steps < 0:
                 self.notify("Pre-relaxation max steps must be >= 0", severity="error")

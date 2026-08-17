@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 from ase import Atoms
+
 from mlipx.writers.trajectory import TrajectoryWriter
 from mlipx.writers.xdatcar import XdatcarWriter
 
@@ -19,13 +20,23 @@ def _tmp_path(tmp_path: Path, name: str) -> Path:
 
 def test_xdatcar_write_from_md_with_atoms_objects(tmp_path: Path) -> None:
     frames = [
-        Atoms("H2O", positions=[[0, 0, 0], [0.9, 0, 0], [0, 0.9, 0]],
-              cell=[5, 5, 5], pbc=True),
-        Atoms("H2O", positions=[[0.1, 0, 0], [1.0, 0, 0], [0.1, 0.9, 0]],
-              cell=[5, 5, 5], pbc=True),
+        Atoms(
+            "H2O",
+            positions=[[0, 0, 0], [0.9, 0, 0], [0, 0.9, 0]],
+            cell=[5, 5, 5],
+            pbc=True,
+        ),
+        Atoms(
+            "H2O",
+            positions=[[0.1, 0, 0], [1.0, 0, 0], [0.1, 0.9, 0]],
+            cell=[5, 5, 5],
+            pbc=True,
+        ),
     ]
     out = _tmp_path(tmp_path, "traj1.XDATCAR")
-    XdatcarWriter().write_from_md(out, [{"atoms": a, "step": i} for i, a in enumerate(frames)])
+    XdatcarWriter().write_from_md(
+        out, [{"atoms": a, "step": i} for i, a in enumerate(frames)]
+    )
     text = out.read_text(encoding="utf-8")
     assert "Direct configuration=" in text
     assert text.count("Direct configuration=") == 2
@@ -34,10 +45,18 @@ def test_xdatcar_write_from_md_with_atoms_objects(tmp_path: Path) -> None:
 def test_xdatcar_write_from_md_with_positions_and_symbols(tmp_path: Path) -> None:
     """Regression: frames with only positions+symbols must work."""
     frames = [
-        {"positions": [[0, 0, 0], [0.9, 0, 0], [0, 0.9, 0]],
-         "symbols": ["H", "H", "O"], "cell": [[5, 0, 0], [0, 5, 0], [0, 0, 5]], "pbc": True},
-        {"positions": [[0.1, 0, 0], [1.0, 0, 0], [0.1, 0.9, 0]],
-         "symbols": ["H", "H", "O"], "cell": [[5, 0, 0], [0, 5, 0], [0, 0, 5]], "pbc": True},
+        {
+            "positions": [[0, 0, 0], [0.9, 0, 0], [0, 0.9, 0]],
+            "symbols": ["H", "H", "O"],
+            "cell": [[5, 0, 0], [0, 5, 0], [0, 0, 5]],
+            "pbc": True,
+        },
+        {
+            "positions": [[0.1, 0, 0], [1.0, 0, 0], [0.1, 0.9, 0]],
+            "symbols": ["H", "H", "O"],
+            "cell": [[5, 0, 0], [0, 5, 0], [0, 0, 5]],
+            "pbc": True,
+        },
     ]
     out = _tmp_path(tmp_path, "traj2.XDATCAR")
     XdatcarWriter().write_from_md(out, frames)

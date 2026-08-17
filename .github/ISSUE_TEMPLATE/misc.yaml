@@ -1,10 +1,15 @@
-name: Other
-description: A report is not a bug exactly
-
+name: Question / Feature request
+description: Ask a question or propose a feature
+labels: ["question"]
 body:
-  - type: textarea
+  - type: markdown
     attributes:
-      label: What would you like to report?
-      description: A clear and concise description of what you would like to report.
+      value: |
+        Use this for general questions, feature requests, or usage help.
+  - type: textarea
+    id: body
+    attributes:
+      label: Your question or feature request
+      description: Please be specific.
     validations:
       required: true

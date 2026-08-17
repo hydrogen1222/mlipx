@@ -16,12 +16,10 @@ def test_plot_msd_alpha_has_all_axes_and_normal_diffusion_reference(
         "lag_time_ps": lag_time_ps,
         "fit_window_ps": {"start": 20.0, "stop": 180.0},
         "msd_by_axes_A2": {
-            axes: np.asarray([0.0, 1.0, 4.0, 7.0, 8.0])
-            for axes in requested_axes
+            axes: np.asarray([0.0, 1.0, 4.0, 7.0, 8.0]) for axes in requested_axes
         },
         "log_log_alpha_by_axes": {
-            axes: np.asarray([np.nan, 0.8, 1.0, 1.2, 1.1])
-            for axes in requested_axes
+            axes: np.asarray([np.nan, 0.8, 1.0, 1.2, 1.1]) for axes in requested_axes
         },
     }
     saved = {}

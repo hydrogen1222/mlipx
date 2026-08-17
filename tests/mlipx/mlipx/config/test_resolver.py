@@ -15,6 +15,7 @@ from mlipx.config.settings import load_settings
 # Basic resolution (built-in only)
 # ---------------------------------------------------------------------------
 
+
 def test_builtin_sp_defaults() -> None:
     rc = resolve_config(calc_type="sp")
     assert rc.calc_type == "sp"
@@ -66,6 +67,7 @@ def test_builtin_opt_defaults() -> None:
 # Source tracking
 # ---------------------------------------------------------------------------
 
+
 def test_source_tracking_cli_override() -> None:
     rc = resolve_config(calc_type="sp", cli={"device": "cuda:0"})
     assert rc.device == "cuda:0"
@@ -108,10 +110,7 @@ def test_only_current_calculation_section_is_loaded() -> None:
     """[opt] must not leak into MD, and [md] must not leak into OPT."""
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "settings.ini"
-        ini.write_text(
-            "[md]\ntemperature = 650\n"
-            "[opt]\nmax_steps = 17\n"
-        )
+        ini.write_text("[md]\ntemperature = 650\n" "[opt]\nmax_steps = 17\n")
         settings = load_settings(explicit=str(ini))
         md = resolve_config(calc_type="md", settings=settings)
         opt = resolve_config(calc_type="opt", settings=settings)
@@ -198,6 +197,7 @@ def test_non_uma_turbo_mode_fails_instead_of_being_ignored() -> None:
 # Model aliases
 # ---------------------------------------------------------------------------
 
+
 def test_model_alias_sets_engine_and_task() -> None:
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "settings.ini"
@@ -243,7 +243,9 @@ def test_cli_dtype_overrides_alias() -> None:
         s = load_settings(explicit=str(ini))
         # CLI dtype=float64 overrides alias dtype=float32
         rc = resolve_config(
-            calc_type="sp", settings=s, model_alias_name="mace_test",
+            calc_type="sp",
+            settings=s,
+            model_alias_name="mace_test",
             cli={"default_dtype": "float64"},
         )
         assert rc.calculator_options.get("default_dtype") == "float64"
@@ -254,14 +256,11 @@ def test_cli_dtype_overrides_alias() -> None:
 # Profiles
 # ---------------------------------------------------------------------------
 
+
 def test_profile_applies_overrides() -> None:
     with tempfile.TemporaryDirectory() as d:
         ini = Path(d) / "settings.ini"
-        ini.write_text(
-            "[profile:gpu_prod]\n"
-            "device = cuda:1\n"
-            "max_steps = 1000\n"
-        )
+        ini.write_text("[profile:gpu_prod]\n" "device = cuda:1\n" "max_steps = 1000\n")
         s = load_settings(explicit=str(ini))
         rc = resolve_config(calc_type="opt", settings=s, profile_name="gpu_prod")
         assert rc.device == "cuda:1"
@@ -271,6 +270,7 @@ def test_profile_applies_overrides() -> None:
 # ---------------------------------------------------------------------------
 # Settings bag - non-run keys don't pollute run_options
 # ---------------------------------------------------------------------------
+
 
 def test_output_keys_land_in_settings() -> None:
     """INCAR output keys (WRITE_FORCES, etc.) go to settings, not run_options."""
@@ -288,6 +288,7 @@ def test_unsupported_output_format_fails_closed() -> None:
 # as_dict / JSON roundtrip
 # ---------------------------------------------------------------------------
 
+
 def test_as_dict_is_serializable() -> None:
     rc = resolve_config(calc_type="md", cli={"temperature": 500.0})
     d = rc.as_dict()
@@ -300,6 +301,7 @@ def test_as_dict_is_serializable() -> None:
 # ---------------------------------------------------------------------------
 # Edge cases
 # ---------------------------------------------------------------------------
+
 
 def test_empty_cli_is_noop() -> None:
     rc_default = resolve_config(calc_type="sp")
@@ -355,4 +357,6 @@ def test_settings_sp_section_does_not_leak_into_other_calc_types() -> None:
         ):
             rc = resolve_config(calc_type=ct, settings=s)
             assert rc.device == expected_device, f"{ct} leaked [sp] device"
-            assert rc.inference_mode == expected_mode, f"{ct} leaked [sp] inference_mode"
+            assert (
+                rc.inference_mode == expected_mode
+            ), f"{ct} leaked [sp] inference_mode"

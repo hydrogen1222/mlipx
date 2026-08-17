@@ -54,9 +54,13 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 如果喜欢手动安装，请为每个引擎创建一个 venv：
 
 ```bash
-# UMA（默认）
-uv sync --frozen
-uv run mlipx doctor --engine uma --device auto
+# UMA（默认）——和其他引擎一样显式安装
+uv venv --python 3.12 .venv
+uv pip install --no-config --python .venv/bin/python \
+  "torch==2.8.0" --index-url https://download.pytorch.org/whl/cu126
+uv pip install --no-config --python .venv/bin/python \
+  -e ./mlipx "fairchem-core==2.21.0"
+.venv/bin/mlipx doctor --engine uma --device auto
 
 # MACE
 uv venv --python 3.12 .venv-mace
@@ -87,7 +91,7 @@ uv pip install --no-config --python .venv-grace/bin/python \
 
 | 引擎 | 环境 | 前缀 |
 |---|---|---|
-| UMA | `.venv` | `uv run mlipx ...` |
+| UMA | `.venv` | `.venv/bin/mlipx ...` |
 | MACE | `.venv-mace` | `.venv-mace/bin/mlipx ...` |
 | DPA | `.venv-dpa` | `.venv-dpa/bin/mlipx ...` |
 | GRACE | `.venv-grace` | `.venv-grace/bin/mlipx ...` |
@@ -96,19 +100,28 @@ uv pip install --no-config --python .venv-grace/bin/python \
 
 安装器和 `mlipx setup` 会自动选择正确的 PyTorch/CUDA wheel。
 
-| GPU 系列 | 代表显卡 | 计算能力 | CUDA 路线 | 状态 |
-|---|---|---|---|---|
-| Maxwell | GTX 960、TITAN X | sm_50/52 | cu126 Legacy | ⚠️ 实验性 |
-| Pascal | **GTX 1080 Ti**、P100 | sm_60/61 | cu126 Legacy | 已验证 |
-| Volta | **V100** | sm_70 | cu126 Legacy | 已验证 |
-| Turing | RTX 20xx | sm_75 | cu128+ Modern | 已验证 |
-| Ampere | **RTX 3080 Ti**、30xx | sm_80/86 | cu128+ Modern | 已验证 |
-| Ada | **RTX 4090**、40xx | sm_89 | cu128+ Modern | 已验证 |
-| Hopper | H100 | sm_90 | cu128+ Modern | 已验证 |
-| Blackwell | RTX 50xx | sm_100/120 | cu128+ Modern | 已验证 |
-| 无 | 仅 CPU | — | CPU wheels | — |
+| GPU 系列 | 代表显卡 | 计算能力 | CUDA 路线 |
+|---|---|---|---|
+| Maxwell | GTX 960、TITAN X | sm_50/52 | cu126 Legacy（⚠️ 实验性） |
+| Pascal | **GTX 1080 Ti**、P100 | sm_60/61 | cu126 Legacy |
+| Volta | **V100** | sm_70 | cu126 Legacy |
+| Turing | RTX 20xx | sm_75 | cu128+ Modern |
+| Ampere | **RTX 3080 Ti**、30xx | sm_80/86 | cu128+ Modern |
+| Ada | **RTX 4090**、40xx | sm_89 | cu128+ Modern |
+| Hopper | H100 | sm_90 | cu128+ Modern |
+| Blackwell | RTX 50xx | sm_100/120 | cu128+ Modern |
+| 无 | 仅 CPU | — | CPU wheels |
 
 > **为什么有两条 CUDA 路线？** Maxwell/Pascal/Volta 必须使用 **cu126 Legacy** 通道：PyTorch 2.8+ 从 cu128 构建中移除了 Maxwell/Pascal，PyTorch 2.11+ 从 cu128+ 中移除了 Volta。Turing+ 使用**现代**通道（torch 2.8–2.10 用 cu128，torch 2.12+ 用 cu130）。Maxwell 标记为实验性，因为 TensorFlow 2.20 官方 wheel 从 sm_60 开始构建。
+
+**各引擎验证状态**（来自 `mlipx/install/compatibility.py`；目前仅 Volta/V100 经过 mlipx 实测，其余为上游支持但待真机 smoke test）：
+
+| 引擎 | Maxwell | Pascal | Volta | Turing+ |
+|---|---|---|---|---|
+| UMA | experimental | needs smoke test | **verified** | needs smoke test |
+| MACE | experimental | needs smoke test | **verified** | needs smoke test |
+| DPA | experimental | needs smoke test | **verified** | needs smoke test |
+| GRACE | experimental | needs smoke test | **verified** | needs smoke test |
 
 ### 下载源
 
@@ -128,20 +141,20 @@ PyPI 包和 PyTorch CUDA wheel 分开处理。安装器**不会修改**你的全
 ### 单点能（UMA）
 
 ```bash
-uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
+.venv/bin/mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
 ```
 
 ### 几何优化
 
 ```bash
-uv run mlipx opt structure.cif --model uma-s-1.pt --task omat \
+.venv/bin/mlipx opt structure.cif --model uma-s-1.pt --task omat \
   --cell-opt --fmax 0.02
 ```
 
 ### 分子动力学
 
 ```bash
-uv run mlipx md structure.cif --model uma-s-1.pt --task omat \
+.venv/bin/mlipx md structure.cif --model uma-s-1.pt --task omat \
   --device cuda --steps 10000
 ```
 
@@ -166,8 +179,8 @@ uv run mlipx md structure.cif --model uma-s-1.pt --task omat \
 ### INCAR 文件（VASP 风格）
 
 ```bash
-uv run mlipx template sp          # 生成 INCAR.sp
-uv run mlipx run -i INCAR.sp -s structure.cif
+.venv/bin/mlipx template sp          # 生成 INCAR.sp
+.venv/bin/mlipx run -i INCAR.sp -s structure.cif
 ```
 
 示例 `INCAR.sp`：
@@ -183,7 +196,7 @@ DEVICE      = cpu
 ### 批量计算
 
 ```bash
-uv run mlipx batch structures/ --model uma-s-1.pt \
+.venv/bin/mlipx batch structures/ --model uma-s-1.pt \
   --model-type uma --task omat --device cuda \
   --calc-type sp --pattern "*.cif" --output batch_results
 ```
@@ -198,28 +211,30 @@ uv run mlipx batch structures/ --model uma-s-1.pt \
 
 ```bash
 # 先验证（检查时间轴、PBC、坐标约定、任务资格）
-uv run mlipx analyze results/LGPS-800K validate
+.venv/bin/mlipx analyze results/LGPS-800K validate
 
 # 热力学
-uv run mlipx analyze results/LGPS-800K thermo
+.venv/bin/mlipx analyze results/LGPS-800K thermo
 
 # RDF / 配位数
-uv run mlipx analyze results/LGPS-800K rdf \
+.venv/bin/mlipx analyze results/LGPS-800K rdf \
   --center Li --neighbor S --rmax 6 --cn-cutoff 3
 
 # MSD
-uv run mlipx analyze results/LGPS-800K msd \
+.venv/bin/mlipx analyze results/LGPS-800K msd \
   --mobile Li --axes x,y,z,xyz --drift-reference nonmobile
 
 # 密度 / VACF / 速度谱 / Arrhenius
-uv run mlipx analyze results/LGPS-800K density --mobile Li --spacing 0.25
-uv run mlipx analyze results/LGPS-800K vacf --species Li
-uv run mlipx analyze results/LGPS-800K spectrum --species Li --taper one-sided-cosine
+.venv/bin/mlipx analyze results/LGPS-800K density --mobile Li --spacing 0.25
+.venv/bin/mlipx analyze results/LGPS-800K vacf --species Li
+.venv/bin/mlipx analyze results/LGPS-800K spectrum --species Li --taper one-sided-cosine
 
 # 由多个温度下的独立输运结果拟合 Arrhenius
-uv run mlipx analyze RUN arrhenius \
-  --temperature 600,700,800 --diffusivity 1e-10,2e-10,5e-10 \
-  --diffusivity-std 0.1e-10,0.2e-10,0.5e-10
+# （每个值用重复的 flag 分别传入）
+.venv/bin/mlipx analyze RUN arrhenius \
+  --temperature 600 --temperature 700 --temperature 800 \
+  --diffusivity 1e-10 --diffusivity 2e-10 --diffusivity 5e-10 \
+  --diffusivity-std 0.1e-10 --diffusivity-std 0.2e-10 --diffusivity-std 0.5e-10
 ```
 
 ### 输运（扩散 + 电导率）
@@ -227,7 +242,7 @@ uv run mlipx analyze RUN arrhenius \
 协方差感知的输运分析使用 [kinisi 2.x](https://joss.theoj.org/papers/10.21105/joss.05984)。必须显式给出拟合起点：
 
 ```bash
-uv run mlipx analyze RUN transport --mobile Li --charge 1 \
+.venv/bin/mlipx analyze RUN transport --mobile Li --charge 1 \
   --drift-reference nonmobile --fit-start-ps 40 \
   --lag-step-ps 2 --lag-stop-ps 200 --random-seed 0
 ```
@@ -247,7 +262,7 @@ GEMDAT 是可选的后端，用于位点映射、跳跃和渗流分析：
 
 ```bash
 python -m pip install -e './mlipx[analysis,electrolyte]'
-uv run mlipx analyze RUN electrolyte --mobile Li --sites Li_sites.cif \
+.venv/bin/mlipx analyze RUN electrolyte --mobile Li --sites Li_sites.cif \
   --jump-dimensions 3 --percolation-axes xyz
 ```
 
@@ -342,8 +357,6 @@ OUTPUT/
 
 ## 后台任务与队列
 
-### 后台任务与队列
-
 后台任务通过队列 JSON 接口提交：
 
 ```bash
@@ -366,14 +379,14 @@ cat > tasks.json <<'JSON'
 JSON
 
 # 2. 提交并启动
-uv run mlipx queue submit tasks.json
-uv run mlipx queue start            # 后台调度器
-uv run mlipx queue status
+.venv/bin/mlipx queue submit tasks.json
+.venv/bin/mlipx queue start            # 后台调度器
+.venv/bin/mlipx queue status
 
 # 3. 管理
-uv run mlipx jobs                   # 查看运行中/完成/失败任务
-uv run mlipx kill <job-id>          # 终止运行中任务
-uv run mlipx clean                  # 清理已完成/失败记录
+.venv/bin/mlipx jobs                   # 查看运行中/完成/失败任务
+.venv/bin/mlipx kill <job-id>          # 终止运行中任务
+.venv/bin/mlipx clean                  # 清理已完成/失败记录
 ```
 
 每个任务可以使用自己的 Python 环境 / 引擎 / 模型。TUI 也内置队列控制。
@@ -400,7 +413,7 @@ uv run mlipx clean                  # 清理已完成/失败记录
 你的 PyTorch 构建没有对应 GPU 的内核。Maxwell/Pascal/Volta 使用 cu126 Legacy 通道；Turing+ 使用现代通道。运行：
 
 ```bash
-uv run mlipx setup     # 本机报告
+.venv/bin/mlipx setup     # 本机报告
 ./scripts/install_mlipx.sh --dry-run
 ```
 
@@ -424,15 +437,25 @@ NVT 默认预弛豫（最多 50 步 FIRE）；NVE 默认关闭，需要时手动
 
 ## 开发
 
-```bash
-# 安装开发依赖
-uv pip install -e './mlipx[dev]'
+使用独立的开发环境，避免与 UMA 运行时 `.venv` 冲突：
 
-# 运行测试
-uv run pytest tests/mlipx -q
+```bash
+# 1. 创建开发环境
+uv venv --python 3.12 .venv-dev
+
+# 2. 安装 mlipx（含 dev + analysis extras）
+uv pip install --python .venv-dev/bin/python -e './mlipx[dev,analysis]'
+
+# 3. 运行测试（无需安装重型 ML 后端——backend 测试会 mock/跳过）
+.venv-dev/bin/python -m pytest tests -q
 ```
 
-核心科学代码位于 `mlipx/mlipx/`；fairchem fork 位于 `packages/` 和 `src/`。安装/兼容性逻辑位于 `mlipx/mlipx/install/`。
+UMA 通过外部 `fairchem-core` 依赖提供。核心代码位于 `mlipx/mlipx/`；
+安装/兼容性逻辑位于 `mlipx/mlipx/install/`。
+
+分析 extras（可选）：`./mlipx[analysis]`（scipy/matplotlib）、
+`./mlipx[transport]`（kinisi）、`./mlipx[electrolyte]`（gemdat），或
+`./mlipx[analysis-all]` 一次性安装三者。
 
 ---
 

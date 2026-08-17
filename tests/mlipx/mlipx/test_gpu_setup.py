@@ -43,8 +43,7 @@ def test_detect_gpus_handles_quoted_commas_in_name() -> None:
 def test_detect_gpus_skips_malformed_rows() -> None:
     fake = mock.Mock(
         returncode=0,
-        stdout="bad row without enough fields\n"
-        'NVIDIA A100,8.0,535.104.05,40960\n',
+        stdout="bad row without enough fields\n" "NVIDIA A100,8.0,535.104.05,40960\n",
     )
     with mock.patch("mlipx.install.hardware.subprocess.run", return_value=fake):
         gpus = detect_gpus()
@@ -164,14 +163,20 @@ def test_engine_install_commands_cpu_only_uses_cpu_wheels() -> None:
     assert "[and-cuda]" not in grace
 
 
-def test_engine_install_commands_uma_uses_uv_sync() -> None:
+def test_engine_install_commands_uma_explicit() -> None:
+    """UMA is installed explicitly (torch + fairchem-core + editable mlipx),
+    never via `uv sync --frozen`."""
     cmds = engine_install_commands(None, "uma")
-    assert "uv sync --frozen" in "\n".join(cmds)
+    joined = "\n".join(cmds)
+    assert "uv sync" not in joined
+    assert "fairchem-core==2.21.0" in joined
+    assert "-e ./mlipx" in joined
 
 
 def test_engine_install_commands_maxwell_experimental() -> None:
     """Maxwell (sm_52) should still give commands but mark experimental."""
     cmds = engine_install_commands([_gpu(5, 2)], "uma")
     joined = "\n".join(cmds)
-    # Should still produce uv sync for UMA
-    assert "uv sync --frozen" in joined
+    # Should still produce explicit UMA install (torch + fairchem-core).
+    assert "fairchem-core==2.21.0" in joined
+    assert "torch==2.8.0" in joined

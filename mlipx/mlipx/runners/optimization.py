@@ -220,7 +220,9 @@ class OptimizationRunner(BaseRunner):
             forces = atoms.get_forces()
 
             # Abort on NaN/inf before it pollutes the trajectory/outputs.
-            self._check_finite(atoms, energy, forces, context=f"optimization step {step}")
+            self._check_finite(
+                atoms, energy, forces, context=f"optimization step {step}"
+            )
 
             trajectory.append(
                 {

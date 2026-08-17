@@ -11,6 +11,7 @@ from ase import Atoms
 from ase.calculators.calculator import Calculator
 from ase.constraints import FixAtoms, FixSymmetry
 from ase.io import write
+
 from mlipx.runners.batch import BatchRunner
 from mlipx.runners.optimization import OptimizationRunner
 from mlipx.runners.singlepoint import SinglePointRunner
@@ -85,8 +86,11 @@ def test_fix_symmetry_does_not_discard_existing_constraints(tmp_path):
             return self.prepared
 
     runner = _InspectableRunner(
-        _BulkWrapper(), fix_symmetry=True, max_steps=0,
-        output_dir=tmp_path, verbose=False,
+        _BulkWrapper(),
+        fix_symmetry=True,
+        max_steps=0,
+        output_dir=tmp_path,
+        verbose=False,
     )
     runner.run(atoms)
     assert any(isinstance(c, FixAtoms) for c in runner.prepared.constraints)
@@ -126,7 +130,11 @@ def test_explicit_charge_and_spin_override_structure_metadata(tmp_path):
     atoms = Atoms("H2", positions=[[0, 0, 0], [0, 0, 0.75]])
     atoms.info.update({"charge": 0, "spin": 1})
     runner = SinglePointRunner(
-        _Wrapper(), output_dir=tmp_path, charge=-1, spin=2, verbose=False,
+        _Wrapper(),
+        output_dir=tmp_path,
+        charge=-1,
+        spin=2,
+        verbose=False,
     )
 
     prepared = runner._prepare_atoms(atoms)
@@ -221,6 +229,7 @@ def test_batch_same_stem_different_formats_do_not_overwrite(tmp_path):
     write(structures / "sample.xyz", atoms)
     write(structures / "sample.cif", atoms)
     out = tmp_path / "out"
+
     class _BulkWrapper(_Wrapper):
         task = "bulk"
 
@@ -248,6 +257,4 @@ def test_batch_optimization_path_smoke(tmp_path):
 
 def test_batch_rejects_unsafe_shared_calculator_threads(tmp_path):
     with pytest.raises(NotImplementedError, match="shared ASE calculator"):
-        BatchRunner(
-            _Wrapper(), output_dir=tmp_path, parallel=True, max_workers=2
-        )
+        BatchRunner(_Wrapper(), output_dir=tmp_path, parallel=True, max_workers=2)

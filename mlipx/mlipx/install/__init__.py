@@ -2,8 +2,6 @@
 #
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
-#
-# Modified for the mlipx project: installation infrastructure.
 
 """
 mlipx installation infrastructure — GPU detection, compatibility matrix,
@@ -29,18 +27,26 @@ from mlipx.install.compatibility import (
     ARCH_PROFILES,
     BACKENDS,
     CUDA_CHANNELS,
-    
+    effective_cuda_channel,
     select_cuda_channel,
 )
 from mlipx.install.sources import (
     SourceProfile,
     SOURCE_PROFILES,
     resolve_source,
+    build_package_source_args,
+    build_torch_source_args,
+    build_offline_args,
 )
 from mlipx.install.plan import (
     InstallPlan,
+    InstallPlanError,
     InstallStep,
     generate_plan,
+    normalize_engines,
+    plan_to_json,
+    render_plan_shell,
+    validate_python_version,
 )
 
 __all__ = [
@@ -57,13 +63,22 @@ __all__ = [
     "ARCH_PROFILES",
     "BACKENDS",
     "CUDA_CHANNELS",
+    "effective_cuda_channel",
     "select_cuda_channel",
     # sources
     "SourceProfile",
     "SOURCE_PROFILES",
     "resolve_source",
+    "build_package_source_args",
+    "build_torch_source_args",
+    "build_offline_args",
     # plan
     "InstallPlan",
+    "InstallPlanError",
     "InstallStep",
     "generate_plan",
+    "normalize_engines",
+    "plan_to_json",
+    "render_plan_shell",
+    "validate_python_version",
 ]

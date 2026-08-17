@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from ase import Atoms
 from ase.io import read
+
 from mlipx.writers.xdatcar import XdatcarWriter, convert_to_vasp_xdatcar
 
 if TYPE_CHECKING:
@@ -23,9 +24,7 @@ def _mlipx_style_xdatcar(path: Path, *, cross_boundary: bool = False) -> None:
         if cross_boundary and step > 0:
             # drift the first atom across the x = 4.0 boundary
             pos[0][0] = 4.0 + step * 0.01
-        frames.append(
-            Atoms("H2O", positions=pos, cell=[4.0, 4.0, 4.0], pbc=True)
-        )
+        frames.append(Atoms("H2O", positions=pos, cell=[4.0, 4.0, 4.0], pbc=True))
     writer.write_header(frames[0], path)
     for i, frame in enumerate(frames):
         writer.append_frame(path, frame, step=i * 10)
@@ -160,9 +159,7 @@ def test_convert_real_vasp_xdatcar_is_noop(tmp_path: Path) -> None:
     src.write_text(vasp_content, encoding="utf-8")
     out = convert_to_vasp_xdatcar(src)
     converted = out.read_text(encoding="utf-8").splitlines()
-    for orig_line, conv_line in zip(
-        vasp_content.splitlines(), converted, strict=True
-    ):
+    for orig_line, conv_line in zip(vasp_content.splitlines(), converted, strict=True):
         # comment line may be reformatted (formula vs "unknown system");
         # everything else must match exactly
         if orig_line.startswith("unknown"):

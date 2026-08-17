@@ -184,9 +184,7 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
         "kinisi_backend_reconstruction": semantics["backend_reconstruction"],
     }
     if "collective_conductivity" in result:
-        coll = result["collective_conductivity"][
-            "sigma_collective_mS_cm_posterior"
-        ]
+        coll = result["collective_conductivity"]["sigma_collective_mS_cm_posterior"]
         fields.update(
             {
                 "sigma_collective_mean_mS_cm": coll["mean"],
@@ -317,12 +315,8 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
                     "dimensions": [fit["dimensions"] for fit in fits],
                     "fit_start_ps": [fit["fit_start_ps"] for fit in fits],
                     "fit_stop_ps": [fit["fit_stop_ps"] for fit in fits],
-                    "fit_window_source": [
-                        fit["fit_window_source"] for fit in fits
-                    ],
-                    "actual_fit_start_ps": [
-                        fit["actual_fit_start_ps"] for fit in fits
-                    ],
+                    "fit_window_source": [fit["fit_window_source"] for fit in fits],
+                    "actual_fit_start_ps": [fit["actual_fit_start_ps"] for fit in fits],
                     "actual_fit_stop_ps": [fit["actual_fit_stop_ps"] for fit in fits],
                     "fit_points": [fit["fit_points"] for fit in fits],
                     "slope_A2_ps": [fit["slope_A2_ps"] for fit in fits],

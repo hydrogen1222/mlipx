@@ -344,9 +344,7 @@ class BaseRunner(ABC):
             # energy calculation).
             if atoms.cell.rank < 3:
                 atoms.center(vacuum=6.0)
-                self.log(
-                    "Added a 6 Å vacuum cell for the non-periodic molecule."
-                )
+                self.log("Added a 6 Å vacuum cell for the non-periodic molecule.")
             if task == "omol":
                 # UMA omol reads atoms.info["charge"] (total charge) and
                 # atoms.info["spin"] (spin *multiplicity*, 1 = singlet).
@@ -362,9 +360,7 @@ class BaseRunner(ABC):
                 # on spin-enabled MACE models. Only default the total charge.
                 atoms.info.setdefault("charge", 0)
         else:
-            raise ValueError(
-                f"Unknown task {task!r}; refusing to infer PBC semantics."
-            )
+            raise ValueError(f"Unknown task {task!r}; refusing to infer PBC semantics.")
 
         return atoms
 

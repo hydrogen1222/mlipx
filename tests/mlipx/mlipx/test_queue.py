@@ -3,20 +3,19 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from pathlib import Path
 
 import pytest
 
-from mlipx.jobs import JobManager, JobStatus
+from mlipx.jobs import JobManager
 from mlipx.queue import (
     QueueScheduler,
     build_mlipx_command,
+    parse_task_file,
     pause_pending_job,
     pause_scheduler,
-    parse_task_file,
     queue_paused,
     resume_paused_job,
     resume_scheduler,
@@ -27,15 +26,21 @@ from mlipx.queue import (
     submit_task_file,
 )
 
-
 # ---------------------------------------------------------------------------
 # build_mlipx_command
 # ---------------------------------------------------------------------------
 
+
 def test_build_command_base() -> None:
     cmd = build_mlipx_command(
-        "sp", "/s/a.cif", "/m/m.pt", model_type="uma", task="omat",
-        device="cuda:0", output_dir="/o", job_name="j1",
+        "sp",
+        "/s/a.cif",
+        "/m/m.pt",
+        model_type="uma",
+        task="omat",
+        device="cuda:0",
+        output_dir="/o",
+        job_name="j1",
         python="/venv/bin/python",
     )
     assert cmd[0] == "/venv/bin/python"
@@ -48,9 +53,15 @@ def test_build_command_base() -> None:
 
 def test_build_command_opt_options() -> None:
     cmd = build_mlipx_command(
-        "opt", "s.cif", "m.pt", options={
-            "fmax": 0.02, "max_steps": 100, "optimizer": "BFGS",
-            "cell_opt": True, "fix_symmetry": False,
+        "opt",
+        "s.cif",
+        "m.pt",
+        options={
+            "fmax": 0.02,
+            "max_steps": 100,
+            "optimizer": "BFGS",
+            "cell_opt": True,
+            "fix_symmetry": False,
         },
     )
     assert "--fmax" in cmd and "0.02" in cmd
@@ -62,11 +73,19 @@ def test_build_command_opt_options() -> None:
 
 def test_build_command_md_options() -> None:
     cmd = build_mlipx_command(
-        "md", "s.cif", "m.pt", options={
-            "ensemble": "NVT", "temperature": 500.0, "steps": 100,
-            "thermostat": "NHC", "nhc_tdamp": 150.0,
-            "nhc_tchain": 4, "nhc_tloop": 2,
-            "pre_relax": False, "seed": 42,
+        "md",
+        "s.cif",
+        "m.pt",
+        options={
+            "ensemble": "NVT",
+            "temperature": 500.0,
+            "steps": 100,
+            "thermostat": "NHC",
+            "nhc_tdamp": 150.0,
+            "nhc_tchain": 4,
+            "nhc_tloop": 2,
+            "pre_relax": False,
+            "seed": 42,
         },
     )
     assert "--temp" in cmd and "500.0" in cmd
@@ -81,7 +100,11 @@ def test_build_command_md_options() -> None:
 
 def test_build_command_forwards_molecular_electronic_state() -> None:
     cmd = build_mlipx_command(
-        "sp", "molecule.xyz", "uma.pt", model_type="uma", task="omol",
+        "sp",
+        "molecule.xyz",
+        "uma.pt",
+        model_type="uma",
+        task="omol",
         options={"charge": -1, "spin": 2},
     )
     assert cmd[cmd.index("--charge") + 1] == "-1"
@@ -92,10 +115,19 @@ def test_build_command_engine_option_isolation() -> None:
     """UMA-only options must not leak into a GRACE task, MACE dtype must not
     leak into UMA, etc."""
     grace = build_mlipx_command(
-        "md", "s.cif", "m", model_type="grace",
-        options={"inference_mode": "turbo", "activation_checkpointing": True,
-                 "torch_num_threads": 4, "head": "x", "default_dtype": "float64",
-                 "gpu_memory_growth": True, "gpu_memory_limit_mb": 6144},
+        "md",
+        "s.cif",
+        "m",
+        model_type="grace",
+        options={
+            "inference_mode": "turbo",
+            "activation_checkpointing": True,
+            "torch_num_threads": 4,
+            "head": "x",
+            "default_dtype": "float64",
+            "gpu_memory_growth": True,
+            "gpu_memory_limit_mb": 6144,
+        },
     )
     assert "--inference-mode" not in grace
     assert "--activation-checkpointing" not in grace
@@ -105,9 +137,11 @@ def test_build_command_engine_option_isolation() -> None:
     assert grace[grace.index("--gpu-memory-limit-mb") + 1] == "6144"
 
     mace = build_mlipx_command(
-        "sp", "s.cif", "m", model_type="mace",
-        options={"default_dtype": "float64", "head": "h1",
-                 "inference_mode": "turbo"},
+        "sp",
+        "s.cif",
+        "m",
+        model_type="mace",
+        options={"default_dtype": "float64", "head": "h1", "inference_mode": "turbo"},
     )
     assert "--dtype" in mace and "float64" in mace
     assert "--head" in mace and "h1" in mace
@@ -115,13 +149,15 @@ def test_build_command_engine_option_isolation() -> None:
     assert "--gpu-memory-limit-mb" not in mace
 
     dpa = build_mlipx_command(
-        "sp", "s.cif", "m", model_type="dpa", options={"head": "branch1"})
+        "sp", "s.cif", "m", model_type="dpa", options={"head": "branch1"}
+    )
     assert "--head" in dpa and "branch1" in dpa
 
 
 # ---------------------------------------------------------------------------
 # parse_task_file
 # ---------------------------------------------------------------------------
+
 
 def _write_tasks(tmp_path: Path, tasks: list[dict], max_conc: int = 1) -> Path:
     path = tmp_path / "tasks.json"
@@ -138,8 +174,12 @@ def _sample_task(tmp_path: Path, name: str = "t1", **overrides) -> dict:
     model = tmp_path / "m.pt"
     model.write_text("dummy", encoding="utf-8")
     task = {
-        "name": name, "calc_type": "opt", "structure": str(struct),
-        "model": str(model), "model_type": "uma", "device": "cuda:0",
+        "name": name,
+        "calc_type": "opt",
+        "structure": str(struct),
+        "model": str(model),
+        "model_type": "uma",
+        "device": "cuda:0",
     }
     task.update(overrides)
     return task
@@ -193,8 +233,10 @@ def test_parse_task_file_missing_structure(tmp_path: Path) -> None:
 
 
 def test_parse_task_file_duplicate_names(tmp_path: Path) -> None:
-    path = _write_tasks(tmp_path, [_sample_task(tmp_path, name="dup"),
-                                  _sample_task(tmp_path, name="dup")])
+    path = _write_tasks(
+        tmp_path,
+        [_sample_task(tmp_path, name="dup"), _sample_task(tmp_path, name="dup")],
+    )
     with pytest.raises(ValueError, match="duplicate"):
         parse_task_file(path)
 
@@ -206,9 +248,7 @@ def test_parse_task_file_bad_python(tmp_path: Path) -> None:
 
 
 def test_parse_task_file_options_reject_structural_keys(tmp_path: Path) -> None:
-    path = _write_tasks(
-        tmp_path, [_sample_task(tmp_path, options={"calc_type": "md"})]
-    )
+    path = _write_tasks(tmp_path, [_sample_task(tmp_path, options={"calc_type": "md"})])
     with pytest.raises(ValueError, match="structural"):
         parse_task_file(path)
 
@@ -217,6 +257,7 @@ def test_parse_task_file_options_reject_structural_keys(tmp_path: Path) -> None:
 # JobManager queue methods
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def mgr(tmp_path: Path) -> JobManager:
     return JobManager(jobs_dir=tmp_path / "jobs")
@@ -224,8 +265,12 @@ def mgr(tmp_path: Path) -> JobManager:
 
 def _enqueue(mgr: JobManager, job_id: str, device: str = "cpu") -> None:
     mgr.enqueue(
-        job_id=job_id, calc_type="sp", structure="s.cif", formula="H2O",
-        natoms=3, device=device,
+        job_id=job_id,
+        calc_type="sp",
+        structure="s.cif",
+        formula="H2O",
+        natoms=3,
+        device=device,
         cmd=[sys.executable, "-c", "pass"],
     )
 
@@ -274,15 +319,22 @@ def test_mark_running_missing_job(mgr: JobManager) -> None:
 # QueueScheduler
 # ---------------------------------------------------------------------------
 
-def _queued_cmd(mgr: JobManager, job_id: str, marker_file: Path, sleep: float = 0.0) -> None:
+
+def _queued_cmd(
+    mgr: JobManager, job_id: str, marker_file: Path, sleep: float = 0.0
+) -> None:
     """Queue a job whose command writes a marker file and exits."""
     code = (
         f"import time,sys; time.sleep({sleep}); "
         f"open({str(marker_file)!r},'w').write({job_id!r})"
     )
     mgr.enqueue(
-        job_id=job_id, calc_type="sp", structure="s.cif", formula="X",
-        natoms=1, device="cpu",
+        job_id=job_id,
+        calc_type="sp",
+        structure="s.cif",
+        formula="X",
+        natoms=1,
+        device="cpu",
         cmd=[sys.executable, "-c", code],
     )
 
@@ -362,7 +414,9 @@ def test_scheduler_pause_resume_are_idempotent(tmp_path: Path) -> None:
     assert resume_scheduler(jobs_dir) is False
 
 
-def test_pause_one_pending_job_does_not_block_other_pending_jobs(tmp_path: Path) -> None:
+def test_pause_one_pending_job_does_not_block_other_pending_jobs(
+    tmp_path: Path,
+) -> None:
     """A paused job is skipped while other pending jobs continue FIFO dispatch."""
     mgr = JobManager(jobs_dir=tmp_path / "jobs")
     _queued_cmd(mgr, "j1", tmp_path / "m1", sleep=0.6)
@@ -414,24 +468,36 @@ def test_scheduler_max_concurrent_two(tmp_path: Path) -> None:
 def test_scheduler_marks_no_command_job_failed(tmp_path: Path) -> None:
     mgr = JobManager(jobs_dir=tmp_path / "jobs")
     mgr.enqueue(
-        job_id="empty", calc_type="sp", structure="s.cif", formula="X",
-        natoms=1, device="cpu", cmd=[],
+        job_id="empty",
+        calc_type="sp",
+        structure="s.cif",
+        formula="X",
+        natoms=1,
+        device="cpu",
+        cmd=[],
     )
     scheduler = QueueScheduler(jobs_dir=mgr.jobs_dir, max_concurrent=1)
     scheduler.run_once()
     assert mgr.get_job("empty")["status"] == "failed"
+
+
 def test_scheduler_reaps_dead_worker_pid(tmp_path: Path) -> None:
     """A RUNNING job whose worker is gone is marked FAILED and its slot freed.
 
     Regression: a worker that died without updating its job state (kill -9,
     backend crash) previously stayed RUNNING forever, permanently occupying a
     concurrency slot and blocking the queue."""
-    import subprocess  # noqa: PLC0415
+    import subprocess
 
     mgr = JobManager(jobs_dir=tmp_path / "jobs")
     mgr.enqueue(
-        job_id="zombie", calc_type="sp", structure="s.cif", formula="X",
-        natoms=1, device="cpu", cmd=[sys.executable, "-c", "pass"],
+        job_id="zombie",
+        calc_type="sp",
+        structure="s.cif",
+        formula="X",
+        natoms=1,
+        device="cpu",
+        cmd=[sys.executable, "-c", "pass"],
     )
     # Record a PID that no longer exists (spawn one and let it exit).
     probe = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -468,8 +534,9 @@ def test_scheduler_run_forever_stop_file(tmp_path: Path) -> None:
     mgr = JobManager(jobs_dir=tmp_path / "jobs")
     _queued_cmd(mgr, "j1", tmp_path / "m1")
     stop_file = tmp_path / "stop"
-    scheduler = QueueScheduler(jobs_dir=mgr.jobs_dir, max_concurrent=1,
-                               poll_interval=0.5)
+    scheduler = QueueScheduler(
+        jobs_dir=mgr.jobs_dir, max_concurrent=1, poll_interval=0.5
+    )
 
     def _stop_later():
         time.sleep(1.2)
@@ -484,6 +551,7 @@ def test_scheduler_run_forever_stop_file(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # submit_task_file
 # ---------------------------------------------------------------------------
+
 
 def test_submit_task_file_enqueues(tmp_path: Path) -> None:
     path = _write_tasks(tmp_path, [_sample_task(tmp_path, name="jobA")])
@@ -502,8 +570,13 @@ def test_submit_task_file_enqueues(tmp_path: Path) -> None:
 def test_submit_task_file_multiple(tmp_path: Path) -> None:
     tasks = [
         _sample_task(tmp_path, name="opt1", calc_type="opt"),
-        _sample_task(tmp_path, name="md1", calc_type="md", model_type="grace",
-                     options={"temperature": 400.0}),
+        _sample_task(
+            tmp_path,
+            name="md1",
+            calc_type="md",
+            model_type="grace",
+            options={"temperature": 400.0},
+        ),
     ]
     path = _write_tasks(tmp_path, tasks, max_conc=2)
     mgr = JobManager(jobs_dir=tmp_path / "jobs")
@@ -518,6 +591,7 @@ def test_submit_task_file_multiple(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 # Scheduler start/stop/status
 # ---------------------------------------------------------------------------
+
 
 def test_start_stop_status_scheduler(tmp_path: Path) -> None:
     jobs_dir = tmp_path / "jobs"

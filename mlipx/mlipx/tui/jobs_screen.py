@@ -114,6 +114,7 @@ class JobsScreen(Screen):
                 "[yellow]○ Scheduler not running[/] — queued jobs wait until "
                 f"you start it (or use: mlipx queue start){suffix}"
             )
+
     def _refresh_table(self) -> None:
         table = self.query_one("#jobs-table", DataTable)
         selected_job_id: str | None = None
@@ -285,6 +286,7 @@ class JobsScreen(Screen):
         if resume_paused_job(self._job_manager.jobs_dir, job_id):
             self.app.notify(f"Resumed {job_id}; it is pending again.", title="Job")
             self._refresh_table()
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Show job detail/log on selection."""
         row_key = event.row_key

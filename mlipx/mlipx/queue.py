@@ -54,7 +54,10 @@ _OPT_FLAGS: dict[str, tuple[str, ...]] = {
     "charge": ("--charge",),
     "spin": ("--spin",),
     "inference_mode": ("--inference-mode",),
-    "activation_checkpointing": ("--activation-checkpointing", "--no-activation-checkpointing"),
+    "activation_checkpointing": (
+        "--activation-checkpointing",
+        "--no-activation-checkpointing",
+    ),
     "torch_num_threads": ("--cpu-threads",),
     "gpu_memory_growth": ("--gpu-memory-growth", "--no-gpu-memory-growth"),
     "gpu_memory_limit_mb": ("--gpu-memory-limit-mb",),
@@ -151,12 +154,16 @@ def build_mlipx_command(
             continue
         if key == "head" and engine not in {"mace", "dpa"}:
             continue
-        if key in {
-            "gpu_memory_growth",
-            "gpu_memory_limit_mb",
-            "neighbor_cache",
-            "neighbor_skin",
-        } and engine != "grace":
+        if (
+            key
+            in {
+                "gpu_memory_growth",
+                "gpu_memory_limit_mb",
+                "neighbor_cache",
+                "neighbor_skin",
+            }
+            and engine != "grace"
+        ):
             continue
         flags = _OPT_FLAGS[key]
         if isinstance(value, bool):
@@ -206,7 +213,9 @@ def parse_task_file(path: str | Path) -> dict[str, Any]:
     try:
         max_concurrent = int(max_concurrent)
     except (TypeError, ValueError) as exc:
-        raise ValueError(f"max_concurrent must be an integer, got {max_concurrent!r}") from exc
+        raise ValueError(
+            f"max_concurrent must be an integer, got {max_concurrent!r}"
+        ) from exc
     if max_concurrent < 1:
         raise ValueError(f"max_concurrent must be >= 1, got {max_concurrent}")
 
@@ -254,7 +263,9 @@ def parse_task_file(path: str | Path) -> dict[str, Any]:
         cleaned: dict[str, Any] = {}
         for key, value in options.items():
             if key in _STRUCTURAL_KEYS:
-                raise ValueError(f"{label}: option {key!r} is a structural key, not an option")
+                raise ValueError(
+                    f"{label}: option {key!r} is a structural key, not an option"
+                )
             cleaned[key] = value
 
         tasks.append(
@@ -275,9 +286,7 @@ def parse_task_file(path: str | Path) -> dict[str, Any]:
     return {"max_concurrent": max_concurrent, "tasks": tasks}
 
 
-def submit_task_file(
-    mgr: JobManager, path: str | Path
-) -> tuple[list[str], int]:
+def submit_task_file(mgr: JobManager, path: str | Path) -> tuple[list[str], int]:
     """Parse ``path`` and enqueue every task as a PENDING job.
 
     Returns ``(job_ids, max_concurrent)``.
@@ -374,15 +383,14 @@ class QueueScheduler:
             if reaped[0] == 0:
                 break  # no child has exited yet
             for job in self.mgr.list_jobs():
-                if (
-                    job.get("status") == "running"
-                    and job.get("pid") == reaped[0]
-                ):
+                if job.get("status") == "running" and job.get("pid") == reaped[0]:
                     self.mgr.update_status(
                         job["job_id"],
                         JobStatus.FAILED,
-                        error=("Worker process exited unexpectedly "
-                               f"(status {reaped[1]})"),
+                        error=(
+                            "Worker process exited unexpectedly "
+                            f"(status {reaped[1]})"
+                        ),
                     )
                     break
         # 2) RUNNING jobs whose recorded PID no longer exists (workers that

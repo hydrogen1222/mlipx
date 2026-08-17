@@ -130,9 +130,7 @@ class DPACalculatorWrapper(BaseMLIPCalculator):
         matches: list[str] = []
         for canonical, branch in branches.items():
             aliases = (
-                branch.get("model_branch_alias", [])
-                if isinstance(branch, dict)
-                else []
+                branch.get("model_branch_alias", []) if isinstance(branch, dict) else []
             )
             if isinstance(aliases, str):
                 aliases = [aliases]

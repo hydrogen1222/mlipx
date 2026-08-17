@@ -167,7 +167,7 @@ async def test_cpu_tui_run_screen_queues_without_mount_error(tmp_path: Path) -> 
         assert "Failed to queue" not in str(screen.status.render())
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_md_ensemble_and_options_persisted(tmp_path: Path) -> None:
     """MD ensemble, timestep and save interval are saved to app config."""
     structure = tmp_path / "structure.cif"
@@ -221,7 +221,7 @@ async def test_md_ensemble_and_options_persisted(tmp_path: Path) -> None:
     assert isinstance(app.get_config("run_started_at"), float)
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_opt_values_loaded_from_config() -> None:
     """ConfigScreen loads previously saved opt values when re-composed."""
     app = MlipxApp()
@@ -242,7 +242,7 @@ async def test_opt_values_loaded_from_config() -> None:
         assert config_screen.query_one("#cell-opt").value is True
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_md_values_loaded_from_config() -> None:
     """ConfigScreen loads previously saved md values when re-composed."""
     app = MlipxApp()
@@ -267,7 +267,7 @@ async def test_md_values_loaded_from_config() -> None:
         assert config_screen.query_one("#pre-relax").value is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_backend_resource_controls_follow_selected_engine() -> None:
     """TUI exposes resource controls without forwarding invalid cross-engine options."""
     app = MlipxApp()
@@ -279,7 +279,10 @@ async def test_backend_resource_controls_follow_selected_engine() -> None:
 
         assert config_screen.query_one("#device-input").value == "cpu"
         assert config_screen.query_one("#inference-mode-select").disabled is False
-        assert config_screen.query_one("#activation-checkpointing-select").disabled is False
+        assert (
+            config_screen.query_one("#activation-checkpointing-select").disabled
+            is False
+        )
         assert config_screen.query_one("#dtype-select").disabled is True
         assert config_screen.query_one("#head-input").disabled is True
         assert config_screen.query_one("#inference-mode-select").display is True
@@ -289,7 +292,9 @@ async def test_backend_resource_controls_follow_selected_engine() -> None:
         config_screen.query_one("#model-type-select").value = "dpa"
         await pilot.pause()
         assert config_screen.query_one("#inference-mode-select").disabled is True
-        assert config_screen.query_one("#activation-checkpointing-select").disabled is True
+        assert (
+            config_screen.query_one("#activation-checkpointing-select").disabled is True
+        )
         assert config_screen.query_one("#dtype-select").disabled is True
         assert config_screen.query_one("#head-input").disabled is False
         assert config_screen.query_one("#torch-threads-input").disabled is False
@@ -306,7 +311,7 @@ async def test_backend_resource_controls_follow_selected_engine() -> None:
         assert config_screen.query_one("#grace-neighbor-skin-input").disabled is False
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_grace_cache_options_reach_background_command() -> None:
     app = MlipxApp()
     app.config.update(
@@ -333,8 +338,10 @@ async def test_grace_cache_options_reach_background_command() -> None:
     assert command[command.index("--neighbor-skin") + 1] == "2.25"
 
 
-@pytest.mark.asyncio
-async def test_molecular_charge_and_spin_controls_are_task_aware(tmp_path: Path) -> None:
+@pytest.mark.asyncio()
+async def test_molecular_charge_and_spin_controls_are_task_aware(
+    tmp_path: Path,
+) -> None:
     structure = tmp_path / "molecule.xyz"
     model = tmp_path / "uma.pt"
     structure.write_text("")
@@ -366,7 +373,7 @@ async def test_molecular_charge_and_spin_controls_are_task_aware(tmp_path: Path)
     assert app.get_config("spin") == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_run_command_contains_tui_resource_and_md_options() -> None:
     """Every visible TUI option must reach the background CLI command."""
     app = MlipxApp()
@@ -423,7 +430,7 @@ async def test_run_command_contains_tui_resource_and_md_options() -> None:
     assert "--friction" not in command
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_run_command_contains_only_active_nhc_options() -> None:
     app = MlipxApp()
     app.config.update(
@@ -459,7 +466,7 @@ async def test_run_command_contains_only_active_nhc_options() -> None:
     assert "--bussi-tau" not in command
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_md_thermostat_controls_are_dynamic_and_task_label_is_accurate() -> None:
     app = MlipxApp()
     app.update_config("calc_type", "md")
@@ -494,12 +501,10 @@ async def test_md_thermostat_controls_are_dynamic_and_task_label_is_accurate() -
         screen.query_one("#model-type-select").value = "dpa"
         await pilot.pause()
         assert "System Type" in str(screen.query_one("#task-type-label").render())
-        assert "TensorFlow" in str(
-            screen.query_one("#engine-options-note").render()
-        )
+        assert "TensorFlow" in str(screen.query_one("#engine-options-note").render())
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_md_invalid_numeric_inputs_block_submission(tmp_path: Path) -> None:
     structure = tmp_path / "structure.cif"
     model = tmp_path / "model.pt"
@@ -556,7 +561,7 @@ async def test_md_invalid_numeric_inputs_block_submission(tmp_path: Path) -> Non
             screen.notify.reset_mock()
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_run_command_contains_tui_charge_and_spin() -> None:
     app = MlipxApp()
     app.config.update(
@@ -582,7 +587,7 @@ async def test_run_command_contains_tui_charge_and_spin() -> None:
     assert command[command.index("--spin") + 1] == "2"
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_md_switch_row_does_not_clip_or_overlap() -> None:
     """The pre-relax label and switch have a full row and no ghost control."""
     app = MlipxApp()
@@ -609,7 +614,7 @@ async def test_md_switch_row_does_not_clip_or_overlap() -> None:
         assert pre_relax.value is not before
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_job_detail_screen_displays_log() -> None:
     """JobDetailScreen writes supplied log text into the Log widget."""
     app = MlipxApp()
@@ -623,7 +628,7 @@ async def test_job_detail_screen_displays_log() -> None:
         assert len(log.lines) == 2
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_jobs_screen_handles_empty_store_and_remounts(tmp_path: Path) -> None:
     """An empty jobs screen mounts, refreshes, and remounts without crashing."""
     app = MlipxApp()
@@ -651,7 +656,7 @@ async def test_jobs_screen_handles_empty_store_and_remounts(tmp_path: Path) -> N
         assert table.row_count == 0
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_jobs_screen_uses_job_id_as_row_key(tmp_path: Path) -> None:
     """Selecting a table row resolves to the persisted job ID."""
     manager = JobManager(jobs_dir=tmp_path)
@@ -677,7 +682,7 @@ async def test_jobs_screen_uses_job_id_as_row_key(tmp_path: Path) -> None:
         assert [row_key.value for row_key in table.rows] == ["job-123"]
 
 
-@pytest.mark.asyncio
+@pytest.mark.asyncio()
 async def test_jobs_screen_refresh_preserves_selected_job(tmp_path: Path) -> None:
     """Auto-refresh must not move the cursor back to the first running job."""
     manager = JobManager(jobs_dir=tmp_path)

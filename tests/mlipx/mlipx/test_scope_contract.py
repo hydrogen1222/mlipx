@@ -33,9 +33,7 @@ def test_analysis_v2_never_imports_archive() -> None:
 def test_cli_exposes_analysis_v2_command() -> None:
     parser = create_parser()
     subcommands = next(
-        action.choices
-        for action in parser._actions
-        if getattr(action, "choices", None)
+        action.choices for action in parser._actions if getattr(action, "choices", None)
     )
     assert "analyze" in subcommands
 

@@ -1,67 +1,76 @@
-[project]
-name = "mlipx-workspace"
-version = "0.1.0"
-description = "Monorepo workspace for MLIP eXtended — VASP-compatible CLI/TUI/API for MLIPs"
-requires-python = ">=3.10, <3.13"
-dependencies = [
-    "fairchem-core",
-    "fairchem-applications-adsorbml",
-    "fairchem-applications-cattsunami",
-    "fairchem-applications-ocx",
-    "mlipx",
-]
-
-[tool.uv.workspace]
-members = [
-    "packages/*",
-    "mlipx",
-]
-
-# LEGACY GPU COMPATIBILITY OVERRIDE (frozen lockfile).
-# The current uv.lock was generated with torch 2.6.0+cu124 for historical
-# Maxwell/Pascal support.  The compatibility matrix in mlipx/install/ now
-# recommends torch 2.8.0+cu126 for legacy GPUs (PyTorch 2.8+ dropped
-# Maxwell/Pascal from cu128, but cu126 retains them).  Re-lock with:
-#   uv lock --upgrade-package torch
-# after changing this override to:
-#   override-dependencies = ["torch==2.8.0+cu126", "triton==3.2.0"]
-# Until then, `uv sync --frozen` continues to install the pinned 2.6.0+cu124
-# for the existing UMA environment.
-[tool.uv]
-override-dependencies = [
-    "torch==2.6.0+cu124",
-    "triton==3.2.0",
-]
-
-# Optional China mirror. NOT the default so the repo installs on machines
-# outside China too. China-based users can opt in with:
-#   export UV_DEFAULT_INDEX=https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple
-[[tool.uv.index]]
-name = "tuna"
-url = "https://mirrors.tuna.tsinghua.edu.cn/pypi/web/simple"
-explicit = true
-
-[[tool.uv.index]]
-name = "pytorch-cu124"
-url = "https://download.pytorch.org/whl/cu124"
-explicit = true
-
-[tool.uv.sources]
-fairchem-core = { workspace = true }
-fairchem-data-oc = { workspace = true }
-fairchem-data-odac = { workspace = true }
-fairchem-data-omat = { workspace = true }
-fairchem-data-omc = { workspace = true }
-fairchem-data-omol = { workspace = true }
-fairchem-applications-adsorbml = { workspace = true }
-fairchem-applications-cattsunami = { workspace = true }
-fairchem-applications-fastcsp = { workspace = true }
-fairchem-applications-ocx = { workspace = true }
-fairchem-demo-ocpapi = { workspace = true }
-fairchem-lammps = { workspace = true }
-mlipx = { workspace = true }
-torch = { index = "pytorch-cu124" }
+# mlipx repository tooling configuration.
+#
+# This is intentionally NOT a Python runtime project.  Each engine (UMA,
+# MACE, DPA, GRACE) installs into its own isolated environment via
+# `scripts/install_mlipx.sh` (see mlipx/install/compatibility.py).  The four
+# stacks have mutually exclusive dependencies, so no single workspace lockfile
+# is maintained here.
+#
+# The actual `mlipx` package metadata lives in `mlipx/pyproject.toml`.
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["archive"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+include = [
+    "mlipx/mlipx/**/*.py",
+    "tests/**/*.py",
+    "scripts/*.py",
+]
+
+[tool.ruff.lint]
+select = [
+  "B",      # flake8-bugbear
+  "C4",     # flake8-comprehensions
+  "E",      # pycodestyle error
+  "F",      # pyflakes
+  "FA",     # flake8-future-annotations
+  "I",      # isort
+  "ICN",    # flake8-import-conventions
+  "PERF",   # perflint
+  "PIE",    # flake8-pie
+  "PL",     # pylint
+  "PT",     # flake8-pytest-style
+  "Q",      # flake8-quotes
+  "RET",    # flake8-return
+  "RUF",    # Ruff-specific rules
+  "SIM",    # flake8-simplify
+  "TCH",    # flake8-type-checking
+  "UP",     # pyupgrade
+  "W",      # pycodestyle warning
+]
+ignore = [
+  "E501",   # Line too long
+  "PLR",    # Design related pylint codes
+  "B028",   # No explicit stacklevel
+  "RET505", # Unnecessary `elif` after `return`
+  "PT011",  # pytest.raises
+  "UP007",  # Use `X | Y` for type annotations
+  "SIM108", # Use ternary operator
+  # Test-style / historical preferences kept in the existing suite:
+  "PLC0415", # Import outside toplevel (intentional lazy imports)
+  "PT018",   # Assertion should be broken into multiple parts
+  "PT006",   # pytest.raises positional arg
+  "PT023",   # pytest.mark.decorator
+  "TCH003",  # stdlib import in type-checking block
+  "E741",    # Ambiguous variable name in existing tests
+  "B007",    # Unused loop control variable
+  "PERF102", # Use values() of dict
+  "RUF001",  # Ambiguous unicode character
+  "RUF100",  # Unused noqa directive
+  "F841",    # Unused local variable (pre-existing in tests)
+  "B017",    # pytest.raises(Exception)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["mlipx"]
+required-imports = ["from __future__ import annotations"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"mlipx/mlipx/install/__init__.py" = ["F401"]

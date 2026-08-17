@@ -141,6 +141,7 @@ def _api_resolve(
 # Public API
 # ---------------------------------------------------------------------------
 
+
 def run_single_point(
     structure: Atoms | str | Path,
     model_path: str,
@@ -200,10 +201,20 @@ def run_single_point(
         print(f"Atoms: {len(atoms)}")
         print(f"Loading model: {model_path}")
 
-    cli = _build_api_cli("sp", model_type, task, device, inference_mode,
-                          default_dtype, head, kwargs)
-    config = _api_resolve("sp", model_path, cli, output_dir, job_name,
-                           settings_path, model_alias, profile, strict_config)
+    cli = _build_api_cli(
+        "sp", model_type, task, device, inference_mode, default_dtype, head, kwargs
+    )
+    config = _api_resolve(
+        "sp",
+        model_path,
+        cli,
+        output_dir,
+        job_name,
+        settings_path,
+        model_alias,
+        profile,
+        strict_config,
+    )
     engine = CalculationEngine.from_config(config)
     return engine.run(
         atoms,
@@ -295,10 +306,20 @@ def run_optimization(
         if value is not None:
             extra[name] = value
 
-    cli = _build_api_cli("opt", model_type, task, device, inference_mode,
-                          default_dtype, head, extra)
-    config = _api_resolve("opt", model_path, cli, output_dir, job_name,
-                           settings_path, model_alias, profile, strict_config)
+    cli = _build_api_cli(
+        "opt", model_type, task, device, inference_mode, default_dtype, head, extra
+    )
+    config = _api_resolve(
+        "opt",
+        model_path,
+        cli,
+        output_dir,
+        job_name,
+        settings_path,
+        model_alias,
+        profile,
+        strict_config,
+    )
     engine = CalculationEngine.from_config(config)
     return engine.run(
         atoms,
@@ -414,10 +435,20 @@ def run_md(
         if value is not None:
             extra[name] = value
 
-    cli = _build_api_cli("md", model_type, task, device, inference_mode,
-                          default_dtype, head, extra)
-    config = _api_resolve("md", model_path, cli, output_dir, job_name,
-                           settings_path, model_alias, profile, strict_config)
+    cli = _build_api_cli(
+        "md", model_type, task, device, inference_mode, default_dtype, head, extra
+    )
+    config = _api_resolve(
+        "md",
+        model_path,
+        cli,
+        output_dir,
+        job_name,
+        settings_path,
+        model_alias,
+        profile,
+        strict_config,
+    )
     engine = CalculationEngine.from_config(config)
     return engine.run(
         atoms,

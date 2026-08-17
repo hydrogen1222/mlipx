@@ -399,9 +399,7 @@ class MDOutcarWriter:
         lines = [
             "=" * 100,
             " MLIPX VASP-LIKE MOLECULAR DYNAMICS OUTPUT".center(100),
-            " NOT A NATIVE VASP OUTCAR: no electronic/SCF data are implied".center(
-                100
-            ),
+            " NOT A NATIVE VASP OUTCAR: no electronic/SCF data are implied".center(100),
             "=" * 100,
             "",
             f"Generated:          {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",

@@ -6,12 +6,14 @@ VASP-style CLI / TUI / Python API for reliable machine-learning interatomic-pote
 
 ## Quick Start
 
+From the repository root:
+
 ```bash
 # One-command installer (auto-detects GPU, installs all four engines)
 ./scripts/install_mlipx.sh
 
 # UMA single point
-uv run mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
+.venv/bin/mlipx sp structure.cif --model uma-s-1.pt --task omat --device cpu
 
 # MACE
 .venv-mace/bin/mlipx sp bulk.cif --model mace.model \
@@ -39,7 +41,6 @@ mlipx/
 │   ├── install/          # Installation / compatibility matrix
 │   ├── tui/              # Textual TUI
 │   └── writers/          # OUTCAR, CONTCAR, XDATCAR, OSZICAR, JSON
-├── docs/                 # (removed standalone docs — content merged into root README)
 ├── templates/            # INCAR templates
 └── examples/             # Example scripts
 ```

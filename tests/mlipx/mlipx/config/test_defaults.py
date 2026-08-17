@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+
 from mlipx.config.defaults import (
     BUILTIN_DEFAULTS,
     DEFAULT_DEVICE_BY_CALC_TYPE,
@@ -15,12 +16,22 @@ from mlipx.config.defaults import (
 # Built-in structure
 # ---------------------------------------------------------------------------
 
+
 def test_all_expected_scopes_present() -> None:
     expected = {
-        "general", "resources", "batch", "output", "safety",
-        "sp", "opt", "md",
-        "calculator", "calculator.uma", "calculator.mace",
-        "calculator.dpa", "calculator.grace",
+        "general",
+        "resources",
+        "batch",
+        "output",
+        "safety",
+        "sp",
+        "opt",
+        "md",
+        "calculator",
+        "calculator.uma",
+        "calculator.mace",
+        "calculator.dpa",
+        "calculator.grace",
     }
     actual = set(BUILTIN_DEFAULTS)
     missing = expected - actual
@@ -63,6 +74,7 @@ def test_md_thermostat_defaults_preserve_legacy_langevin() -> None:
 # get_default helper
 # ---------------------------------------------------------------------------
 
+
 def test_get_default_calc_type_scoped() -> None:
     assert get_default("opt", "fmax") == 0.05
 
@@ -83,6 +95,7 @@ def test_get_default_no_calc_type() -> None:
 # ---------------------------------------------------------------------------
 # INCAR template generation
 # ---------------------------------------------------------------------------
+
 
 def test_build_incar_default_sp() -> None:
     text = build_incar_default("sp")

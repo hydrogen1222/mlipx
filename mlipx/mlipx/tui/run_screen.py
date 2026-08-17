@@ -21,6 +21,7 @@ from textual.widgets import Button, Log, ProgressBar, Static
 
 from mlipx.jobs import JobManager
 from mlipx.queue import build_mlipx_command
+
 if TYPE_CHECKING:
     from textual.app import ComposeResult
 
@@ -151,31 +152,39 @@ class RunScreen(Screen):
             memory_limit = self.app.get_config("gpu_memory_limit_mb")
             if memory_limit is not None:
                 options["gpu_memory_limit_mb"] = memory_limit
-            options["neighbor_cache"] = self.app.get_config(
-                "neighbor_cache", True
-            )
+            options["neighbor_cache"] = self.app.get_config("neighbor_cache", True)
             options["neighbor_skin"] = self.app.get_config("neighbor_skin", 1.5)
         if calc_type == "opt":
             for key in (
-                "fmax", "max_steps", "optimizer", "cell_opt", "fix_symmetry",
+                "fmax",
+                "max_steps",
+                "optimizer",
+                "cell_opt",
+                "fix_symmetry",
             ):
                 value = self.app.get_config(key)
                 if value is not None:
                     options[key] = value
         elif calc_type == "md":
             for key in (
-                "ensemble", "temperature", "timestep", "steps",
+                "ensemble",
+                "temperature",
+                "timestep",
+                "steps",
                 "equilibration_steps",
-                "save_interval", "pre_relax", "pre_relax_steps",
-                "pre_relax_fmax", "velocity_policy", "fmax_abort", "seed",
+                "save_interval",
+                "pre_relax",
+                "pre_relax_steps",
+                "pre_relax_fmax",
+                "velocity_policy",
+                "fmax_abort",
+                "seed",
             ):
                 value = self.app.get_config(key)
                 if value is not None:
                     options[key] = value
             if str(options.get("ensemble", "NVT")).upper() == "NVT":
-                thermostat = str(
-                    self.app.get_config("thermostat", "LANGEVIN")
-                ).upper()
+                thermostat = str(self.app.get_config("thermostat", "LANGEVIN")).upper()
                 options["thermostat"] = thermostat
                 active_keys = {
                     "LANGEVIN": ("friction",),

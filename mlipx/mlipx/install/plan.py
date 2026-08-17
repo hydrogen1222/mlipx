@@ -6,19 +6,23 @@
 """
 Installation plan generation.
 
-Given a set of detected GPUs, a list of requested engines, and a source
-profile, this module produces a :class:`InstallPlan` — an ordered list of
-shell commands that create the isolated venvs and install each backend.
+Given detected GPUs, requested engines, and a source profile, this module
+produces an :class:`InstallPlan` — an ordered list of :class:`InstallStep`
+objects, each holding an ``argv`` list (never a shell string).  The executor
+runs each step with ``shell=False``.
 
-The plan is serialisable to JSON so a thin shell wrapper can execute it
-without re-implementing any logic.
+Every mlipx engine — including UMA — is installed **explicitly**: create a
+venv, install the pinned torch/TF wheel for the detected architecture, install
+the pinned backend package, and finally install mlipx editable.  The UMA
+runtime is **never** installed via ``uv sync``/``uv sync --frozen``.
 """
 
 from __future__ import annotations
 
 import json
+import shlex
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -26,10 +30,26 @@ if TYPE_CHECKING:
 from mlipx.install.compatibility import (
     BACKENDS,
     BackendSpec,
+    effective_cuda_channel,
     get_backend_arch_profile,
 )
-from mlipx.install.hardware import GpuInfo, classify_gpu
-from mlipx.install.sources import SourceProfile, resolve_source
+from mlipx.install.hardware import GpuInfo, classify_gpu, _pick_oldest
+from mlipx.install.sources import (
+    SourceProfile,
+    build_package_source_args,
+    build_torch_source_args,
+    resolve_source,
+)
+
+# Python versions supported by mlipx (requires-python >=3.10,<3.13).
+SUPPORTED_PYTHON_VERSIONS = ("3.10", "3.11", "3.12")
+
+# Known engine keys (for normalization).
+_ENGINE_KEYS = set(BACKENDS)
+
+
+class InstallPlanError(Exception):
+    """Raised for invalid installation configuration (fail closed)."""
 
 
 @dataclass
@@ -37,15 +57,15 @@ class InstallStep:
     """One step in an installation plan.
 
     Attributes:
-        stage: Human-readable stage name (``"venv"``, ``"pip"``, ``"verify"``).
+        stage: ``"venv"``, ``"clean"``, ``"pip"``, or ``"verify"``.
         description: One-line description for logging.
-        command: Shell command to execute (may be multi-line).
+        argv: Argument vector executed with ``shell=False``.
         env: Extra environment variables to set for this step.
     """
 
     stage: str
     description: str
-    command: str
+    argv: list[str]
     env: dict[str, str] = field(default_factory=dict)
 
 
@@ -69,6 +89,183 @@ class InstallPlan:
     steps: list[InstallStep] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
+    @property
+    def has_verify_steps(self) -> bool:
+        return any(s.stage == "verify" for s in self.steps)
+
+
+def normalize_engines(engines: Sequence[str]) -> list[str]:
+    """Normalize and deduplicate an engine list.
+
+    - strips whitespace, lowercases
+    - maps ``fairchem`` → ``uma``
+    - deduplicates preserving order
+    - raises :class:`InstallPlanError` on unknown engine or empty list
+    """
+    seen: set[str] = set()
+    result: list[str] = []
+    for raw in engines:
+        name = str(raw).strip().lower()
+        if name == "fairchem":
+            name = "uma"
+        if name not in _ENGINE_KEYS:
+            raise InstallPlanError(
+                f"Unknown engine '{name}'. "
+                f"Choose from: {', '.join(sorted(_ENGINE_KEYS))}"
+            )
+        if name not in seen:
+            seen.add(name)
+            result.append(name)
+    if not result:
+        raise InstallPlanError("At least one engine must be requested.")
+    return result
+
+
+def validate_python_version(version: str) -> str:
+    """Validate a Python version against mlipx's supported range."""
+    v = str(version).strip()
+    if v not in SUPPORTED_PYTHON_VERSIONS:
+        raise InstallPlanError(
+            f"Python version '{v}' is not supported. mlipx requires Python "
+            f"3.10–3.12; choose one of: {', '.join(SUPPORTED_PYTHON_VERSIONS)}"
+        )
+    return v
+
+
+def _uv_pip(profile: SourceProfile, python: str, *args: str) -> list[str]:
+    """Build a ``uv pip install`` argv with source/offline handling."""
+    argv: list[str] = ["uv", "pip", "install"]
+    if profile.offline:
+        argv.append("--offline")
+    argv += ["--python", python]
+    argv += list(args)
+    return argv
+
+
+def _venv_step(backend: BackendSpec, python_version: str) -> InstallStep:
+    return InstallStep(
+        stage="venv",
+        description=f"Create {backend.venv_name} for {backend.label}",
+        argv=["uv", "venv", "--python", python_version, backend.venv_name],
+    )
+
+
+def _clean_step(backend: BackendSpec) -> InstallStep:
+    return InstallStep(
+        stage="clean",
+        description=f"Remove existing {backend.venv_name} (--clean)",
+        # Only the known venv path from the compatibility matrix is removed.
+        argv=["rm", "-rf", backend.venv_name],
+    )
+
+
+def _verify_step(backend: BackendSpec, device: str) -> InstallStep:
+    return InstallStep(
+        stage="verify",
+        description=f"Verify {backend.label}",
+        argv=[
+            f"{backend.venv_name}/bin/mlipx",
+            "doctor",
+            "--engine",
+            backend.engine,
+            "--device",
+            device,
+        ],
+    )
+
+
+def _torch_steps(
+    backend: BackendSpec,
+    arch_name: str,
+    bp,
+    profile: SourceProfile,
+    cuda_tag: str | None,
+    *,
+    cpu: bool,
+) -> list[InstallStep]:
+    """Torch install steps (shared by UMA/MACE/DPA)."""
+    steps: list[InstallStep] = []
+    torch_ver = bp.framework_version
+    python = f"{backend.venv_name}/bin/python"
+
+    if cpu:
+        torch_argv = _uv_pip(profile, python, f"torch=={torch_ver}")
+        torch_argv += ["--index-url", "https://download.pytorch.org/whl/cpu"]
+        steps.append(
+            InstallStep(
+                stage="pip",
+                description=f"Install torch {torch_ver} (CPU) for {backend.label}",
+                argv=torch_argv,
+            )
+        )
+    else:
+        assert cuda_tag is not None
+        source_args = build_torch_source_args(profile, cuda_tag)
+        torch_argv = _uv_pip(profile, python, f"torch=={torch_ver}")
+        torch_argv += source_args
+        steps.append(
+            InstallStep(
+                stage="pip",
+                description=(
+                    f"Install torch {torch_ver}+{cuda_tag} for {backend.label}"
+                ),
+                argv=torch_argv,
+            )
+        )
+
+    # Backend package(s) + editable mlipx.
+    pkg_argv = _uv_pip(profile, python, "-e", "./mlipx", *backend.install_packages())
+    pkg_argv += build_package_source_args(profile)
+    steps.append(
+        InstallStep(
+            stage="pip",
+            description=f"Install {backend.label} (pinned backend + editable mlipx)",
+            argv=pkg_argv,
+        )
+    )
+    return steps
+
+
+def _grace_steps(
+    backend: BackendSpec,
+    bp,
+    profile: SourceProfile,
+    *,
+    cpu: bool,
+) -> list[InstallStep]:
+    """GRACE (TensorFlow) install steps."""
+    python = f"{backend.venv_name}/bin/python"
+    tf_ver = bp.framework_version
+    extra_pkgs = bp.extra_packages
+
+    if cpu:
+        pkg_argv = _uv_pip(
+            profile,
+            python,
+            "-e",
+            "./mlipx",
+            f"tensorflow=={tf_ver}",
+            backend.requirement,
+        )
+    else:
+        pkg_argv = _uv_pip(
+            profile,
+            python,
+            "-e",
+            "./mlipx",
+            f"tensorflow[and-cuda]=={tf_ver}",
+            backend.requirement,
+            *extra_pkgs,
+        )
+    pkg_argv += build_package_source_args(profile)
+    return [
+        InstallStep(
+            stage="pip",
+            description=f"Install {backend.label} (TF {tf_ver})",
+            argv=pkg_argv,
+        )
+    ]
+
 
 def generate_plan(
     gpus: Sequence[GpuInfo] | None,
@@ -77,6 +274,8 @@ def generate_plan(
     source: str = "auto",
     python_version: str = "3.12",
     device: str = "auto",
+    clean: bool = False,
+    verify: bool = True,
 ) -> InstallPlan:
     """Generate an installation plan for the given hardware and engines.
 
@@ -86,265 +285,129 @@ def generate_plan(
             ``"dpa"``, ``"grace"``).
         source: Source profile name (``"auto"``, ``"official"``,
             ``"china"``, ``"offline"``, ``"custom"``).
-        python_version: Python version for the isolated venvs.
+        python_version: Python version for the isolated venvs (3.10–3.12).
         device: ``"auto"``, ``"cuda"``, or ``"cpu"``.
+        clean: If ``True``, remove each target venv before recreating it.
+        verify: If ``True``, append a ``doctor`` verify step per engine.
 
     Returns:
         An :class:`InstallPlan` ready for execution.
-    """
-    src = resolve_source(source)
-    is_cpu = device == "cpu" or not gpus
 
-    # Determine architecture
-    if is_cpu or not gpus:
-        arch_name = "cpu"
-        cc_str = ""
-        arch_label = "CPU"
-    else:
-        oldest = min(gpus, key=lambda g: (g.cc_major, g.cc_minor))
+    Raises:
+        InstallPlanError: On invalid configuration (unknown engine, empty
+            engine list, invalid Python version, ``device=cuda`` without a
+            supported GPU, unknown source).
+    """
+    py_ver = validate_python_version(python_version)
+    src = resolve_source(source)
+    engine_list = normalize_engines(engines)
+
+    # ---- Resolve device / architecture (fail closed for cuda) ----
+    is_cpu: bool
+    arch_name: str
+    cc_str = ""
+    arch = None
+
+    if device == "cuda":
+        if not gpus:
+            raise InstallPlanError(
+                "device=cuda was requested but no NVIDIA GPU was detected. "
+                "Use device=auto (CPU fallback) or install on a CUDA machine."
+            )
+        oldest = _pick_oldest(gpus)
+        cc_str = f"{oldest.cc_major}.{oldest.cc_minor}"
         arch = classify_gpu(oldest.cc_major, oldest.cc_minor)
         if arch is None:
-            # Unsupported GPU (Kepler).  Fall back to CPU with a warning.
+            raise InstallPlanError(
+                f"device=cuda was requested but GPU compute capability "
+                f"{cc_str} is unsupported (Kepler or unknown). Use device=auto "
+                f"for a CPU fallback, or upgrade the GPU."
+            )
+        is_cpu = False
+        arch_name = arch.name
+    elif device == "cpu":
+        is_cpu = True
+        arch_name = "cpu"
+    else:  # auto
+        if not gpus:
+            is_cpu = True
             arch_name = "cpu"
-            cc_str = f"{oldest.cc_major}.{oldest.cc_minor}"
-            arch_label = f"unsupported (CC {cc_str})"
         else:
-            arch_name = arch.name
+            oldest = _pick_oldest(gpus)
             cc_str = f"{oldest.cc_major}.{oldest.cc_minor}"
-            arch_label = f"{arch.label} (CC {cc_str})"
+            arch = classify_gpu(oldest.cc_major, oldest.cc_minor)
+            if arch is None:
+                # Unsupported GPU (e.g. Kepler): CPU fallback with warning.
+                is_cpu = True
+                arch_name = "cpu"
+            else:
+                is_cpu = False
+                arch_name = arch.name
 
     plan = InstallPlan(
         gpu_arch=arch_name,
         gpu_cc=cc_str,
         source=src.name,
-        python_version=python_version,
+        python_version=py_ver,
     )
 
-    if arch_name == "cpu" and not is_cpu:
+    if device == "auto" and not is_cpu and not gpus:
+        # Shouldn't happen (auto with gpus sets is_cpu False), kept for safety.
+        pass
+    if arch is None and device == "auto" and gpus:
         plan.warnings.append(
-            f"GPU compute capability {cc_str} is unsupported by modern "
-            f"PyTorch wheels.  Falling back to CPU-only installation."
+            f"GPU compute capability {cc_str} is unsupported; falling back "
+            f"to CPU-only installation. Use device=cuda to fail instead."
+        )
+    if src.offline:
+        plan.warnings.append(
+            "Source profile 'offline': no network access will be used. "
+            "Only locally cached wheels are consulted."
         )
 
-    # Build steps for each engine
-    for engine_name in engines:
-        engine_name = str(engine_name).strip().lower()
-        if engine_name == "fairchem":
-            engine_name = "uma"
-        if engine_name not in BACKENDS:
-            plan.warnings.append(f"Unknown engine '{engine_name}' — skipped.")
-            continue
+    # ---- Build steps per engine ----
+    for engine in engine_list:
+        backend = BACKENDS[engine]
+        if clean:
+            plan.steps.append(_clean_step(backend))
+        plan.steps.append(_venv_step(backend, py_ver))
 
-        backend = BACKENDS[engine_name]
-        if arch_name == "cpu":
-            _add_cpu_steps(plan, backend, src, python_version)
+        if engine == "grace":
+            bp = get_backend_arch_profile("grace", arch_name) if not is_cpu else None
+            if is_cpu:
+                # Use any arch profile's framework version (all use TF 2.20).
+                bp = next(iter(BACKENDS["grace"].arch_profiles.values()))
+            plan.steps.extend(_grace_steps(backend, bp, src, cpu=is_cpu))
         else:
-            _add_gpu_steps(plan, backend, arch_name, src, python_version, device)
+            # torch backend (UMA / MACE / DPA)
+            bp = get_backend_arch_profile(engine, arch_name) if not is_cpu else None
+            cuda_tag: str | None = None
+            if not is_cpu:
+                assert arch is not None
+                assert bp is not None, f"No profile for {backend.label} on {arch_name}"
+                cuda_tag = effective_cuda_channel(backend, arch, bp)
+                if bp.status == "experimental":
+                    plan.warnings.append(
+                        f"{backend.label} on {arch_name}: EXPERIMENTAL — "
+                        f"upstream does not officially support this GPU. {bp.notes}"
+                    )
+                elif bp.status == "needs_smoke_test":
+                    plan.warnings.append(
+                        f"{backend.label} on {arch_name}: needs smoke test — "
+                        f"upstream constraints are satisfied but mlipx has not "
+                        f"yet verified this combination on real hardware."
+                    )
+            else:
+                # CPU: use the framework version from any arch profile
+                bp = next(iter(BACKENDS[engine].arch_profiles.values()))
+            plan.steps.extend(
+                _torch_steps(backend, arch_name, bp, src, cuda_tag, cpu=is_cpu)
+            )
+
+        if verify:
+            plan.steps.append(_verify_step(backend, "cpu" if is_cpu else device))
 
     return plan
-
-
-def _add_cpu_steps(
-    plan: InstallPlan,
-    backend: BackendSpec,
-    src: SourceProfile,
-    python_version: str,
-) -> None:
-    """Add CPU-only install steps for one backend."""
-    name = backend.venv_name
-    plan.steps.append(
-        InstallStep(
-            stage="venv",
-            description=f"Create {name} for {backend.label}",
-            command=f"uv venv --python {python_version} {name}",
-        )
-    )
-
-    if backend.engine == "uma":
-        # UMA: use uv sync --frozen (workspace default)
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install {backend.label} (UMA workspace sync)",
-                command="uv sync --frozen",
-            )
-        )
-    elif backend.engine == "grace":
-        # GRACE CPU: plain tensorflow (no [and-cuda])
-        extra = " ".join(backend.install_extra)
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install {backend.label} (CPU)",
-                command=(
-                    f"uv pip install --no-config --python {name}/bin/python "
-                    f'-e ./mlipx "tensorflow=={backend.arch_profiles.get("volta", next(iter(backend.arch_profiles.values()))).framework_version}" '
-                    f'"{extra}"'
-                ),
-            )
-        )
-    else:
-        # MACE, DPA: install torch CPU + backend
-        bp = next(iter(backend.arch_profiles.values()))
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install torch (CPU) for {backend.label}",
-                command=(
-                    f"uv pip install --no-config --python {name}/bin/python "
-                    f'"torch=={bp.framework_version}" '
-                    f"--index-url https://download.pytorch.org/whl/cpu"
-                ),
-            )
-        )
-        extra = " ".join(backend.install_extra)
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install {backend.label}",
-                command=(
-                    f"uv pip install --no-config --python {name}/bin/python "
-                    f'-e ./mlipx {extra}'
-                ),
-            )
-        )
-
-    plan.steps.append(
-        InstallStep(
-            stage="verify",
-            description=f"Verify {backend.label}",
-            command=(
-                f"{name}/bin/mlipx doctor --engine {backend.engine} --device cpu"
-            ),
-        )
-    )
-
-
-def _add_gpu_steps(
-    plan: InstallPlan,
-    backend: BackendSpec,
-    arch_name: str,
-    src: SourceProfile,
-    python_version: str,
-    device: str,
-) -> None:
-    """Add GPU install steps for one backend."""
-    name = backend.venv_name
-    bp = get_backend_arch_profile(backend.engine, arch_name)
-
-    if bp is None:
-        plan.warnings.append(
-            f"No profile for {backend.label} on {arch_name}.  Skipping."
-        )
-        return
-
-    if bp.status == "experimental":
-        plan.warnings.append(
-            f"{backend.label} on {arch_name}: EXPERIMENTAL — "
-            f"upstream does not officially support this GPU. {bp.notes}"
-        )
-    elif bp.status == "needs_smoke_test":
-        plan.warnings.append(
-            f"{backend.label} on {arch_name}: needs smoke test — "
-            f"upstream constraints are satisfied but mlipx has not yet "
-            f"verified this combination on real hardware."
-        )
-
-    plan.steps.append(
-        InstallStep(
-            stage="venv",
-            description=f"Create {name} for {backend.label}",
-            command=f"uv venv --python {python_version} {name}",
-        )
-    )
-
-    if backend.engine == "uma":
-        # UMA: use uv sync --frozen
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install {backend.label} (workspace sync)",
-                command="uv sync --frozen",
-            )
-        )
-    elif backend.engine == "grace":
-        # GRACE: tensorflow[and-cuda] + tensorpotential + cuDNN
-        tf_ver = bp.framework_version
-        extra_pkgs = " ".join(
-            f'"{p}"' for p in backend.install_extra + bp.extra_packages
-        )
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install {backend.label} (TF {tf_ver})",
-                command=(
-                    f"uv pip install --no-config --python {name}/bin/python "
-                    f'-e ./mlipx "tensorflow[and-cuda]=={tf_ver}" '
-                    f"{extra_pkgs}"
-                ),
-            )
-        )
-    else:
-        # MACE, DPA: torch + backend
-        torch_ver = bp.framework_version
-        channel = bp.cuda_channel
-
-        if src.pytorch_find_links:
-            # Use find-links (Aliyun flat mirror)
-            find_links = src.pytorch_find_links.format(cuda_tag=channel)
-            torch_cmd = (
-                f"uv pip install --no-config --python {name}/bin/python "
-                f'"torch=={torch_ver}" '
-                f"--find-links {find_links}"
-            )
-        elif src.pytorch_index:
-            torch_cmd = (
-                f"uv pip install --no-config --python {name}/bin/python "
-                f'"torch=={torch_ver}" '
-                f"--index-url {src.pytorch_index}"
-            )
-        else:
-            # Official: use pytorch.org CUDA channel
-            from mlipx.install.compatibility import CUDA_CHANNELS
-
-            ch = CUDA_CHANNELS.get(channel)
-            torch_url = ch.pytorch_url if ch else f"https://download.pytorch.org/whl/{channel}"
-            torch_cmd = (
-                f"uv pip install --no-config --python {name}/bin/python "
-                f'"torch=={torch_ver}" '
-                f"--index-url {torch_url}"
-            )
-
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install torch {torch_ver}+{channel} for {backend.label}",
-                command=torch_cmd,
-            )
-        )
-
-        extra = " ".join(backend.install_extra)
-        plan.steps.append(
-            InstallStep(
-                stage="pip",
-                description=f"Install {backend.label}",
-                command=(
-                    f"uv pip install --no-config --python {name}/bin/python "
-                    f'-e ./mlipx {extra}'
-                ),
-            )
-        )
-
-    plan.steps.append(
-        InstallStep(
-            stage="verify",
-            description=f"Verify {backend.label}",
-            command=(
-                f"{name}/bin/mlipx doctor --engine {backend.engine} "
-                f"--device {device}"
-            ),
-        )
-    )
 
 
 def plan_to_json(plan: InstallPlan) -> str:
@@ -360,7 +423,7 @@ def plan_to_json(plan: InstallPlan) -> str:
                 {
                     "stage": s.stage,
                     "description": s.description,
-                    "command": s.command,
+                    "argv": s.argv,
                     "env": s.env,
                 }
                 for s in plan.steps
@@ -369,3 +432,17 @@ def plan_to_json(plan: InstallPlan) -> str:
         indent=2,
         ensure_ascii=False,
     )
+
+
+def render_plan_shell(plan: InstallPlan) -> str:
+    """Render a plan as human-readable shell lines (for ``--dry-run``)."""
+    lines = [
+        f"GPU arch : {plan.gpu_arch}",
+        f"Source   : {plan.source}",
+        f"Python   : {plan.python_version}",
+        "",
+    ]
+    for s in plan.steps:
+        lines.append(f"  [{s.stage}] {s.description}")
+        lines.append(f"    $ {shlex.join(s.argv)}")
+    return "\n".join(lines)

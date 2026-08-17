@@ -100,7 +100,7 @@ def parse_model_aliases(parser: configparser.ConfigParser) -> dict[str, ModelAli
     for section in parser.sections():
         if not section.lower().startswith(_MODEL_PREFIX):
             continue
-        name = section[len(_MODEL_PREFIX):].strip()
+        name = section[len(_MODEL_PREFIX) :].strip()
         if not name:
             continue
         items = _parse_section_items(dict(parser.items(section)))
@@ -122,10 +122,12 @@ def parse_profiles(parser: configparser.ConfigParser) -> dict[str, Profile]:
     for section in parser.sections():
         if not section.lower().startswith(_PROFILE_PREFIX):
             continue
-        name = section[len(_PROFILE_PREFIX):].strip()
+        name = section[len(_PROFILE_PREFIX) :].strip()
         if not name:
             continue
-        profiles[name] = Profile(name=name, options=_parse_section_items(dict(parser.items(section))))
+        profiles[name] = Profile(
+            name=name, options=_parse_section_items(dict(parser.items(section)))
+        )
     return profiles
 
 

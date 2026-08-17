@@ -342,9 +342,7 @@ class CalculationEngine:
                 fmax_abort=opts.get(
                     "fmax_abort", BUILTIN_DEFAULTS["safety"]["fmax_abort"]
                 ),
-                write_trajectory=self.config.settings.get(
-                    "write_trajectory", True
-                ),
+                write_trajectory=self.config.settings.get("write_trajectory", True),
                 write_xdatcar=self.config.settings.get("write_xdatcar", True),
                 **common,
             )

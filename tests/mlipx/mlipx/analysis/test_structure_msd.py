@@ -76,7 +76,9 @@ def test_skew_cell_unwrap_uses_general_minimum_image_not_fractional_rounding() -
     )
 
     continuous, _ = unwrap_positions(dataset)
-    expected_step = np.asarray([1.0108963635028174, 0.4650358248207108, -1.9889552601966054])
+    expected_step = np.asarray(
+        [1.0108963635028174, 0.4650358248207108, -1.9889552601966054]
+    )
     naive_step = (raw_fractional_step - np.rint(raw_fractional_step)) @ cell
     np.testing.assert_allclose(continuous[1, 0] - continuous[0, 0], expected_step)
     assert not np.allclose(expected_step, naive_step)

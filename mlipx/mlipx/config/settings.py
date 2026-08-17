@@ -144,6 +144,8 @@ def settings_search_paths(
     candidates.append(base / "settings.ini")
     candidates.append(user_config_dir() / "settings.ini")
     return candidates
+
+
 def _empty_parser() -> configparser.ConfigParser:
     import configparser  # noqa: PLC0415
 
@@ -210,8 +212,6 @@ class MlipxSettings:
         except ValueError:
             pass
         return value
-
-
 
 
 def load_settings(

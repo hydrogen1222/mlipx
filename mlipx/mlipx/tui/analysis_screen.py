@@ -298,9 +298,7 @@ class AnalysisScreen(Screen):
         parameters: dict[str, Any] = {}
         if task in {"validate", "msd", "transport"}:
             convention = str(
-                self.query_one(
-                    "#analysis-positions-convention-select", Select
-                ).value
+                self.query_one("#analysis-positions-convention-select", Select).value
             )
             if convention != "auto":
                 parameters["positions_convention"] = convention
@@ -350,9 +348,7 @@ class AnalysisScreen(Screen):
                     or parameters["fit_start_ps"] < 0
                     or parameters["fit_stop_ps"] <= parameters["fit_start_ps"]
                 ):
-                    raise ValueError(
-                        "MSD fit stop must be greater than fit start >= 0"
-                    )
+                    raise ValueError("MSD fit stop must be greater than fit start >= 0")
         if task == "rdf":
             parameters["center_species"] = self.query_one(
                 "#analysis-rdf-center-input", Input
@@ -400,9 +396,10 @@ class AnalysisScreen(Screen):
             ).value.strip()
             if temperature:
                 parameters["temperature_K"] = float(temperature)
-                if not math.isfinite(parameters["temperature_K"]) or parameters[
-                    "temperature_K"
-                ] <= 0:
+                if (
+                    not math.isfinite(parameters["temperature_K"])
+                    or parameters["temperature_K"] <= 0
+                ):
                     raise ValueError("Temperature must be positive")
             parameters["collective_conductivity"] = self.query_one(
                 "#analysis-collective-switch", Switch

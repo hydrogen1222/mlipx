@@ -17,7 +17,7 @@ class TestEngineConfig:
     """Tests for EngineConfig dataclass."""
 
     def test_minimal_config(self):
-        from mlipx.engine import EngineConfig  # noqa: PLC0415
+        from mlipx.engine import EngineConfig
 
         config = EngineConfig(
             calc_type="sp",
@@ -32,7 +32,7 @@ class TestEngineConfig:
         assert config.detach is False
 
     def test_config_with_options(self):
-        from mlipx.engine import EngineConfig  # noqa: PLC0415
+        from mlipx.engine import EngineConfig
 
         config = EngineConfig(
             calc_type="opt",
@@ -47,7 +47,7 @@ class TestEngineConfig:
         assert config.options["cell_opt"] is True
 
     def test_config_detach(self):
-        from mlipx.engine import EngineConfig  # noqa: PLC0415
+        from mlipx.engine import EngineConfig
 
         config = EngineConfig(
             calc_type="sp",
@@ -61,8 +61,8 @@ class TestEngineConfig:
         assert config.detach is True
 
     def test_from_resolved_routes_md_safety_threshold(self):
-        from mlipx.config.resolver import resolve_config  # noqa: PLC0415
-        from mlipx.engine import EngineConfig  # noqa: PLC0415
+        from mlipx.config.resolver import resolve_config
+        from mlipx.engine import EngineConfig
 
         resolved = resolve_config(calc_type="md")
         config = EngineConfig.from_resolved(resolved)
@@ -70,8 +70,8 @@ class TestEngineConfig:
 
     @pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
     def test_from_resolved_routes_backend_thread_count(self, model_type):
-        from mlipx.config.resolver import resolve_config  # noqa: PLC0415
-        from mlipx.engine import EngineConfig  # noqa: PLC0415
+        from mlipx.config.resolver import resolve_config
+        from mlipx.engine import EngineConfig
 
         resolved = resolve_config(
             calc_type="sp",
@@ -85,8 +85,8 @@ class TestEngineConfig:
         assert config.torch_num_threads == 3
 
     def test_from_resolved_routes_uma_activation_checkpointing_override(self):
-        from mlipx.config.resolver import resolve_config  # noqa: PLC0415
-        from mlipx.engine import EngineConfig  # noqa: PLC0415
+        from mlipx.config.resolver import resolve_config
+        from mlipx.engine import EngineConfig
 
         resolved = resolve_config(
             calc_type="sp",
@@ -104,7 +104,7 @@ class TestCalculationEngineSetup:
     """Tests for CalculationEngine construction and config validation."""
 
     def test_engine_from_config_sp(self):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="sp",
@@ -119,7 +119,7 @@ class TestCalculationEngineSetup:
             assert engine.config.calc_type == "sp"
 
     def test_invalid_calc_type_raises(self):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="invalid",
@@ -134,7 +134,7 @@ class TestCalculationEngineSetup:
 
     def test_engine_config_options_validation_unknown_key_warns(self):
         """Unknown options keys should not raise, just warn."""
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="sp",
@@ -154,7 +154,7 @@ class TestCalculationEngineSetup:
     def test_pytorch_thread_count_is_applied_before_calculator_creation(
         self, model_type
     ):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="sp",
@@ -177,7 +177,7 @@ class TestCalculationEngineSetup:
         set_num_threads.assert_called_once_with(2)
 
     def test_grace_thread_count_reaches_tensorflow_calculator(self):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="sp",
@@ -197,7 +197,7 @@ class TestCalculationEngineSetup:
         assert create.call_args.kwargs["cpu_threads"] == 2
 
     def test_engine_forwards_all_thermostat_options_to_md_runner(self, tmp_path):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="md",
@@ -223,10 +223,9 @@ class TestCalculationEngineSetup:
         assert runner.nhc_tloop == 2
 
     @pytest.mark.parametrize("model_type", ["uma", "mace", "dpa", "grace"])
-    def test_legacy_md_defaults_remain_nvt_langevin_for_every_backend(
-        self, model_type
-    ):
+    def test_legacy_md_defaults_remain_nvt_langevin_for_every_backend(self, model_type):
         from ase import units
+
         from mlipx.config.resolver import resolve_config
         from mlipx.engine import CalculationEngine, EngineConfig
 
@@ -244,7 +243,7 @@ class TestCalculationEngineSetup:
 
 
 def test_engine_creates_live_log_and_tail_hint(tmp_path):
-    from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+    from mlipx.engine import CalculationEngine, EngineConfig
 
     config = EngineConfig(
         calc_type="sp",
@@ -305,6 +304,7 @@ def test_live_run_logger_batches_step_records_without_losing_them(tmp_path):
 
 def test_python_api_forwards_all_thermostat_options(monkeypatch):
     from ase import Atoms
+
     from mlipx import api
 
     captured = {}
@@ -337,14 +337,17 @@ def test_python_api_forwards_all_thermostat_options(monkeypatch):
     )
 
     assert result == {"ok": True}
-    assert captured.items() >= {
-        "thermostat": "NHC",
-        "friction": 0.002,
-        "bussi_tau": 800.0,
-        "nhc_tdamp": 120.0,
-        "nhc_tchain": 4,
-        "nhc_tloop": 2,
-    }.items()
+    assert (
+        captured.items()
+        >= {
+            "thermostat": "NHC",
+            "friction": 0.002,
+            "bussi_tau": 800.0,
+            "nhc_tdamp": 120.0,
+            "nhc_tchain": 4,
+            "nhc_tloop": 2,
+        }.items()
+    )
 
 
 class TestMaceDtypeDefaults:
@@ -352,7 +355,7 @@ class TestMaceDtypeDefaults:
 
     @pytest.mark.parametrize("calc_type", ["sp", "opt", "md"])
     def test_mace_default_dtype_is_float64_for_all_calc_types(self, calc_type):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type=calc_type,
@@ -377,7 +380,7 @@ class TestMaceDtypeDefaults:
         assert captured.get("default_dtype") == "float64"
 
     def test_mace_explicit_dtype_float64_not_overridden(self):
-        from mlipx.engine import CalculationEngine, EngineConfig  # noqa: PLC0415
+        from mlipx.engine import CalculationEngine, EngineConfig
 
         config = EngineConfig(
             calc_type="sp",

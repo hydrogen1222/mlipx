@@ -44,6 +44,7 @@ def _default_jobs_dir() -> Path:
         return Path(override)
     return Path.home() / ".mlipx" / "jobs"
 
+
 class JobManager:
     """Manage background calculation jobs with disk-persisted state."""
 
@@ -305,15 +306,11 @@ class JobManager:
 
     def count_by_status(self, status: str) -> int:
         """Number of jobs currently in ``status`` (pending/running/done/...)."""
-        return sum(
-            1 for j in self.list_jobs() if j.get("status") == status
-        )
+        return sum(1 for j in self.list_jobs() if j.get("status") == status)
 
     def next_pending(self) -> dict | None:
         """Oldest PENDING job (FIFO), or None when the queue is empty."""
-        pending = [
-            j for j in self.list_jobs() if j.get("status") == "pending"
-        ]
+        pending = [j for j in self.list_jobs() if j.get("status") == "pending"]
         if not pending:
             return None
         return min(pending, key=lambda j: j.get("started_at", ""))
@@ -326,7 +323,6 @@ class JobManager:
             if status in summary:
                 summary[status] += 1
         return summary
-
 
     def kill_job(self, job_id: str) -> bool:
         """Kill a running job by PID. Returns True if successful."""

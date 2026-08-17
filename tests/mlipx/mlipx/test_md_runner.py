@@ -73,12 +73,30 @@ def _ar4():
 def test_md_seed_makes_velocities_reproducible(tmp_path):
     """Plan section 5.3: a recorded seed must actually drive velocity init."""
     a1, a2, a3 = _ar4(), _ar4(), _ar4()
-    r42a = MDRunner(_CalculatorStub(), temperature=300.0, output_dir=tmp_path,
-                    pre_relax=False, verbose=False, seed=42)
-    r42b = MDRunner(_CalculatorStub(), temperature=300.0, output_dir=tmp_path,
-                    pre_relax=False, verbose=False, seed=42)
-    r7 = MDRunner(_CalculatorStub(), temperature=300.0, output_dir=tmp_path,
-                  pre_relax=False, verbose=False, seed=7)
+    r42a = MDRunner(
+        _CalculatorStub(),
+        temperature=300.0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
+    )
+    r42b = MDRunner(
+        _CalculatorStub(),
+        temperature=300.0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
+    )
+    r7 = MDRunner(
+        _CalculatorStub(),
+        temperature=300.0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=7,
+    )
     r42a._initialize_velocities(a1)
     r42b._initialize_velocities(a2)
     r7._initialize_velocities(a3)
@@ -89,8 +107,14 @@ def test_md_seed_makes_velocities_reproducible(tmp_path):
 
 def test_md_velocity_policy_preserve_requires_velocities(tmp_path):
     """preserve must fail loudly when there are no velocities (not silently init)."""
-    runner = MDRunner(_CalculatorStub(), temperature=300.0, output_dir=tmp_path,
-                      pre_relax=False, verbose=False, velocity_policy="preserve")
+    runner = MDRunner(
+        _CalculatorStub(),
+        temperature=300.0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        velocity_policy="preserve",
+    )
     with pytest.raises(ValueError, match="preserve"):
         runner._initialize_velocities(_ar4())
 
@@ -99,8 +123,14 @@ def test_md_velocity_policy_auto_preserves_existing(tmp_path):
     """auto keeps existing velocities instead of re-initializing them."""
     atoms = _ar4()
     atoms.set_momenta(np.full((4, 3), 0.5))
-    runner = MDRunner(_CalculatorStub(), temperature=300.0, output_dir=tmp_path,
-                      pre_relax=False, verbose=False, velocity_policy="auto")
+    runner = MDRunner(
+        _CalculatorStub(),
+        temperature=300.0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        velocity_policy="auto",
+    )
     runner._initialize_velocities(atoms)
     assert np.allclose(atoms.get_momenta(), np.full((4, 3), 0.5))
 
@@ -125,9 +155,15 @@ def test_md_velocity_policy_initialize_forces_reinit(tmp_path):
     """initialize re-initializes even when velocities already exist."""
     atoms = _ar4()
     atoms.set_momenta(np.full((4, 3), 0.5))
-    runner = MDRunner(_CalculatorStub(), temperature=300.0, output_dir=tmp_path,
-                      pre_relax=False, verbose=False, velocity_policy="initialize",
-                      seed=11)
+    runner = MDRunner(
+        _CalculatorStub(),
+        temperature=300.0,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        velocity_policy="initialize",
+        seed=11,
+    )
     runner._initialize_velocities(atoms)
     assert not np.allclose(atoms.get_momenta(), np.full((4, 3), 0.5))
     assert atoms.get_temperature() == pytest.approx(300.0)
@@ -154,14 +190,24 @@ def test_md_restart_momenta_reject_position_changing_pre_relax(tmp_path, policy)
 def test_md_rejects_pre_relax_mode(tmp_path):
     """Plan section 5.2: pre_relax_mode must not be silently ignored."""
     with pytest.raises(NotImplementedError, match="pre_relax_mode"):
-        MDRunner(_CalculatorStub(), output_dir=tmp_path, pre_relax=False,
-                verbose=False, pre_relax_mode="positions")
+        MDRunner(
+            _CalculatorStub(),
+            output_dir=tmp_path,
+            pre_relax=False,
+            verbose=False,
+            pre_relax_mode="positions",
+        )
 
 
 def test_md_rejects_unknown_velocity_policy(tmp_path):
     with pytest.raises(ValueError, match="velocity_policy"):
-        MDRunner(_CalculatorStub(), output_dir=tmp_path, pre_relax=False,
-                verbose=False, velocity_policy="bogus")
+        MDRunner(
+            _CalculatorStub(),
+            output_dir=tmp_path,
+            pre_relax=False,
+            verbose=False,
+            velocity_policy="bogus",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -255,9 +301,7 @@ def test_all_backends_share_every_md_integrator_path(
     assert len(Trajectory(out / "raw" / "trajectory.traj")) == 3
     assert np.isfinite(results["temperature"])
     assert (out / "vasp" / "XDATCAR").is_file()
-    assert results["thermostat"] == (
-        thermostat if ensemble == "NVT" else None
-    )
+    assert results["thermostat"] == (thermostat if ensemble == "NVT" else None)
 
 
 def test_short_nve_has_finite_stable_total_energy(tmp_path):
@@ -327,9 +371,7 @@ def test_bulk_total_stress_includes_kinetic_contribution(tmp_path):
 
     atoms.set_momenta(np.arange(1, 13, dtype=float).reshape(4, 3))
     moving = runner._stress_observables(atoms)
-    assert not np.allclose(
-        moving["total_stress"], moving["configurational_stress"]
-    )
+    assert not np.allclose(moving["total_stress"], moving["configurational_stress"])
     assert moving["total_pressure_gpa"] != pytest.approx(
         moving["configurational_pressure_gpa"]
     )
@@ -521,8 +563,15 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     to md.csv, and only scalar summaries stay in RAM."""
     wrapper = _RunWrapper(_FiniteCalc())
     runner = MDRunner(
-        wrapper, ensemble="NVE", temperature=300.0, steps=10, save_interval=2,
-        output_dir=tmp_path, pre_relax=False, verbose=False, seed=42,
+        wrapper,
+        ensemble="NVE",
+        temperature=300.0,
+        steps=10,
+        save_interval=2,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=42,
     )
     results = runner.run(_bulk_atoms())
 
@@ -554,15 +603,22 @@ def test_md_streams_trajectory_to_disk(tmp_path):
     xdatcar = (tmp_path / "vasp" / "XDATCAR").read_text()
     assert xdatcar.count("Direct configuration=") == nframes
     assert "# Step:" not in xdatcar
-    assert len(
-        read(tmp_path / "vasp" / "XDATCAR", index=":", format="vasp-xdatcar")
-    ) == nframes
+    assert (
+        len(read(tmp_path / "vasp" / "XDATCAR", index=":", format="vasp-xdatcar"))
+        == nframes
+    )
     # md.csv was streamed: header + nframes rows.
     with open(tmp_path / "raw" / "md.csv", newline="") as fh:
         rows = list(csv.reader(fh))
     assert rows[0] == [
-        "step", "time_fs", "phase", "potential_energy_eV", "kinetic_energy_eV",
-        "total_energy_eV", "temperature_K", "volume_A3",
+        "step",
+        "time_fs",
+        "phase",
+        "potential_energy_eV",
+        "kinetic_energy_eV",
+        "total_energy_eV",
+        "temperature_K",
+        "volume_A3",
         "configurational_stress_xx_eV_A3",
         "configurational_stress_yy_eV_A3",
         "configurational_stress_zz_eV_A3",
@@ -617,12 +673,10 @@ def test_md_records_every_step_independently_of_trajectory_interval(tmp_path):
 
     step_logs = [message for message in logs if "/3: E =" in message]
     assert [
-        int(message.split("Step", 1)[1].split("/", 1)[0])
-        for message in step_logs
+        int(message.split("Step", 1)[1].split("/", 1)[0]) for message in step_logs
     ] == [0, 1, 2, 3]
     assert any(
-        "Save interval:    2 steps (trajectory frames)" in message
-        for message in logs
+        "Save interval:    2 steps (trajectory frames)" in message for message in logs
     )
     assert any(
         "Thermodynamic log interval: 1 step (buffered disk flush)" in message
@@ -658,9 +712,10 @@ def test_400_atom_every_step_output_preserves_vacf_velocities(tmp_path):
         assert all(frame.has("momenta") for frame in trajectory)
 
     run_log = (tmp_path / "run.log").read_text(encoding="utf-8")
-    assert len(
-        [line for line in run_log.splitlines() if f"/{steps}: E =" in line]
-    ) == expected_frames
+    assert (
+        len([line for line in run_log.splitlines() if f"/{steps}: E =" in line])
+        == expected_frames
+    )
     assert (tmp_path / "vasp" / "XDATCAR").read_text().count(
         "Direct configuration="
     ) == expected_frames
@@ -714,13 +769,20 @@ def test_md_equilibration_and_production_phase_metadata(tmp_path):
 
 def test_md_long_trajectory_has_bounded_resident_summary_memory(tmp_path):
     """Frame summaries are disk-backed and the live queue is strictly bounded."""
+
     def _resident_for(steps, out_dir):
         gc.collect()
         tracemalloc.start()
         runner = MDRunner(
-            _RunWrapper(_FiniteCalc()), ensemble="NVE", temperature=300.0,
-            steps=steps, save_interval=1, output_dir=out_dir,
-            pre_relax=False, verbose=False, seed=1,
+            _RunWrapper(_FiniteCalc()),
+            ensemble="NVE",
+            temperature=300.0,
+            steps=steps,
+            save_interval=1,
+            output_dir=out_dir,
+            pre_relax=False,
+            verbose=False,
+            seed=1,
         )
         res = runner.run(_bulk_atoms(256))
         gc.collect()
@@ -748,9 +810,7 @@ def test_md_long_trajectory_has_bounded_resident_summary_memory(tmp_path):
     )
 
 
-def test_md_output_failure_aborts_instead_of_dropping_frames(
-    tmp_path, monkeypatch
-):
+def test_md_output_failure_aborts_instead_of_dropping_frames(tmp_path, monkeypatch):
     """A writer-thread error must stop MD and leave failed provenance."""
 
     class FailingTrajectoryWriter:
@@ -794,9 +854,7 @@ def test_md_output_failure_aborts_instead_of_dropping_frames(
 def test_md_fmax_abort_defaults_to_safety():
     """The explosion-guard threshold defaults to safety.fmax_abort, not a
     magic literal (plan section 5.7)."""
-    runner = MDRunner(
-        _CalculatorStub(), output_dir=".", pre_relax=False, verbose=False
-    )
+    runner = MDRunner(_CalculatorStub(), output_dir=".", pre_relax=False, verbose=False)
     assert runner.fmax_abort == BUILTIN_DEFAULTS["safety"]["fmax_abort"]
     assert runner.fmax_abort == 20.0
 
@@ -805,9 +863,16 @@ def test_md_fmax_abort_checkpoints_and_marks_manifest_aborted(tmp_path):
     """The named abort threshold must stop, checkpoint, and report the cause."""
     wrapper = _RunWrapper(_FiniteCalc(force_scale=6.0))  # 6 eV/Å > threshold
     runner = MDRunner(
-        wrapper, ensemble="NVE", temperature=300.0, steps=100,
-        save_interval=1000, output_dir=tmp_path, pre_relax=False,
-        verbose=False, seed=1, fmax_abort=5.0,
+        wrapper,
+        ensemble="NVE",
+        temperature=300.0,
+        steps=100,
+        save_interval=1000,
+        output_dir=tmp_path,
+        pre_relax=False,
+        verbose=False,
+        seed=1,
+        fmax_abort=5.0,
     )
     with pytest.raises(ForceSafetyAbort, match="Force safety abort"):
         runner.run(_bulk_atoms())
@@ -819,13 +884,12 @@ def test_md_fmax_abort_checkpoints_and_marks_manifest_aborted(tmp_path):
     assert manifest["error"]["max_force_eV_A"] == pytest.approx(6.0)
     assert manifest["trajectory"]["last_step"] == 0
     assert (tmp_path / "vasp" / "CONTCAR").is_file()
-    assert "Status:              aborted" in (
-        tmp_path / "vasp" / "OUTCAR"
-    ).read_text()
+    assert "Status:              aborted" in (tmp_path / "vasp" / "OUTCAR").read_text()
 
 
 def test_nvt_seed_reproduces_entire_stochastic_trajectory(tmp_path):
     """The seed must drive Langevin kicks, not only initial velocities."""
+
     def run(seed, name):
         out = tmp_path / name
         runner = MDRunner(

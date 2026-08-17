@@ -9,7 +9,18 @@ mlipx - VASP-like interface for MLIP models (UMA, MACE, DPA, GRACE).
 
 from __future__ import annotations
 
-__version__ = "2.0.0"
+from importlib.metadata import PackageNotFoundError, version as _dist_version
+
+
+def _package_version() -> str:
+    """Package version from project metadata (single source of truth)."""
+    try:
+        return _dist_version("mlipx")
+    except PackageNotFoundError:
+        return "0.0.0"
+
+
+__version__ = _package_version()
 
 __all__ = [
     "BatchRunner",

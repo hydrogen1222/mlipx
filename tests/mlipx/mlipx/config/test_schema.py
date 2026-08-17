@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import pytest
+
 from mlipx.config.schema import Schema, get_schema
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="module")
 def schema() -> Schema:
@@ -17,6 +19,7 @@ def schema() -> Schema:
 # ---------------------------------------------------------------------------
 # Schema discovery
 # ---------------------------------------------------------------------------
+
 
 def test_schema_is_singleton(schema: Schema) -> None:
     assert get_schema() is schema
@@ -30,7 +33,13 @@ def test_schema_has_expected_specs(schema: Schema) -> None:
         assert key in names, f"missing core key {key!r}"
     # Run options
     for key in (
-        "fmax", "max_steps", "optimizer", "temperature", "steps", "charge", "spin"
+        "fmax",
+        "max_steps",
+        "optimizer",
+        "temperature",
+        "steps",
+        "charge",
+        "spin",
     ):
         assert key in names, f"missing run key {key!r}"
     # Calculator keys
@@ -41,6 +50,7 @@ def test_schema_has_expected_specs(schema: Schema) -> None:
 # ---------------------------------------------------------------------------
 # Typo suggestions
 # ---------------------------------------------------------------------------
+
 
 def test_suggest_exact_match(schema: Schema) -> None:
     assert "temperature" in schema.suggest("temperature")
@@ -64,6 +74,7 @@ def test_suggest_no_match(schema: Schema) -> None:
 # Canonical name resolution
 # ---------------------------------------------------------------------------
 
+
 def test_canonical_name_lowercase(schema: Schema) -> None:
     assert schema.canonical_name("model_type") == "model_type"
 
@@ -78,9 +89,12 @@ def test_canonical_name_unknown(schema: Schema) -> None:
     """Unknown key returns None (no canonical name registered)."""
     result = schema.canonical_name("unregistered_key")
     assert result is None or result == "unregistered_key"
+
+
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
+
 
 def test_validate_known_key(schema: Schema) -> None:
     spec = schema.resolve("temperature")
@@ -108,6 +122,7 @@ def test_device_is_string(schema: Schema) -> None:
 # ---------------------------------------------------------------------------
 # Scope classification
 # ---------------------------------------------------------------------------
+
 
 def test_calc_scoped_keys_present(schema: Schema) -> None:
     """Keys scoped to specific calc types should be registered."""

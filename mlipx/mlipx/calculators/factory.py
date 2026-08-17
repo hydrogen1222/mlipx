@@ -93,9 +93,7 @@ def _check_unknown_kwargs(
             key, sorted(_ALL_CALC_KEYS | {"device", "task"}), n=1, cutoff=0.6
         )
         hint = f" Did you mean {suggestion[0]!r}?" if suggestion else ""
-        message = (
-            f"Unknown calculator option {key!r} for engine {model_type!r}.{hint}"
-        )
+        message = f"Unknown calculator option {key!r} for engine {model_type!r}.{hint}"
         if strict:
             raise ValueError(message)
         warnings.warn(message, stacklevel=3)

@@ -25,12 +25,12 @@ from typing import Any
 from packaging.requirements import Requirement
 
 from mlipx.gpu_compat import arch_supports_device
-from mlipx.gpu_setup import (
+from mlipx.install.hardware import (
     MIN_VRAM_MIB_WARN,
     cc_arch_name,
     detect_gpus,
-    recommend_torch,
 )
+from mlipx.install.compatibility import BACKENDS, get_backend_arch_profile
 
 _PROBE_SENTINEL = "__MLIPX_DOCTOR_JSON__="
 
@@ -40,7 +40,7 @@ _ENGINE_SPECS: dict[str, dict[str, str]] = {
         "distribution": "fairchem-core",
         "module": "fairchem.core",
         "framework": "torch",
-        "install": "Run `uv sync --frozen` from the repository root.",
+        "install": "Run the mlipx installer: ./scripts/install_mlipx.sh (or `mlipx setup` for the machine-specific command).",
     },
     "mace": {
         "label": "MACE",
@@ -85,8 +85,8 @@ def _installed_dependency_conflicts(
         for raw_requirement in requirements:
             requirement = Requirement(raw_requirement)
             # e3nn is the shared, mutually exclusive UMA/MACE dependency.
-            # Other workspace pins (notably the intentional PyTorch override
-            # for Pascal GPUs) are diagnosed by their dedicated checks.
+            # Other matrix pins (notably the legacy-GPU torch channel) are
+            # diagnosed by their dedicated checks.
             if requirement.name.lower() != "e3nn":
                 continue
             if requirement.marker and not requirement.marker.evaluate():
@@ -430,17 +430,40 @@ def _should_warn_torch_mismatch(
     installed_torch: str | None,
     recommended_torch: str,
 ) -> bool:
-    """Apply the workspace Torch recommendation only to an UMA environment.
+    """Apply the matrix Torch recommendation only to an UMA environment.
 
     MACE and DPA intentionally use their own Torch builds. Recommending UMA's
-    Torch 2.6 inside a DPA environment would break DeepMD's Torch 2.10 ABI
+    matrix torch inside a DPA environment would break DeepMD's Torch 2.10 ABI
     requirement even when the installed CUDA kernel already supports the GPU.
     """
     return bool(
-        uma_installed
-        and installed_torch
-        and recommended_torch not in installed_torch
+        uma_installed and installed_torch and recommended_torch not in installed_torch
     )
+
+
+def _matrix_torch_recommendation(major: int, minor: int):
+    """Derive the recommended UMA torch build directly from the matrix."""
+    from mlipx.install.compatibility import (
+        classify_gpu,
+        effective_cuda_channel,
+        CUDA_CHANNELS,
+    )
+    from mlipx.install.hardware import cc_arch_name  # noqa: F401
+
+    arch = classify_gpu(major, minor)
+    if arch is None:
+        return None
+    bp = get_backend_arch_profile("uma", arch.name)
+    if bp is None:
+        return None
+    tag = effective_cuda_channel(BACKENDS["uma"], arch, bp)
+    channel = CUDA_CHANNELS.get(tag)
+    return {
+        "version": f"{bp.framework_version}+{tag}",
+        "supported": bool(channel),
+        "arch": arch,
+        "bp": bp,
+    }
 
 
 def _recommendation_detail(rec, *, installed_torch: str | None = None) -> str:
@@ -743,14 +766,15 @@ def run_diagnostics(
             checks.append(
                 {
                     "name": "UMA dependency profile",
-                    "value": "legacy GPU compatibility override",
+                    "value": "matrix mismatch",
                     "status": "warn",
                     "detail": (
                         f"Installed torch {torch_ver} does not satisfy FairChem's "
-                        f"declared requirement {fairchem_torch_requirement}. The "
-                        "workspace override supports legacy GPUs but is not the "
-                        "FairChem reference environment. Runtime versions are "
-                        "recorded in MD artifacts.json; do not hide this mismatch."
+                        f"declared requirement {fairchem_torch_requirement}. "
+                        "The mlipx compatibility matrix selects torch 2.8.x for "
+                        "fairchem-core 2.21.0; a patch-version deviation is a "
+                        "warning, not a failure. Runtime versions are recorded "
+                        "in MD artifacts.json."
                     ),
                 }
             )
@@ -887,12 +911,16 @@ def run_diagnostics(
                 f"{gpu['name']} ({vram_gb:.1f} GB, CC {major}.{minor}, "
                 f"{cc_arch_name(major, minor)})"
             )
-            rec = recommend_torch(major, minor)
+            rec = _matrix_torch_recommendation(major, minor)
             if arch_supports_device(gpu_cc, arch_list):
-                if rec.supported and _should_warn_torch_mismatch(
-                    uma_installed=target_engine == "uma",
-                    installed_torch=str(runtime.get("torch_version") or ""),
-                    recommended_torch=rec.version,
+                if (
+                    rec is not None
+                    and rec["supported"]
+                    and _should_warn_torch_mismatch(
+                        uma_installed=target_engine == "uma",
+                        installed_torch=str(runtime.get("torch_version") or ""),
+                        recommended_torch=rec.version,
+                    )
                 ):
                     checks.append(
                         {
@@ -902,7 +930,7 @@ def run_diagnostics(
                             "detail": (
                                 f"Kernel supports {gpu_cc}, but this UMA environment "
                                 f"uses torch {runtime.get('torch_version')} instead of "
-                                f"the workspace recommendation {rec.version}."
+                                f"the matrix recommendation {rec['version']}."
                             ),
                         }
                     )
@@ -978,7 +1006,9 @@ def run_diagnostics(
             target_engine in {"uma", "mace", "dpa"} and not mp.is_file()
         )
         if wrong_kind:
-            expected = "SavedModel directory" if target_engine == "grace" else "model file"
+            expected = (
+                "SavedModel directory" if target_engine == "grace" else "model file"
+            )
             checks.append(
                 {
                     "name": "Model file",
@@ -1042,7 +1072,11 @@ def run_diagnostics(
             }
         )
     elif model_ready and target_engine != "auto":
-        if installed_versions[target_engine] is None or not runtime or not runtime.get("ok"):
+        if (
+            installed_versions[target_engine] is None
+            or not runtime
+            or not runtime.get("ok")
+        ):
             checks.append(
                 {
                     "name": "Model load",
@@ -1094,8 +1128,7 @@ def run_diagnostics(
                     )
             else:
                 error = (
-                    f"{probe.get('error_type', 'Error')}: "
-                    f"{probe.get('error', '')}"
+                    f"{probe.get('error_type', 'Error')}: " f"{probe.get('error', '')}"
                 ).strip()
                 if probe.get("detail"):
                     error += f"\n{probe['detail']}"

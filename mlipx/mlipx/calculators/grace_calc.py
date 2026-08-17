@@ -57,9 +57,7 @@ def _canonicalize_model_input(data: dict[str, Any], ase_atoms: Atoms) -> dict[st
         shifts = np.rint(
             (vectors - raw) @ np.linalg.inv(np.asarray(ase_atoms.cell[:], dtype=float))
         ).astype(np.int64)
-        order = np.lexsort(
-            (shifts[:, 2], shifts[:, 1], shifts[:, 0], ind_j, ind_i)
-        )
+        order = np.lexsort((shifts[:, 2], shifts[:, 1], shifts[:, 0], ind_j, ind_i))
     else:
         order = np.lexsort(
             (
@@ -182,17 +180,13 @@ class _NeighborListCache:
         from matscipy.neighbours import neighbour_list  # noqa: PLC0415
 
         symbols = ase_atoms.get_chemical_symbols()
-        atomic_mu_i = np.array(
-            [self.element_map[s] for s in symbols], dtype=np.int32
-        )
+        atomic_mu_i = np.array([self.element_map[s] for s in symbols], dtype=np.int32)
         ind_i, ind_j, shift, bond_vector = neighbour_list(
             "ijSD",
             ase_atoms,
             cutoff=self._cutoff_map(symbols, extended=True),
         )
-        order = np.lexsort(
-            (shift[:, 2], shift[:, 1], shift[:, 0], ind_j, ind_i)
-        )
+        order = np.lexsort((shift[:, 2], shift[:, 1], shift[:, 0], ind_j, ind_i))
         ind_i = ind_i[order]
         ind_j = ind_j[order]
         shift = shift[order]
@@ -312,9 +306,7 @@ class _NeighborListCache:
         }
         return data
 
-    def _filter(
-        self, ase_atoms: Atoms, displacement: np.ndarray
-    ) -> dict[str, Any]:
+    def _filter(self, ase_atoms: Atoms, displacement: np.ndarray) -> dict[str, Any]:
         """Filter cached periodic images at the exact model cutoff."""
         cell = np.asarray(ase_atoms.cell[:], dtype=float)
         raw_displacement = (
@@ -330,11 +322,7 @@ class _NeighborListCache:
         atom_images = np.rint(
             (raw_displacement - displacement) @ np.linalg.inv(cell)
         ).astype(np.int64)
-        pair_images = (
-            self._shift
-            - atom_images[self._ind_j]
-            + atom_images[self._ind_i]
-        )
+        pair_images = self._shift - atom_images[self._ind_j] + atom_images[self._ind_i]
         bv = (
             np.asarray(ase_atoms.positions, dtype=float)[self._ind_j]
             - np.asarray(ase_atoms.positions, dtype=float)[self._ind_i]
@@ -545,9 +533,7 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
                     memory_limit=self._gpu_memory_limit_mb
                 )
                 for gpu in physical_gpus:
-                    tf.config.set_logical_device_configuration(
-                        gpu, [logical_config]
-                    )
+                    tf.config.set_logical_device_configuration(gpu, [logical_config])
             elif self._gpu_memory_growth:
                 for gpu in physical_gpus:
                     tf.config.experimental.set_memory_growth(gpu, True)
@@ -634,9 +620,7 @@ class GRACECalculatorWrapper(BaseMLIPCalculator):
             "task": self._task,
             "cpu_threads": self._cpu_threads,
             "gpu_memory_growth": (
-                self._gpu_memory_growth
-                if self._gpu_memory_limit_mb is None
-                else False
+                self._gpu_memory_growth if self._gpu_memory_limit_mb is None else False
             ),
             "gpu_memory_limit_mb": self._gpu_memory_limit_mb,
             "neighbor_cache_requested": self._neighbor_cache,

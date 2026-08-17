@@ -74,9 +74,7 @@ def _csv_row(frame: dict[str, Any]) -> list[Any]:
         frame["configurational_pressure_gpa"]
         if frame["configurational_pressure_gpa"] is not None
         else "",
-        frame["total_pressure_gpa"]
-        if frame["total_pressure_gpa"] is not None
-        else "",
+        frame["total_pressure_gpa"] if frame["total_pressure_gpa"] is not None else "",
     ]
 
 
@@ -102,10 +100,7 @@ class MDFrameStats:
         step = int(frame["step"])
         if self.first_step is None:
             self.first_step = step
-        if (
-            self.production_start_frame is None
-            and frame["phase"] == "production"
-        ):
+        if self.production_start_frame is None and frame["phase"] == "production":
             self.production_start_frame = self.count
         self.last_step = step
         self.count += 1
@@ -225,9 +220,7 @@ class AsyncMDOutputWriter:
 
                 if self.xdatcar_writer is not None:
                     if not xdatcar_started:
-                        self.xdatcar_writer.write_header(
-                            item.atoms, self.xdatcar_path
-                        )
+                        self.xdatcar_writer.write_header(item.atoms, self.xdatcar_path)
                         self.xdatcar_writer.open_stream(self.xdatcar_path)
                         xdatcar_started = True
                     self.xdatcar_writer.append_frame(
@@ -246,9 +239,7 @@ class AsyncMDOutputWriter:
                         total_energy=float(item.summary["total_energy"]),
                         temperature=float(item.summary["temperature"]),
                         forces=item.outcar_forces,
-                        configurational_stress=item.summary[
-                            "configurational_stress"
-                        ],
+                        configurational_stress=item.summary["configurational_stress"],
                         total_stress=item.summary["total_stress"],
                     )
 
@@ -337,16 +328,12 @@ class MDTrajectorySummary(Sequence[dict[str, Any]]):
             "total_energy": float(row["total_energy_eV"]),
             "temperature": float(row["temperature_K"]),
             "volume": float(row["volume_A3"]),
-            "configurational_stress": cls._optional_stress(
-                row, cls._CONFIG_STRESS
-            ),
+            "configurational_stress": cls._optional_stress(row, cls._CONFIG_STRESS),
             "total_stress": cls._optional_stress(row, cls._TOTAL_STRESS),
             "configurational_pressure_gpa": cls._optional_float(
                 row["configurational_pressure_GPa"]
             ),
-            "total_pressure_gpa": cls._optional_float(
-                row["total_pressure_GPa"]
-            ),
+            "total_pressure_gpa": cls._optional_float(row["total_pressure_GPa"]),
         }
 
     def __iter__(self) -> Iterator[dict[str, Any]]:

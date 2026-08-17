@@ -112,9 +112,7 @@ def _require_kinisi():
     return sc, DiffusionAnalyzer, ConductivityAnalyzer, kinisi_version
 
 
-def _frame_offset(
-    value_ps: float, *, frame_interval_fs: float, label: str
-) -> int:
+def _frame_offset(value_ps: float, *, frame_interval_fs: float, label: str) -> int:
     """Convert a ps time to an exact saved-frame offset."""
 
     offset = value_ps * 1000.0 / frame_interval_fs
@@ -204,9 +202,7 @@ def _resolve_kinisi_lag_grid(
         }
 
     if (lag_step_ps is None) != (lag_stop_ps is None):
-        raise ValueError(
-            "--lag-step-ps and --lag-stop-ps must be provided together"
-        )
+        raise ValueError("--lag-step-ps and --lag-stop-ps must be provided together")
     assert lag_step_ps is not None
     assert lag_stop_ps is not None
     if not np.isfinite(lag_step_ps) or lag_step_ps <= 0:
@@ -253,9 +249,7 @@ def _resolve_kinisi_lag_grid(
         fit_start_frames > 0 and fit_start_frames not in base_indices
     )
     if fit_start_inserted:
-        lag_indices = np.concatenate(
-            (base_indices, np.asarray([fit_start_frames]))
-        )
+        lag_indices = np.concatenate((base_indices, np.asarray([fit_start_frames])))
         lag_indices.sort()
     else:
         lag_indices = base_indices
@@ -318,9 +312,7 @@ def _kinisi_frames_and_indices(
         raise ValueError("drift_reference must be none, indices, or nonmobile")
     continuous, _ = unwrap_positions(dataset)
     if len(reference):
-        reference_displacement = (
-            continuous[:, reference] - continuous[0, reference]
-        )
+        reference_displacement = continuous[:, reference] - continuous[0, reference]
         drift = np.mean(reference_displacement, axis=1)
     else:
         drift = np.zeros((dataset.nframes, 3), dtype=float)
@@ -358,9 +350,7 @@ def _kinisi_frames_and_indices(
     return frames, local_mobile, reference
 
 
-def _kinisi_parser_peak_bytes(
-    *, nframes: int, natoms: int, triclinic: bool
-) -> int:
+def _kinisi_parser_peak_bytes(*, nframes: int, natoms: int, triclinic: bool) -> int:
     """Conservative estimate of kinisi's trajectory-parser peak allocation."""
     points = max(0, int(nframes)) * max(0, int(natoms))
     if triclinic:
@@ -629,9 +619,7 @@ def kinisi_transport(
     fit_mask = lag_time_ps >= float(fit_start_ps)
     n_lag_points_in_fit = int(np.count_nonzero(fit_mask))
     if n_lag_points_in_fit == 0:
-        raise ValueError(
-            "kinisi lag grid contains no points at or above fit_start_ps"
-        )
+        raise ValueError("kinisi lag grid contains no points at or above fit_start_ps")
     actual_fit_stop_ps = float(lag_time_ps[-1])
     lag_grid_metadata = {
         "mode": lag_grid["mode"],
@@ -648,9 +636,7 @@ def kinisi_transport(
         "frame_interval_ps": float(view.frame_interval_fs / 1000.0),
     }
     if lag_grid["mode"] == "kinisi_default":
-        lag_grid_metadata["estimated_n_lag_points"] = lag_grid[
-            "estimated_n_lag_points"
-        ]
+        lag_grid_metadata["estimated_n_lag_points"] = lag_grid["estimated_n_lag_points"]
     number_density = particle_number_density_m3(view, mobile_species=mobile_species)
     nernst_einstein = nernst_einstein_tracer_conductivity(
         particle_density_m3=number_density,

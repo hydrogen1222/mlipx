@@ -7,24 +7,18 @@
 Hardware GPU detection and PyTorch build recommendation (backward-compat).
 
 This module is the **legacy public API** for ``mlipx setup`` and
-``mlipx doctor``.  It delegates to :mod:`mlipx.install` internally.
+``mlipx doctor``.  It delegates entirely to :mod:`mlipx.install`; there is
+**no second copy of installation logic** here.
 
 New code should use :mod:`mlipx.install` directly.
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from mlipx.install.compatibility import (
-    BACKENDS,
-    CUDA_CHANNELS,
-    BackendSpec,
-    get_backend_arch_profile,
-    select_cuda_channel,
-)
+from mlipx.install.compatibility import BACKENDS, get_backend_arch_profile
 from mlipx.install.hardware import (
     MIN_VRAM_MIB_WARN,
     GpuInfo,
@@ -33,7 +27,7 @@ from mlipx.install.hardware import (
     detect_gpus,
     _pick_oldest,
 )
-from mlipx.install.sources import resolve_source
+from mlipx.install.plan import InstallPlanError, generate_plan, render_plan_shell
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -53,10 +47,6 @@ __all__ = [
     "setup_report_json",
 ]
 
-# ---------------------------------------------------------------------------
-# Legacy TorchRecommendation (kept for doctor.py compatibility)
-# ---------------------------------------------------------------------------
-
 
 @dataclass
 class TorchRecommendation:
@@ -74,8 +64,8 @@ class TorchRecommendation:
 def recommend_torch(cc_major: int, cc_minor: int) -> TorchRecommendation:
     """Legacy: recommend a PyTorch build for the given compute capability.
 
-    Kept for backward compatibility with ``mlipx doctor``.
-    New code should use :func:`mlipx.install.compatibility.select_cuda_channel`.
+    Kept for backward compatibility with ``mlipx doctor``.  The UMA backend
+    profile drives the default recommendation.
     """
     arch = classify_gpu(cc_major, cc_minor)
     sm = f"sm_{cc_major}{cc_minor}"
@@ -93,7 +83,6 @@ def recommend_torch(cc_major: int, cc_minor: int) -> TorchRecommendation:
             ),
         )
 
-    # Look up the UMA backend profile for this arch as the default recommendation
     bp = get_backend_arch_profile("uma", arch.name)
     if bp is None:
         return TorchRecommendation(
@@ -104,167 +93,71 @@ def recommend_torch(cc_major: int, cc_minor: int) -> TorchRecommendation:
             rationale=f"No UMA profile for {arch_name} ({sm}).",
         )
 
-    channel = CUDA_CHANNELS.get(bp.cuda_channel)
-    url = channel.pytorch_url if channel else ""
-    tag = bp.cuda_channel
+    # Derive the CUDA channel via the matrix.
+    from mlipx.install.compatibility import effective_cuda_channel, BACKENDS
+
+    cuda_tag = effective_cuda_channel(BACKENDS["uma"], arch, bp)
+    from mlipx.install.compatibility import CUDA_CHANNELS
+
+    channel = CUDA_CHANNELS.get(cuda_tag)
+    url = f"https://download.pytorch.org/whl/{cuda_tag}" if channel else ""
 
     if arch.experimental:
         rationale = (
-            f"{arch_name} ({sm}): EXPERIMENTAL.  torch {bp.framework_version}"
-            f"+{tag} via legacy CUDA channel.  Upstream does not test this GPU."
+            f"{arch_name} ({sm}): EXPERIMENTAL. torch {bp.framework_version}"
+            f"+{cuda_tag} via legacy CUDA channel. Upstream does not test this GPU."
         )
     elif bp.mlipx_verified:
         rationale = (
             f"{arch_name} ({sm}): mlipx-verified with torch "
-            f"{bp.framework_version}+{tag}."
+            f"{bp.framework_version}+{cuda_tag}."
         )
     else:
         rationale = (
-            f"{arch_name} ({sm}): torch {bp.framework_version}+{tag} "
+            f"{arch_name} ({sm}): torch {bp.framework_version}+{cuda_tag} "
             f"(needs smoke test)."
         )
 
     return TorchRecommendation(
-        version=f"{bp.framework_version}+{tag}",
+        version=f"{bp.framework_version}+{cuda_tag}",
         index_url=url,
-        cu_tag=tag,
+        cu_tag=cuda_tag,
         supported=True,
         rationale=rationale,
         install_commands=[
-            "# Install / pin the recommended PyTorch build (run from repo root):",
+            "# Recommended PyTorch build (see compatibility matrix):",
             f"uv pip install torch=={bp.framework_version} --index-url {url}",
         ],
         pyproject_snippet="",
     )
 
 
-# ---------------------------------------------------------------------------
-# Per-engine install commands
-# ---------------------------------------------------------------------------
-
-
-def engine_install_commands(
-    gpus: Sequence[GpuInfo] | None, engine: str
-) -> list[str]:
+def engine_install_commands(gpus: Sequence[GpuInfo] | None, engine: str) -> list[str]:
     """Return copy-paste install commands for one mlipx engine.
 
-    Delegates to the compatibility matrix in :mod:`mlipx.install.compatibility`.
+    Delegates to :func:`mlipx.install.plan.generate_plan` — there is no
+    independent installation logic here.
     """
-    name = str(engine).strip().lower()
-    if name == "fairchem":
-        name = "uma"
-    if name not in BACKENDS:
-        raise ValueError(f"Unknown engine '{name}'. Choose from: uma, mace, dpa, grace")
-
-    backend = BACKENDS[name]
-    has_gpu = gpus is not None and len(gpus) > 0
-
-    if not has_gpu:
-        return _cpu_commands(backend)
-    else:
-        oldest = _pick_oldest(gpus)
-        arch = classify_gpu(oldest.cc_major, oldest.cc_minor)
-        if arch is None:
-            return _cpu_commands(backend)
-        return _gpu_commands(backend, arch)
-
-
-def _cpu_commands(backend: BackendSpec) -> list[str]:
-    """CPU-only install commands for one backend."""
-    name = backend.venv_name
-    if backend.engine == "uma":
-        return [
-            "# UMA (default engine) — installed by the uv workspace:",
-            "uv sync --frozen",
-            "uv run mlipx doctor --engine uma --device cpu",
-        ]
-    if backend.engine == "grace":
-        # Use the first arch profile's framework version as reference
-        bp = next(iter(backend.arch_profiles.values()))
-        extra = " ".join(f'"{p}"' for p in backend.install_extra)
-        return [
-            "# GRACE — dedicated venv (CPU):",
-            f"uv venv --python 3.12 {name}",
-            f"uv pip install --no-config --python {name}/bin/python "
-            f'-e ./mlipx "tensorflow=={bp.framework_version}" {extra}',
-            f"{name}/bin/mlipx doctor --engine grace --device cpu",
-        ]
-
-    bp = next(iter(backend.arch_profiles.values()))
-    extra = " ".join(backend.install_extra)
-    return [
-        f"# {backend.label} — dedicated venv (CPU):",
-        f"uv venv --python 3.12 {name}",
-        f"uv pip install --no-config --python {name}/bin/python "
-        f'"torch=={bp.framework_version}" '
-        f"--index-url https://download.pytorch.org/whl/cpu",
-        f"uv pip install --no-config --python {name}/bin/python "
-        f"-e ./mlipx {extra}",
-        f"{name}/bin/mlipx doctor --engine {backend.engine} --device cpu",
-    ]
-
-
-def _gpu_commands(backend: BackendSpec, arch) -> list[str]:
-    """GPU install commands for one backend on a specific architecture."""
-    name = backend.venv_name
-    bp = get_backend_arch_profile(backend.engine, arch.name)
-    if bp is None:
-        return [f"# {backend.label}: no profile for {arch.label} — skipped."]
-
-    status_note = ""
-    if bp.status == "experimental":
-        status_note = " [EXPERIMENTAL — upstream does not officially support this GPU]"
-    elif bp.status == "needs_smoke_test":
-        status_note = " [needs smoke test — upstream constraints satisfied, mlipx not yet verified]"
-
-    if backend.engine == "uma":
-        return [
-            f"# {backend.label} — installed by the uv workspace{status_note}:",
-            "uv sync --frozen",
-            "uv run mlipx doctor --engine uma --device auto",
-        ]
-
-    if backend.engine == "grace":
-        tf_ver = bp.framework_version
-        extra = " ".join(
-            f'"{p}"' for p in backend.install_extra + bp.extra_packages
+    gpu_list = list(gpus) if gpus else None
+    try:
+        plan = generate_plan(
+            gpus=gpu_list,
+            engines=[engine],
+            device="auto",
+            verify=False,
         )
-        return [
-            f"# {backend.label} — dedicated venv (TF {tf_ver}){status_note}:",
-            f"uv venv --python 3.12 {name}",
-            f"uv pip install --no-config --python {name}/bin/python "
-            f'-e ./mlipx "tensorflow[and-cuda]=={tf_ver}" {extra}',
-            f"{name}/bin/mlipx doctor --engine grace --device auto",
-        ]
-
-    # MACE, DPA: torch + backend
-    torch_ver = bp.framework_version
-    channel = bp.cuda_channel
-    ch = CUDA_CHANNELS.get(channel)
-    torch_url = ch.pytorch_url if ch else f"https://download.pytorch.org/whl/{channel}"
-    extra = " ".join(backend.install_extra)
-
-    return [
-        f"# {backend.label} — dedicated venv (torch {torch_ver}+{channel}){status_note}:",
-        f"uv venv --python 3.12 {name}",
-        f"uv pip install --no-config --python {name}/bin/python "
-        f'"torch=={torch_ver}" --index-url {torch_url}',
-        f"uv pip install --no-config --python {name}/bin/python "
-        f"-e ./mlipx {extra}",
-        f"{name}/bin/mlipx doctor --engine {backend.engine} --device auto",
-    ]
-
-
-# ---------------------------------------------------------------------------
-# Setup report
-# ---------------------------------------------------------------------------
+    except InstallPlanError as e:
+        return [f"# {engine}: {e}"]
+    # Render the plan as shell lines (strip the header, keep commands).
+    shell = render_plan_shell(plan)
+    lines = shell.splitlines()
+    # Drop the leading "GPU arch / Source / Python" info lines.
+    cmd_lines = [ln for ln in lines if ln.startswith("    $ ")]
+    return [ln[6:] for ln in cmd_lines]
 
 
 def format_setup_report(gpus: list[GpuInfo] | None) -> str:
-    """Format a human-readable GPU setup report.
-
-    Delegates to the compatibility matrix for per-engine recommendations.
-    """
+    """Format a human-readable GPU setup report (delegates to the matrix)."""
     width = 68
     lines: list[str] = []
     lines.append("")
@@ -319,24 +212,22 @@ def format_setup_report(gpus: list[GpuInfo] | None) -> str:
     lines.append(f"  Architecture profile : {arch.label}")
     lines.append(f"  Compute capability   : {oldest.sm}")
     if arch.experimental:
-        lines.append(f"  Status               : EXPERIMENTAL (best-effort only)")
+        lines.append("  Status               : EXPERIMENTAL (best-effort only)")
     lines.append("")
 
-    # Per-backend summary
+    # Per-backend status table from the matrix.
     lines.append("  Compatibility matrix (backend × arch):")
     lines.append("")
-    header = f"  {'Backend':<8} {'Version':<12} {'FW':<10} {'CUDA':<8} {'Status':<20}"
-    lines.append(header)
-    lines.append(f"  {'-'*8} {'-'*12} {'-'*10} {'-'*8} {'-'*20}")
+    lines.append(f"  {'Backend':<10} {'Version':<12} {'FW':<10} {'Status':<18}")
+    lines.append(f"  {'-'*10} {'-'*12} {'-'*10} {'-'*18}")
     for engine_name in ("uma", "mace", "dpa", "grace"):
         backend = BACKENDS[engine_name]
         bp = get_backend_arch_profile(engine_name, arch.name)
         if bp is None:
             continue
         lines.append(
-            f"  {backend.engine:<8} {backend.version:<12} "
-            f"{bp.framework_version:<10} {bp.cuda_channel:<8} "
-            f"{bp.status:<20}"
+            f"  {backend.engine:<10} {backend.version:<12} "
+            f"{bp.framework_version:<10} {bp.status:<18}"
         )
     lines.append("")
 
@@ -346,14 +237,14 @@ def format_setup_report(gpus: list[GpuInfo] | None) -> str:
     _append_per_engine(lines, gpus)
 
     lines.append("  If the download fails, check your network / proxy settings.")
-    lines.append("  Then verify:  uv run mlipx doctor")
+    lines.append("  Then verify:  mlipx doctor")
     lines.append("=" * width)
     return "\n".join(lines)
 
 
 def _append_per_engine(lines: list[str], gpus: list[GpuInfo] | None) -> None:
     """Append per-engine copy-paste commands."""
-    lines.append("  Per-engine manual commands (copy-paste from repo root):")
+    lines.append("  Per-engine install commands (from the compatibility matrix):")
     lines.append("")
     for engine_name, label in (
         ("uma", "UMA (FAIRChem)"),
@@ -414,7 +305,6 @@ def setup_report_json(gpus: list[GpuInfo] | None) -> dict[str, Any]:
                 result["backends"][engine_name] = {
                     "version": backend.version,
                     "framework_version": bp.framework_version,
-                    "cuda_channel": bp.cuda_channel,
                     "status": bp.status,
                     "upstream_supported": bp.upstream_supported,
                     "mlipx_verified": bp.mlipx_verified,

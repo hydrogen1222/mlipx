@@ -86,7 +86,10 @@ class ResolvedConfig:
             "calculator_options": dict(self.calculator_options),
             "run_options": dict(self.run_options),
             "settings": dict(self.settings),
-            "sources": {k: {"value": v.value, "source": v.source} for k, v in self.sources.items()},
+            "sources": {
+                k: {"value": v.value, "source": v.source}
+                for k, v in self.sources.items()
+            },
             "strict": self.strict,
             "settings_path": self.settings_path,
         }
@@ -112,7 +115,12 @@ _CALCULATOR_KEYS_BY_ENGINE: dict[str, set[str]] = {
     "fairchem": {"inference_mode", "torch_num_threads", "activation_checkpointing"},
     "mace": {"default_dtype", "head"},
     "dpa": {"head"},
-    "grace": {"gpu_memory_growth", "gpu_memory_limit_mb", "neighbor_cache", "neighbor_skin"},
+    "grace": {
+        "gpu_memory_growth",
+        "gpu_memory_limit_mb",
+        "neighbor_cache",
+        "neighbor_skin",
+    },
 }
 
 
@@ -140,9 +148,7 @@ def _settings_layer(
     return layer
 
 
-def _canonicalize_layer(
-    raw: dict[str, Any], schema: Schema
-) -> dict[str, Any]:
+def _canonicalize_layer(raw: dict[str, Any], schema: Schema) -> dict[str, Any]:
     """Map alias keys to canonical names and coerce types where possible."""
     out: dict[str, Any] = {}
     for key, value in raw.items():
@@ -199,7 +205,9 @@ def resolve_config(
     """
     schema = schema or get_schema()
     calc_type = calc_type.lower()
-    model_aliases = model_aliases if model_aliases is not None else _aliases_from_settings(settings)
+    model_aliases = (
+        model_aliases if model_aliases is not None else _aliases_from_settings(settings)
+    )
     profiles = profiles if profiles is not None else _profiles_from_settings(settings)
 
     sources: dict[str, ResolvedValue] = {}
@@ -214,7 +222,9 @@ def resolve_config(
         # EngineConfig.from_resolved can route them to MDRunner.
         defaults_layer.update(BUILTIN_DEFAULTS.get("safety", {}))
     defaults_layer["device"] = DEFAULT_DEVICE_BY_CALC_TYPE.get(calc_type, "cpu")
-    _merge_layer(sources, _canonicalize_layer(defaults_layer, schema), "built-in defaults")
+    _merge_layer(
+        sources, _canonicalize_layer(defaults_layer, schema), "built-in defaults"
+    )
 
     # Canonicalise the higher layers once. Besides avoiding repeated parsing,
     # this lets us select the right [engine:<name>] section even when the
@@ -222,17 +232,13 @@ def resolve_config(
     alias_layer = _canonicalize_layer(
         resolve_model_alias(model_alias_name, model_aliases), schema
     )
-    profile_layer = _canonicalize_layer(
-        resolve_profile(profile_name, profiles), schema
-    )
+    profile_layer = _canonicalize_layer(resolve_profile(profile_name, profiles), schema)
     profile_layer.pop("calc_type", None)
     incar_layer = _canonicalize_layer(incar or {}, schema)
     incar_layer.pop("calc_type", None)
     cli_layer = _canonicalize_layer(cli or {}, schema)
     cli_layer.pop("calc_type", None)
-    settings_layer = _canonicalize_layer(
-        _settings_layer(settings, calc_type), schema
-    )
+    settings_layer = _canonicalize_layer(_settings_layer(settings, calc_type), schema)
 
     # Select the final engine before applying any settings so its *built-in*
     # defaults participate at the correct lowest precedence.  Previously only
@@ -288,16 +294,37 @@ def resolve_config(
     _merge_layer(sources, cli_layer, "CLI")
 
     # ---- Finalise model-level fields. ----
-    model_type = str(sources.get("model_type", ResolvedValue("uma", "built-in defaults")).value).lower()
-    model_path = str(sources.get("model_path", ResolvedValue("", "built-in defaults")).value)
-    task = str(sources.get("task", ResolvedValue("omat" if model_type in {"uma", "fairchem"} else "bulk", "built-in defaults")).value).lower()
-    device = str(sources.get("device", ResolvedValue(DEFAULT_DEVICE_BY_CALC_TYPE.get(calc_type, "cpu"), "built-in defaults")).value)
+    model_type = str(
+        sources.get("model_type", ResolvedValue("uma", "built-in defaults")).value
+    ).lower()
+    model_path = str(
+        sources.get("model_path", ResolvedValue("", "built-in defaults")).value
+    )
+    task = str(
+        sources.get(
+            "task",
+            ResolvedValue(
+                "omat" if model_type in {"uma", "fairchem"} else "bulk",
+                "built-in defaults",
+            ),
+        ).value
+    ).lower()
+    device = str(
+        sources.get(
+            "device",
+            ResolvedValue(
+                DEFAULT_DEVICE_BY_CALC_TYPE.get(calc_type, "cpu"), "built-in defaults"
+            ),
+        ).value
+    )
     # inference_mode defaults: 'turbo' for MD (historical behaviour),
     # 'default' for everything else.
     _default_inference = "turbo" if calc_type == "md" else "default"
     inference_mode = str(
-        sources.get("inference_mode", ResolvedValue(_default_inference, "built-in defaults")).value
-)
+        sources.get(
+            "inference_mode", ResolvedValue(_default_inference, "built-in defaults")
+        ).value
+    )
     if model_type not in {"uma", "fairchem"}:
         inference_source = sources.get("inference_mode")
         if (
@@ -358,8 +385,10 @@ def resolve_config(
         sources["seed"] = ResolvedValue(seed, "auto-generated")
         run_options["seed"] = seed
 
-    strict = bool(settings_bag.get("strict_config", False)) if settings_bag else bool(
-        _settings_layer(settings, calc_type).get("strict_config", False)
+    strict = (
+        bool(settings_bag.get("strict_config", False))
+        if settings_bag
+        else bool(_settings_layer(settings, calc_type).get("strict_config", False))
     )
 
     resolved = ResolvedConfig(
@@ -401,7 +430,9 @@ def _validate_resolved(resolved: ResolvedConfig, schema: Schema) -> None:
         known_extra=set(resolved.settings.keys()),
     )
     if resolved.strict and errors:
-        raise ValueError("Strict config validation failed:\n  - " + "\n  - ".join(errors))
+        raise ValueError(
+            "Strict config validation failed:\n  - " + "\n  - ".join(errors)
+        )
     if errors and not resolved.strict:
         for err in errors:
             warnings.warn(err, stacklevel=2)

@@ -296,15 +296,11 @@ def test_dependency_conflicts_detect_mace_e3nn_mismatch(monkeypatch):
 
     versions = {"e3nn": "0.6.0", "torch": "2.6.0"}
     monkeypatch.setattr("mlipx.doctor.metadata.requires", fake_requires)
-    monkeypatch.setattr(
-        "mlipx.doctor.metadata.version", lambda name: versions[name]
-    )
+    monkeypatch.setattr("mlipx.doctor.metadata.version", lambda name: versions[name])
 
     conflicts = _installed_dependency_conflicts(("mace-torch", "fairchem-core"))
 
-    assert conflicts == [
-        "mace-torch requires e3nn==0.4.4, but 0.6.0 is installed"
-    ]
+    assert conflicts == ["mace-torch requires e3nn==0.4.4, but 0.6.0 is installed"]
 
 
 def test_torch_recommendation_is_uma_specific():

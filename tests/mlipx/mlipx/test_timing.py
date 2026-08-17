@@ -11,6 +11,7 @@ import json
 import time
 
 import pytest
+
 from mlipx.runners.base import BaseRunner
 from mlipx.timing import RunTiming, append_timing_to_outputs, format_duration
 
@@ -69,9 +70,7 @@ def test_append_timing_supports_layered_md_outputs(tmp_path) -> None:
     outcar = tmp_path / "vasp" / "OUTCAR"
     outcar.write_text("MLIPX MD", encoding="utf-8")
     results = tmp_path / "raw" / "mlipx_results.json"
-    results.write_text(
-        json.dumps({"calculation": {"timing": {}}}), encoding="utf-8"
-    )
+    results.write_text(json.dumps({"calculation": {"timing": {}}}), encoding="utf-8")
     manifest = tmp_path / "artifacts.json"
     manifest.write_text(
         json.dumps(
