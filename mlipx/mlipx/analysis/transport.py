@@ -95,7 +95,11 @@ def nernst_einstein_tracer_conductivity(
 def _require_kinisi():
     try:
         import scipp as sc
-        from kinisi.analyze import ConductivityAnalyzer, DiffusionAnalyzer
+        from kinisi.analyze import (
+            ConductivityAnalyzer,
+            DiffusionAnalyzer,
+            JumpDiffusionAnalyzer,
+        )
     except ImportError as exc:  # pragma: no cover - depends on optional env
         raise OptionalDependencyError(
             "kinisi transport is unavailable. Install mlipx[transport]."
@@ -109,7 +113,7 @@ def _require_kinisi():
             f"Unsupported kinisi version {kinisi_version}; Analysis v2 is tested "
             "with kinisi>=2.0.5,<3."
         )
-    return sc, DiffusionAnalyzer, ConductivityAnalyzer, kinisi_version
+    return sc, DiffusionAnalyzer, ConductivityAnalyzer, JumpDiffusionAnalyzer, kinisi_version
 
 
 def _frame_offset(value_ps: float, *, frame_interval_fs: float, label: str) -> int:
@@ -293,6 +297,41 @@ def _kinisi_frames_and_indices(
     steps remain minimum-image reconstructible, and pass only mobile atoms to
     kinisi so its automatic complement is empty.
     """
+    corrected, reference = _production_positions_with_drift(
+        dataset,
+        mobile=mobile,
+        drift_reference=drift_reference,
+        drift_indices=drift_indices,
+    )
+    frames: list[Atoms] = []
+    symbols = [dataset.symbols[index] for index in mobile]
+    for positions, cell in zip(corrected[:, mobile], dataset.cells, strict=True):
+        atoms = Atoms(
+            symbols=symbols,
+            positions=positions,
+            cell=cell,
+            pbc=dataset.pbc,
+        )
+        atoms.wrap()
+        frames.append(atoms)
+    local_mobile = np.arange(len(mobile), dtype=int)
+    return frames, local_mobile, reference
+
+
+def _production_positions_with_drift(
+    dataset: TrajectoryDataset,
+    *,
+    mobile: np.ndarray,
+    drift_reference: str,
+    drift_indices: Iterable[int] | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return production positions after one explicit framework correction.
+
+    The correction is intentionally the same unweighted reference displacement
+    used by the kinisi adapter.  The returned array still contains every atom;
+    this lets mechanism analysis construct a provenance-preserving GEMDAT
+    trajectory without applying a second correction.
+    """
     mode = drift_reference.lower()
     if mode == "none":
         reference = np.asarray([], dtype=int)
@@ -316,8 +355,8 @@ def _kinisi_frames_and_indices(
         drift = np.mean(reference_displacement, axis=1)
     else:
         drift = np.zeros((dataset.nframes, 3), dtype=float)
-    corrected = continuous[:, mobile] - drift[:, None, :]
-    corrected_steps = np.diff(corrected, axis=0)
+    corrected = continuous - drift[:, None, :]
+    corrected_steps = np.diff(corrected[:, mobile], axis=0)
     if corrected_steps.size:
         mic_steps, _ = find_mic(
             corrected_steps.reshape(-1, 3),
@@ -335,19 +374,7 @@ def _kinisi_frames_and_indices(
                 "from wrapped saved frames without losing an image crossing. Save "
                 "the trajectory more frequently."
             )
-    frames: list[Atoms] = []
-    symbols = [dataset.symbols[index] for index in mobile]
-    for positions, cell in zip(corrected, dataset.cells, strict=True):
-        atoms = Atoms(
-            symbols=symbols,
-            positions=positions,
-            cell=cell,
-            pbc=dataset.pbc,
-        )
-        atoms.wrap()
-        frames.append(atoms)
-    local_mobile = np.arange(len(mobile), dtype=int)
-    return frames, local_mobile, reference
+    return corrected, reference
 
 
 def _kinisi_parser_peak_bytes(*, nframes: int, natoms: int, triclinic: bool) -> int:
@@ -453,6 +480,22 @@ def _sample_summary(variable, *, target_unit: str) -> dict[str, Any]:
     return _numeric_sample_summary(values, unit=target_unit)
 
 
+def _variable_values(variable, *, target_unit: str | None = None) -> np.ndarray:
+    """Return a scipp variable's values as a flat float array."""
+
+    converted = variable.to(unit=target_unit) if target_unit is not None else variable
+    return np.asarray(converted.values, dtype=float).reshape(-1)
+
+
+def _variable_variances(variable, *, target_unit: str | None = None) -> np.ndarray:
+    """Return scipp variances, using NaN when a backend omits them."""
+
+    converted = variable.to(unit=target_unit) if target_unit is not None else variable
+    if converted.variances is None:
+        return np.full(converted.shape, np.nan, dtype=float).reshape(-1)
+    return np.asarray(converted.variances, dtype=float).reshape(-1)
+
+
 def _production_temperature(
     dataset: TrajectoryDataset, explicit_temperature_K: float | None
 ) -> tuple[float, str]:
@@ -490,6 +533,8 @@ def kinisi_transport(
     drift_indices: Iterable[int] | None = None,
     temperature_K: float | None = None,
     collective_conductivity: bool = False,
+    collective_system_particles: int = 1,
+    jump_diffusion: bool = False,
     random_seed: int = 0,
     n_samples: int = 1000,
     n_walkers: int = 32,
@@ -507,6 +552,11 @@ def kinisi_transport(
         raise ValueError("fit_start_ps must be explicitly provided and >= 0")
     if n_samples < 1 or n_walkers < 2 or n_burn < 0 or n_thin < 1:
         raise ValueError("Invalid kinisi sampling parameters")
+    if not isinstance(collective_system_particles, (int, np.integer)) or isinstance(
+        collective_system_particles, bool
+    ) or int(collective_system_particles) < 1:
+        raise ValueError("collective_system_particles must be a positive integer")
+    collective_system_particles = int(collective_system_particles)
     if not np.isfinite(parser_memory_limit_gib) or parser_memory_limit_gib <= 0:
         raise ValueError("parser_memory_limit_gib must be finite and positive")
     require_analysis(dataset, "transport")
@@ -557,7 +607,24 @@ def kinisi_transport(
         raise ValueError(
             "ionic_charge_e is required because transport reports sigma_NE_tracer"
         )
-    sc, DiffusionAnalyzer, ConductivityAnalyzer, kinisi_version = _require_kinisi()
+    kinisi_backend = _require_kinisi()
+    # Keep a small compatibility shim for downstream tests/plugins that
+    # monkeypatch the pre-JumpDiffusionAnalyzer four-item return value.
+    if len(kinisi_backend) == 4:
+        sc, DiffusionAnalyzer, ConductivityAnalyzer, kinisi_version = kinisi_backend
+        JumpDiffusionAnalyzer = None
+    else:
+        (
+            sc,
+            DiffusionAnalyzer,
+            ConductivityAnalyzer,
+            JumpDiffusionAnalyzer,
+            kinisi_version,
+        ) = kinisi_backend
+    if jump_diffusion and JumpDiffusionAnalyzer is None:
+        raise OptionalDependencyError(
+            "The installed kinisi adapter does not provide JumpDiffusionAnalyzer"
+        )
     frames, local_mobile, reference = _kinisi_frames_and_indices(
         view,
         mobile=mobile,
@@ -728,6 +795,8 @@ def kinisi_transport(
             if analyzer.msd.variances is not None
             else np.full(analyzer.msd.shape, np.nan)
         ),
+        "D_tracer_samples_m2_s": d_samples_m2_s,
+        "sigma_NE_samples_S_m": sigma_samples_S_m,
         "quality": {
             "fixed_cell": True,
             "uniform_sampling": True,
@@ -742,17 +811,193 @@ def kinisi_transport(
             **common,
             ionic_charge=float(ionic_charge_e) * sc.Unit("e"),
             species_indices=indices_variable,
+            system_particles=collective_system_particles,
         )
         conductivity.conductivity(
             start_dt,
             temperature=sc.scalar(temperature, unit="K"),
             **{**mcmc, "random_state": np.random.RandomState(random_seed + 1)},
         )
+        sigma_collective_samples_S_m = _variable_values(
+            conductivity.sigma, target_unit="S/m"
+        )
+        sigma_collective_samples_S_cm = sigma_collective_samples_S_m * S_M_TO_S_CM
+        sigma_collective_samples_mS_cm = sigma_collective_samples_S_m * S_M_TO_MS_CM
+        sigma_collective_S_m = _numeric_sample_summary(
+            sigma_collective_samples_S_m, unit="S/m"
+        )
+        sigma_collective_S_cm = _numeric_sample_summary(
+            sigma_collective_samples_S_cm, unit="S/cm"
+        )
+        sigma_collective_mS_cm = _numeric_sample_summary(
+            sigma_collective_samples_mS_cm, unit="mS/cm"
+        )
+        d_sigma_samples_m2_s = sigma_collective_samples_S_m * (
+            BOLTZMANN_J_K * temperature / (number_density * charge_C**2)
+        )
+        d_sigma_m2_s = _numeric_sample_summary(d_sigma_samples_m2_s, unit="m^2/s")
+        d_sigma_cm2_s = _numeric_sample_summary(
+            d_sigma_samples_m2_s * 1.0e4, unit="cm^2/s"
+        )
+        mscd = getattr(conductivity, "mscd", None)
+        if mscd is None:
+            # Compatibility for lightweight downstream fakes written before
+            # collective MSCD artifacts were exposed. Real kinisi 2.x always
+            # provides this variable.
+            mscd = sc.array(
+                dims=["time interval"],
+                values=np.full(len(lag_time_ps), np.nan),
+                variances=np.full(len(lag_time_ps), np.nan),
+                unit="angstrom^2",
+            )
+        try:
+            mscd_target_unit = "C^2*m^2"
+            mscd_values = _variable_values(mscd, target_unit=mscd_target_unit)
+            mscd_variance = _variable_variances(mscd, target_unit=mscd_target_unit)
+        except Exception:
+            # Lightweight fakes may expose a dimension-only placeholder. Keep
+            # its backend unit rather than inventing a charge conversion.
+            mscd_target_unit = str(mscd.unit)
+            mscd_values = _variable_values(mscd)
+            mscd_variance = _variable_variances(mscd)
         result["collective_conductivity"] = {
             "backend": "kinisi",
-            "definition": "collective charge-displacement conductivity",
-            "sigma_collective_mS_cm_posterior": _sample_summary(
-                conductivity.sigma, target_unit="mS/cm"
+            "definition": (
+                "collective Einstein ionic conductivity within the analyzed "
+                "classical MD trajectory / selected charge model"
+            ),
+            "ionic_charge_e": float(ionic_charge_e),
+            "system_particles": collective_system_particles,
+            "system_particles_semantics": (
+                "index-ordered statistical groups in kinisi, not independent MD replicas"
+            ),
+            "sigma_collective_posterior_S_m": sigma_collective_S_m,
+            "sigma_collective_posterior_S_cm": sigma_collective_S_cm,
+            # Preserve the original public key for consumers of Analysis v2.
+            "sigma_collective_mS_cm_posterior": sigma_collective_mS_cm,
+            "sigma_collective_MScm_posterior": sigma_collective_mS_cm,
+            "D_sigma_posterior_m2_s": d_sigma_m2_s,
+            "D_sigma_posterior_cm2_s": d_sigma_cm2_s,
+            "mscd_unit": mscd_target_unit,
+            "mscd_variance_unit": f"({mscd_target_unit})^2",
+            "uncertainty_semantics": (
+                "Kinisi Bayesian posterior conditional on this trajectory and charge "
+                "model; it is not model, finite-size, replica, or total physical uncertainty."
             ),
         }
+        result["kinisi_mscd"] = mscd_values
+        result["kinisi_mscd_variance"] = mscd_variance
+        result["sigma_collective_samples_S_m"] = sigma_collective_samples_S_m
+        result["D_sigma_samples_m2_s"] = d_sigma_samples_m2_s
+        result["sigma_collective"] = sigma_collective_S_m
+        result["D_sigma"] = d_sigma_m2_s
+
+        # Do not present a marginal-ratio interval as a joint physical error
+        # bar.  The interval below is only an explicitly labelled independent
+        # posterior approximation, and is omitted for nonphysical posteriors.
+        positive_collective = np.all(
+            np.isfinite(sigma_collective_samples_S_m)
+            & (sigma_collective_samples_S_m > 0)
+        )
+        mean_abs = max(
+            abs(float(np.mean(sigma_collective_samples_S_m))),
+            np.finfo(float).tiny,
+        )
+        near_zero = np.any(
+            np.abs(sigma_collective_samples_S_m) <= mean_abs * 1.0e-6
+        )
+        positive_tracer = np.all(np.isfinite(d_samples_m2_s) & (d_samples_m2_s > 0))
+        if positive_collective and not near_zero and positive_tracer:
+            rng = np.random.RandomState(random_seed + 2)
+            n_ratio = max(len(d_samples_m2_s), len(sigma_collective_samples_S_m))
+            d_marginal = rng.choice(d_samples_m2_s, size=n_ratio, replace=True)
+            sigma_marginal = rng.choice(
+                sigma_collective_samples_S_m, size=n_ratio, replace=True
+            )
+            haven_samples = d_marginal / (
+                sigma_marginal
+                * BOLTZMANN_J_K
+                * temperature
+                / (number_density * charge_C**2)
+            )
+            correlation_samples = 1.0 / haven_samples
+            ratio_semantics = (
+                "independent-marginal-posterior approximation; covariance between "
+                "tracer and collective estimators is not modeled; not total physical uncertainty"
+            )
+            haven = _numeric_sample_summary(haven_samples, unit="1")
+            correlation = _numeric_sample_summary(correlation_samples, unit="1")
+            haven["uncertainty_semantics"] = ratio_semantics
+            correlation["uncertainty_semantics"] = ratio_semantics
+            result["haven_ratio_samples"] = haven_samples
+            result["correlation_factor_samples"] = correlation_samples
+            result["haven_ratio"] = {
+                "definition": "H_R = D_tracer / D_sigma = sigma_NE_tracer / sigma_collective",
+                "point_estimate": float(diffusion_m2_s["mean"] / d_sigma_m2_s["mean"]),
+                "posterior": haven,
+                "uncertainty_semantics": ratio_semantics,
+            }
+            result["correlation_factor"] = {
+                "definition": "sigma_collective / sigma_NE_tracer",
+                "point_estimate": float(
+                    sigma_collective_S_m["mean"] / sigma_ne_posterior_S_m["mean"]
+                ),
+                "posterior": correlation,
+                "uncertainty_semantics": ratio_semantics,
+            }
+        else:
+            warning = (
+                "Haven/correlation posterior intervals omitted because the collective "
+                "conductivity posterior contains non-finite, non-positive, or near-zero samples."
+            )
+            result.setdefault("warnings", []).append(warning)
+            haven_point = None
+            if np.isfinite(d_sigma_m2_s["mean"]) and d_sigma_m2_s["mean"] != 0:
+                haven_point = float(diffusion_m2_s["mean"] / d_sigma_m2_s["mean"])
+            correlation_point = None
+            if np.isfinite(sigma_ne_posterior_S_m["mean"]) and sigma_ne_posterior_S_m[
+                "mean"
+            ] != 0:
+                correlation_point = float(
+                    sigma_collective_S_m["mean"] / sigma_ne_posterior_S_m["mean"]
+                )
+            result["haven_ratio"] = {
+                "definition": "H_R = D_tracer / D_sigma = sigma_NE_tracer / sigma_collective",
+                "point_estimate": haven_point,
+                "posterior": None,
+                "uncertainty_semantics": "omitted: invalid collective posterior",
+            }
+            result["correlation_factor"] = {
+                "definition": "sigma_collective / sigma_NE_tracer",
+                "point_estimate": correlation_point,
+                "posterior": None,
+                "uncertainty_semantics": "omitted: invalid collective posterior",
+            }
+    if jump_diffusion:
+        jump = JumpDiffusionAnalyzer.from_ase(
+            **common,
+            specie_indices=indices_variable,
+            system_particles=collective_system_particles,
+        )
+        jump.jump_diffusion(
+            start_dt,
+            **{**mcmc, "random_state": np.random.RandomState(random_seed + 3)},
+        )
+        d_j_m2_s = _variable_values(jump.D_J, target_unit="m^2/s")
+        result["jump_diffusion"] = {
+            "backend": "kinisi",
+            "definition": "total/jump-displacement transport diagnostic; not tracer diffusion",
+            "system_particles": collective_system_particles,
+            "system_particles_semantics": (
+                "index-ordered statistical groups in kinisi, not independent MD replicas"
+            ),
+            "D_J_posterior_m2_s": _numeric_sample_summary(d_j_m2_s, unit="m^2/s"),
+            "D_J_posterior_cm2_s": _numeric_sample_summary(
+                d_j_m2_s * 1.0e4, unit="cm^2/s"
+            ),
+            "mstd_unit": str(jump.mstd.unit),
+        }
+        result["kinisi_mstd"] = _variable_values(jump.mstd)
+        result["kinisi_mstd_variance"] = _variable_variances(jump.mstd)
+        result["D_J_samples_m2_s"] = d_j_m2_s
     return result

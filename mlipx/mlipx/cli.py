@@ -841,6 +841,20 @@ Examples:
     transport_parser.add_argument("--drift-indices", default=None)
     transport_parser.add_argument("--temperature-K", type=float, default=None)
     transport_parser.add_argument("--collective-conductivity", action="store_true")
+    transport_parser.add_argument(
+        "--collective-system-particles",
+        type=int,
+        default=1,
+        help=(
+            "kinisi index-ordered statistical groups for collective/jump analysis; "
+            "these are not independent MD replicas (default: 1)."
+        ),
+    )
+    transport_parser.add_argument(
+        "--jump-diffusion",
+        action="store_true",
+        help="Also run kinisi JumpDiffusionAnalyzer as a total/jump diagnostic.",
+    )
     transport_parser.add_argument("--random-seed", type=int, default=0)
     transport_parser.add_argument("--n-samples", type=int, default=1000)
     transport_parser.add_argument("--n-walkers", type=int, default=32)
@@ -910,6 +924,12 @@ Examples:
     electrolyte_parser.add_argument("--background-level", type=float, default=0.1)
     electrolyte_parser.add_argument("--site-radius-A", type=float, default=None)
     electrolyte_parser.add_argument("--minimal-residence", type=int, default=0)
+    electrolyte_parser.add_argument(
+        "--drift-reference",
+        choices=["none", "nonmobile", "indices"],
+        default="none",
+    )
+    electrolyte_parser.add_argument("--drift-indices", default=None)
     electrolyte_parser.add_argument(
         "--jump-dimensions", type=int, choices=[1, 2, 3], default=3
     )
@@ -1716,6 +1736,7 @@ def _print_transport_summary(results: dict) -> None:
     lag = tracer.get("lag_grid") or {}
     ne = results.get("nernst_einstein") or {}
     sigma = ne.get("sigma_NE_tracer_posterior_mS_cm") or {}
+    print(f"Production mean T: {results.get('temperature_mean_K', float('nan')):g} K")
     print("Tracer diffusion:")
     d_mean = d_post.get("mean")
     d_std = d_post.get("std")
@@ -1750,6 +1771,30 @@ def _print_transport_summary(results: dict) -> None:
             print(
                 f"  95% credible interval = [{sigma_ci[0]:.6e}, {sigma_ci[1]:.6e}] mS/cm"
             )
+    collective = results.get("collective_conductivity") or {}
+    coll = collective.get("sigma_collective_mS_cm_posterior") or {}
+    if coll.get("mean") is not None:
+        print("Collective Einstein ionic conductivity (trajectory/charge-model quantity):")
+        print(f"  sigma_collective = {coll['mean']:.6e} mS/cm")
+        interval = coll.get("credible_interval_95") or [None, None]
+        if interval[0] is not None:
+            print(f"  95% credible interval = [{interval[0]:.6e}, {interval[1]:.6e}] mS/cm")
+        dsigma = collective.get("D_sigma_posterior_m2_s") or {}
+        if dsigma.get("mean") is not None:
+            print(f"  D_sigma = {dsigma['mean']:.6e} m^2/s")
+        haven = results.get("haven_ratio") or {}
+        if haven.get("point_estimate") is not None:
+            print(f"  Haven ratio H_R = {haven['point_estimate']:.6g}")
+        corr = results.get("correlation_factor") or {}
+        if corr.get("point_estimate") is not None:
+            print(f"  correlation factor = {corr['point_estimate']:.6g}")
+    jump = results.get("jump_diffusion") or {}
+    if jump:
+        d_j = jump.get("D_J_posterior_m2_s") or {}
+        if d_j.get("mean") is not None:
+            print(f"Jump/total displacement diagnostic D_J = {d_j['mean']:.6e} m^2/s")
+    for warning in results.get("warnings", []):
+        print(f"WARNING: {warning}")
 
 
 def cmd_analyze(args: argparse.Namespace) -> int:

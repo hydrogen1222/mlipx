@@ -22,7 +22,11 @@ if TYPE_CHECKING:
     from typing import Any
 
 
-_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 3}
+# Analysis output revisions are part of the request/cache identity. Bump the
+# changed scientific tasks while deliberately leaving the native MSD revision
+# untouched.
+_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 4, "electrolyte": 2}
+_TASK_SCIENTIFIC_REVISIONS = {"transport": 4, "electrolyte": 2}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
@@ -173,18 +177,28 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
         "D_median_m2_s": d_post["median"],
         "D_ci95_low_m2_s": d_post["credible_interval_95"][0],
         "D_ci95_high_m2_s": d_post["credible_interval_95"][1],
+        "Dtr_mean_m2_s": d_post["mean"],
+        "Dtr_ci95_low_m2_s": d_post["credible_interval_95"][0],
+        "Dtr_ci95_high_m2_s": d_post["credible_interval_95"][1],
         "sigma_NE_mean_mS_cm": sigma["mean"],
         "sigma_NE_std_mS_cm": sigma["std"],
         "sigma_NE_median_mS_cm": sigma["median"],
         "sigma_NE_ci95_low_mS_cm": sigma["credible_interval_95"][0],
         "sigma_NE_ci95_high_mS_cm": sigma["credible_interval_95"][1],
+        "sigma_NE_tracer_mean_S_m": ne["sigma_NE_tracer_posterior_S_m"]["mean"],
+        "sigma_NE_tracer_ci95_low_S_m": ne["sigma_NE_tracer_posterior_S_m"]["credible_interval_95"][0],
+        "sigma_NE_tracer_ci95_high_S_m": ne["sigma_NE_tracer_posterior_S_m"]["credible_interval_95"][1],
         "kinisi_version": tracer["kinisi_version"],
         "random_seed": tracer["random_seed"],
         "positions_convention": semantics["source_positions_convention"],
         "kinisi_backend_reconstruction": semantics["backend_reconstruction"],
     }
     if "collective_conductivity" in result:
-        coll = result["collective_conductivity"]["sigma_collective_mS_cm_posterior"]
+        coll = result["collective_conductivity"].get(
+            "sigma_collective_mS_cm_posterior",
+            result["collective_conductivity"].get("sigma_collective_posterior_mS_cm", {}),
+        )
+        coll = coll or {}
         fields.update(
             {
                 "sigma_collective_mean_mS_cm": coll["mean"],
@@ -194,6 +208,68 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
                 "sigma_collective_ci95_high_mS_cm": coll["credible_interval_95"][1],
             }
         )
+        coll_s = result["collective_conductivity"].get(
+            "sigma_collective_posterior_S_m", {}
+        )
+        dsigma = result["collective_conductivity"].get(
+            "D_sigma_posterior_m2_s", {}
+        )
+        dsigma_cm = result["collective_conductivity"].get(
+            "D_sigma_posterior_cm2_s", {}
+        )
+        haven = result.get("haven_ratio") or {}
+        correlation = result.get("correlation_factor") or {}
+        fields.update(
+            {
+                "sigma_collective_mean_S_m": coll_s.get("mean"),
+                "sigma_collective_ci95_low_S_m": (coll_s.get("credible_interval_95") or [None, None])[0],
+                "sigma_collective_ci95_high_S_m": (coll_s.get("credible_interval_95") or [None, None])[1],
+                "D_sigma_mean_m2_s": dsigma.get("mean"),
+                "Dsigma_mean_m2_s": dsigma.get("mean"),
+                "D_sigma_ci95_low_m2_s": (dsigma.get("credible_interval_95") or [None, None])[0],
+                "D_sigma_ci95_high_m2_s": (dsigma.get("credible_interval_95") or [None, None])[1],
+                "Dsigma_mean_cm2_s": dsigma_cm.get("mean"),
+                "Haven_point_estimate": haven.get("point_estimate"),
+                "Haven": haven.get("point_estimate"),
+                "Haven_ci95_low": (haven.get("posterior") or {}).get("credible_interval_95", [None, None])[0],
+                "Haven_ci95_high": (haven.get("posterior") or {}).get("credible_interval_95", [None, None])[1],
+                "correlation_factor_point_estimate": correlation.get("point_estimate"),
+                "correlation_factor": correlation.get("point_estimate"),
+                "correlation_factor_ci95_low": (correlation.get("posterior") or {}).get("credible_interval_95", [None, None])[0],
+                "correlation_factor_ci95_high": (correlation.get("posterior") or {}).get("credible_interval_95", [None, None])[1],
+                "ratio_uncertainty_semantics": (haven.get("uncertainty_semantics")),
+            }
+        )
+    else:
+        fields.update(
+            {
+                "sigma_collective_mean_mS_cm": None,
+                "sigma_collective_mean_S_m": None,
+                "D_sigma_mean_m2_s": None,
+                "Dsigma_mean_m2_s": None,
+                "Haven_point_estimate": None,
+                "Haven": None,
+                "correlation_factor_point_estimate": None,
+                "correlation_factor": None,
+            }
+        )
+    if "jump_diffusion" in result:
+        jump = result["jump_diffusion"].get("D_J_posterior_m2_s", {})
+        fields.update(
+            {
+                "D_J_mean_m2_s": jump.get("mean"),
+                "D_J_ci95_low_m2_s": (jump.get("credible_interval_95") or [None, None])[0],
+                "D_J_ci95_high_m2_s": (jump.get("credible_interval_95") or [None, None])[1],
+            }
+        )
+    fields.update(
+        {
+            "temperature_source": result.get("temperature_source"),
+            "drift_reference": (result.get("drift_correction") or {}).get("mode"),
+            "dimensions": result.get("dimensions"),
+            "fit_start_ps": tracer.get("fit_start_ps"),
+        }
+    )
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(fields.keys())
@@ -366,35 +442,166 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
         artifacts.append("density.npz")
         return result, artifacts
     if task == "transport":
-        from mlipx.analysis.plots import plot_transport
+        from mlipx.analysis.plots import (
+            plot_transport,
+            plot_transport_mscd,
+            plot_transport_mstd,
+        )
         from mlipx.analysis.transport import kinisi_transport
 
         result = kinisi_transport(dataset, **parameters)
-        np.savez(
+        arrays = {
+            "lag_time_ps": result["lag_time_ps"],
+            "msd_A2": result["kinisi_msd_A2"],
+            "msd_variance_A4": result["kinisi_msd_variance_A4"],
+            "D_tracer_samples_m2_s": result["D_tracer_samples_m2_s"],
+            "sigma_NE_samples_S_m": result["sigma_NE_samples_S_m"],
+        }
+        if "kinisi_mscd" in result:
+            arrays.update(
+                {
+                    "mscd": result["kinisi_mscd"],
+                    "mscd_variance": result["kinisi_mscd_variance"],
+                    "sigma_collective_samples_S_m": result[
+                        "sigma_collective_samples_S_m"
+                    ],
+                    "D_sigma_samples_m2_s": result["D_sigma_samples_m2_s"],
+                }
+            )
+            if "haven_ratio_samples" in result:
+                arrays["haven_ratio_samples"] = result["haven_ratio_samples"]
+        if "kinisi_mstd" in result:
+            arrays.update(
+                {
+                    "mstd": result["kinisi_mstd"],
+                    "mstd_variance": result["kinisi_mstd_variance"],
+                    "D_J_samples_m2_s": result["D_J_samples_m2_s"],
+                }
+            )
+        np.savez_compressed(
             output_dir / "kinisi_arrays.npz",
-            lag_time_ps=result["lag_time_ps"],
-            msd_A2=result["kinisi_msd_A2"],
-            msd_variance_A4=result["kinisi_msd_variance_A4"],
+            **arrays,
         )
         artifacts.append("kinisi_arrays.npz")
         _write_transport_summary(output_dir / "transport_summary.csv", result)
         artifacts.append("transport_summary.csv")
+        _write_json(
+            output_dir / "diagnostics.json",
+            {
+                "quality": result.get("quality"),
+                "warnings": result.get("warnings", []),
+                "kinisi_position_semantics": result.get("kinisi_position_semantics"),
+                "kinisi_time_mapping": result.get("kinisi_time_mapping"),
+                "kinisi_resource_diagnostics": result.get(
+                    "kinisi_resource_diagnostics"
+                ),
+                "drift_correction": result.get("drift_correction"),
+                "uncertainty_semantics": {
+                    "tracer": result["nernst_einstein"].get("uncertainty_semantics"),
+                    "collective": (result.get("collective_conductivity") or {}).get(
+                        "uncertainty_semantics"
+                    ),
+                    "ratios": (result.get("haven_ratio") or {}).get(
+                        "uncertainty_semantics"
+                    ),
+                },
+            },
+        )
+        artifacts.append("diagnostics.json")
         artifacts.extend(
             path.name for path in plot_transport(result, output_dir / "transport_msd")
         )
+        if "kinisi_mscd" in result:
+            artifacts.extend(
+                path.name
+                for path in plot_transport_mscd(result, output_dir / "transport_mscd")
+            )
+        if "kinisi_mstd" in result:
+            artifacts.extend(
+                path.name
+                for path in plot_transport_mstd(result, output_dir / "transport_mstd")
+            )
         return result, artifacts
     if task == "electrolyte":
         from mlipx.analysis.electrolyte import gemdat_electrolyte
+        from mlipx.analysis.plots import (
+            plot_electrolyte_density,
+            plot_electrolyte_distribution,
+            plot_electrolyte_paths,
+        )
 
         result = gemdat_electrolyte(dataset, **parameters)
-        np.savez(output_dir / "electrolyte_arrays.npz", **result.arrays)
+        np.savez_compressed(output_dir / "electrolyte_arrays.npz", **result.arrays)
         artifacts.append("electrolyte_arrays.npz")
+        summary_fields = {
+            key: value
+            for key, value in result.summary.items()
+            if np.isscalar(value) and not isinstance(value, (dict, list, tuple))
+        }
+        _write_columns(
+            output_dir / "electrolyte_summary.csv",
+            {key: [value] for key, value in summary_fields.items()},
+        )
+        artifacts.append("electrolyte_summary.csv")
+        _write_json(
+            output_dir / "diagnostics.json",
+            {"warnings": result.warnings, "summary": result.summary},
+        )
+        artifacts.append("diagnostics.json")
+        for matrix_name in ("transition_matrix", "jump_matrix"):
+            if matrix_name in result.arrays:
+                matrix_path = output_dir / f"{matrix_name}.csv"
+                np.savetxt(matrix_path, np.asarray(result.arrays[matrix_name]), delimiter=",")
+                artifacts.append(matrix_path.name)
+        artifacts.extend(
+            path.name
+            for path in plot_electrolyte_density(
+                result.arrays, output_dir / "density_projection"
+            )
+        )
+        artifacts.extend(
+            path.name
+            for path in plot_electrolyte_paths(
+                {"paths": result.paths}, output_dir / "free_energy_paths"
+            )
+        )
+        artifacts.extend(
+            path.name
+            for path in plot_electrolyte_distribution(
+                {"table": result.tables.get("residence_times")},
+                output_dir / "residence_time_distribution",
+                title="Residence-time distribution",
+                xlabel="Residence time",
+            )
+        )
+        artifacts.extend(
+            path.name
+            for path in plot_electrolyte_distribution(
+                {"table": result.tables.get("jumps")},
+                output_dir / "jump_distance_distribution",
+                title="Jump-distance distribution",
+                xlabel="Jump distance",
+            )
+        )
+        artifacts.extend(
+            path.name
+            for path in plot_electrolyte_distribution(
+                {"table": result.tables.get("jump_rates")},
+                output_dir / "jump_rate_segments",
+                title="Jump rate by trajectory segment",
+                xlabel="Jump rate",
+            )
+        )
         for name, table in result.tables.items():
             path = output_dir / f"{name}.csv"
             if hasattr(table, "to_csv"):
                 table.to_csv(path, index=False)
             else:
-                np.savetxt(path, np.asarray(table), delimiter=",")
+                values = np.asarray(table)
+                if values.size == 0:
+                    path.write_text("empty\n", encoding="utf-8")
+                else:
+                    np.savetxt(path, values, delimiter=",")
             artifacts.append(path.name)
         for name, structure in result.structures.items():
             path = output_dir / f"{name}.cif"
@@ -403,6 +610,16 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
         for axis, values in result.paths.items():
             path = output_dir / f"percolation_{axis}.csv"
             _write_columns(path, values)
+            artifacts.append(path.name)
+        # Explicit discovery artifacts have stable names in addition to the
+        # generic structures, making exploratory site generation auditable.
+        if "detected_sites" in result.structures:
+            path = output_dir / "detected_sites.cif"
+            result.structures["detected_sites"].to(filename=str(path))
+            artifacts.append(path.name)
+        if "occupancy_sites" in result.structures:
+            path = output_dir / "occupancy_sites.cif"
+            result.structures["occupancy_sites"].to(filename=str(path))
             artifacts.append(path.name)
         return {"summary": result.summary, "warnings": result.warnings}, artifacts
     if task in {"vacf", "spectrum"}:
@@ -461,6 +678,10 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
     }
     if request.task in _TASK_OUTPUT_REVISIONS:
         canonical_request["task_output_revision"] = _TASK_OUTPUT_REVISIONS[request.task]
+    if request.task in _TASK_SCIENTIFIC_REVISIONS:
+        canonical_request["task_scientific_revision"] = _TASK_SCIENTIFIC_REVISIONS[
+            request.task
+        ]
     analysis_id = _analysis_id(canonical_request)
     root = _output_root(request.source_path)
     output_dir = root / request.task / analysis_id
@@ -490,6 +711,8 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
         "source_run": str(request.source_path),
         "source_trajectory": fingerprint,
     }
+    if request.task in _TASK_SCIENTIFIC_REVISIONS:
+        provenance["task_scientific_revision"] = _TASK_SCIENTIFIC_REVISIONS[request.task]
     _write_json(output_dir / "provenance.json", provenance)
     record = {
         "analysis_id": analysis_id,
@@ -506,6 +729,27 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
                 "fit_stop_ps": result["tracer_diffusion"]["fit_stop_ps"],
                 "lag_grid": result["tracer_diffusion"]["lag_grid"],
                 "kinisi_position_semantics": result["kinisi_position_semantics"],
+                "temperature_source": result.get("temperature_source"),
+                "drift_correction": result.get("drift_correction"),
+                "dimensions": result.get("dimensions"),
+                "random_seed": result["tracer_diffusion"].get("random_seed"),
+                "collective_system_particles": (
+                    result.get("collective_conductivity") or {}
+                ).get("system_particles"),
+                "jump_diffusion": "jump_diffusion" in result,
+            }
+            _write_json(output_dir / "provenance.json", provenance)
+        elif request.task == "electrolyte":
+            summary = result.get("summary", {})
+            provenance["electrolyte"] = {
+                "analysis_phase": summary.get("analysis_phase", "production"),
+                "time_source": summary.get("time_source"),
+                "temperature_source": summary.get("temperature_source"),
+                "position_convention": summary.get("position_convention"),
+                "drift_correction": summary.get("drift_correction"),
+                "site_source": summary.get("site_source"),
+                "jump_dimensions": summary.get("jump_dimensions"),
+                "percolation_axes": summary.get("percolation_axes"),
             }
             _write_json(output_dir / "provenance.json", provenance)
         payload = {

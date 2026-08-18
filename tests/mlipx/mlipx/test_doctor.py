@@ -29,7 +29,7 @@ def _controlled_environment(monkeypatch, **versions):
     monkeypatch.setattr("mlipx.doctor.metadata.requires", lambda name: [])
 
 
-def _mock_4090_runtime(monkeypatch, arch_list):
+def _mock_4090_runtime(monkeypatch, arch_list, *, total_memory=24564 * 1024**2):
     from mlipx.gpu_setup import GpuInfo
 
     _controlled_environment(
@@ -55,7 +55,7 @@ def _mock_4090_runtime(monkeypatch, arch_list):
                     "name": "NVIDIA GeForce RTX 4090",
                     "major": 8,
                     "minor": 9,
-                    "total_memory": 24564 * 1024**2,
+                    "total_memory": total_memory,
                 }
             ],
         },
@@ -322,6 +322,24 @@ def test_doctor_reports_missing_4090_kernel_without_crashing(monkeypatch):
     assert "do not support sm_89" in runtime_gpu["detail"]
     assert "torch 2.8.0+cu128" in runtime_gpu["detail"]
     assert failures == 1
+
+
+def test_doctor_falls_back_to_nvidia_smi_when_container_reports_zero_vram(
+    monkeypatch,
+):
+    """A container runtime's zero memory value means unknown, not zero VRAM."""
+    _mock_4090_runtime(
+        monkeypatch,
+        ["sm_70", "sm_75", "sm_80", "sm_86", "sm_90"],
+        total_memory=0,
+    )
+
+    checks, failures = run_diagnostics(engine="uma", device="cuda")
+    names = {check["name"]: check for check in checks}
+
+    assert "24.0 GB" in names["Runtime GPU 0"]["value"]
+    assert "Runtime GPU 0 VRAM" not in names
+    assert failures == 0
 
 
 def test_backend_import_failure_is_not_reported_as_installed_runtime(monkeypatch):

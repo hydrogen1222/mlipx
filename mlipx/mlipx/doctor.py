@@ -28,6 +28,7 @@ from mlipx.gpu_compat import arch_supports_device
 from mlipx.gpu_setup import TorchRecommendation, recommend_torch
 from mlipx.install.hardware import (
     MIN_VRAM_MIB_WARN,
+    GpuInfo,
     cc_arch_name,
     detect_gpus,
 )
@@ -472,6 +473,44 @@ def _recommendation_detail(
     return "\n  ".join(lines)
 
 
+def _runtime_gpu_vram_mib(
+    gpu: dict[str, Any], hardware_gpus: list[GpuInfo]
+) -> int | None:
+    """Return runtime GPU memory, with a validated nvidia-smi fallback.
+
+    Some backend imports leave ``torch.cuda.get_device_properties()`` with a
+    zero ``total_memory`` even though CUDA computation succeeds.  A zero is
+    unknown, not a real zero-capacity GPU.  Fall back only when nvidia-smi has
+    a device with the same name and compute capability; otherwise preserve
+    the uncertainty instead of emitting a false low-VRAM warning.
+    """
+    try:
+        runtime_bytes = int(gpu.get("total_memory") or 0)
+    except (TypeError, ValueError):
+        runtime_bytes = 0
+    if runtime_bytes > 0:
+        return runtime_bytes // (1024**2)
+
+    try:
+        major = int(gpu["major"])
+        minor = int(gpu["minor"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    name = str(gpu.get("name") or "")
+    matches = [
+        item
+        for item in hardware_gpus
+        if item.name == name
+        and item.cc_major == major
+        and item.cc_minor == minor
+        and item.vram_mib > 0
+    ]
+    sizes = {item.vram_mib for item in matches}
+    if len(sizes) == 1:
+        return sizes.pop()
+    return None
+
+
 def run_diagnostics(
     model_path: str | Path | None = None,
     *,
@@ -883,9 +922,12 @@ def run_diagnostics(
             major = int(gpu["major"])
             minor = int(gpu["minor"])
             gpu_cc = f"sm_{major}{minor}"
-            vram_gb = int(gpu["total_memory"]) / (1024**3)
+            vram_mib = _runtime_gpu_vram_mib(gpu, hw_gpus)
+            vram_label = (
+                f"{vram_mib / 1024:.1f} GB" if vram_mib is not None else "VRAM unknown"
+            )
             value = (
-                f"{gpu['name']} ({vram_gb:.1f} GB, CC {major}.{minor}, "
+                f"{gpu['name']} ({vram_label}, CC {major}.{minor}, "
                 f"{cc_arch_name(major, minor)})"
             )
             rec = recommend_torch(major, minor)
@@ -927,11 +969,23 @@ def run_diagnostics(
                         ),
                     }
                 )
-            if int(gpu["total_memory"]) // (1024**2) < MIN_VRAM_MIB_WARN:
+            if vram_mib is None:
                 checks.append(
                     {
                         "name": f"Runtime GPU {index} VRAM",
-                        "value": f"{vram_gb:.1f} GB",
+                        "value": "unknown",
+                        "status": "warn",
+                        "detail": (
+                            "The framework did not report GPU memory and its device "
+                            "could not be matched unambiguously to nvidia-smi."
+                        ),
+                    }
+                )
+            elif vram_mib < MIN_VRAM_MIB_WARN:
+                checks.append(
+                    {
+                        "name": f"Runtime GPU {index} VRAM",
+                        "value": vram_label,
                         "status": "warn",
                         "detail": (
                             f"Below {MIN_VRAM_MIB_WARN // 1024} GB; use small systems "

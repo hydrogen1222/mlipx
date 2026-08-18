@@ -48,6 +48,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
 如果上一次安装中途停止，请使用 `--clean` 重新运行，让各引擎的残缺环境在验证前完整重建。
+GPU 环境体积很大：安装全部四个隔离环境需要预留数十 GiB。GRACE 安装完成后通常约占
+6–7 GiB，下载和解压 CUDA wheel 时还需要额外的临时空间。
 
 运行 `./scripts/install_mlipx.sh --help` 查看全部参数。
 
@@ -239,7 +241,19 @@ DEVICE      = cpu
   --diffusivity-std 0.1e-10 --diffusivity-std 0.2e-10 --diffusivity-std 0.5e-10
 ```
 
-### 输运（扩散 + 电导率）
+### 分析层级：MSD、transport 与 electrolyte
+
+三个命令承担不同职责：
+
+- `msd` 是诊断视图：多时间起点 MSD、局部 `alpha` 和 native OLS 拟合窗口；其 OLS 结果明确标记 `publication_grade=false`，不是定量输运权威。
+- `transport` 是定量输运权威。kinisi 给出示踪 `D_tracer`，并按
+  `sigma_NE_tracer=n(z e)^2D_tracer/(k_B T)` 传播后验。启用
+  `--collective-conductivity` 时，MSCD 包含轨迹中表示的离子相关，得到
+  `sigma_collective`，并推导 `D_sigma=sigma_collective k_B T/(n(z e)^2)`。
+  Haven 比明确为 `H_R=D_tracer/D_sigma=sigma_NE_tracer/sigma_collective`，
+  correlation factor 为 `sigma_collective/sigma_NE_tracer`。可选
+  `--jump-diffusion` 的 MSTD/`D_J` 是总/跳跃位移诊断，不是示踪扩散。
+- `electrolyte` 只做 GEMDAT 机制分析：密度、位点、占据、transition、驻留、跳跃、集体事件和渗流路径。GEMDAT 端点/COM 扩散率和 Haven 只放在 `diagnostic_crosscheck`，并标记 `publication_transport_authority=false`。
 
 协方差感知的输运分析使用 [kinisi 2.x](https://joss.theoj.org/papers/10.21105/joss.05984)。必须显式给出拟合起点：
 
@@ -247,6 +261,12 @@ DEVICE      = cpu
 .venv/bin/mlipx analyze RUN transport --mobile Li --charge 1 \
   --drift-reference nonmobile --fit-start-ps 40 \
   --lag-step-ps 2 --lag-stop-ps 200 --random-seed 0
+
+# LGPS：示踪 + collective Einstein 电导率
+mlipx analyze RUN transport \
+  --mobile Li --charge 1 --drift-reference nonmobile \
+  --fit-start-ps 40 --lag-step-ps 2 --lag-stop-ps 200 \
+  --collective-conductivity --random-seed 0
 ```
 
 关键科学规则：
@@ -255,8 +275,11 @@ DEVICE      = cpu
 - **仅支持固定晶胞。** 变晶胞输运不受支持。
 - **漂移校正必须显式选择：** `none`、`nonmobile` 或 `indices`。
 - **`--lag-step-ps` / `--lag-stop-ps`** 只稀疏化 kinisi 的 lag 时间网格，不对轨迹帧降采样；两者必须同时使用。
-- **MSD 扩散拟合** 只有在同时给出 `--fit-start-ps` 和 `--fit-stop-ps` 时才产生。mlipx 不会自动判断扩散区间。
+- **native MSD OLS 诊断** 只有在同时给出 `--fit-start-ps` 和 `--fit-stop-ps` 时才产生；mlipx 不会自动判断 publication 拟合窗口。transport 使用显式 kinisi `--fit-start-ps` 与选定 lag 网格。
 - **Nernst–Einstein 示踪电导率**（`sigma_NE_tracer`）会报告后验均值 / 标准差 / 95% 置信区间。它不是总物理不确定性，也不自动等于实验或集体电导率。
+- `sigma_NE_tracer` 忽略 distinct 离子相关；`sigma_collective` 是所分析经典 MD 轨迹与所选电荷模型内的 collective Einstein 离子电导率，不自动等于实验块体/多晶电导率。
+- kinisi CrI 是条件后验区间，不包含模型、有限尺寸或 replica 不确定性；`--collective-system-particles` 是按索引分组的统计参数，不是独立 MD replica。Haven 区间若可给出，会明确标注为独立边际后验近似，因为没有建模示踪/集体协方差。
+- 安全完成 PBC 重构的 0.1 ps 保存间隔可用于长时 Einstein/MSCD 分析；它不能替代短时 VACF 或 Green–Kubo 所需的密集采样。
 
 ### 电解质机制分析（可选 GEMDAT）
 
@@ -269,6 +292,7 @@ python -m pip install -e './mlipx[analysis,electrolyte]'
 ```
 
 位点来源是必须的（`--sites` 或 `--discover-sites-from-density`）。GEMDAT 的扩散系数不会被提升为优于 kinisi 的估计。
+显式 CIF 位点是可复现路径；密度分割是探索性的，并记录 resolution/background/峰数等元数据。GEMDAT 自由能路径 barrier 是有限温度占据推导量，不是 NEB 势能迁移 barrier。
 
 ### 输出与复现
 
@@ -282,6 +306,12 @@ task-specific CSV/NPZ
 PNG and SVG when applicable
 diagnostics.json when applicable
 ```
+
+Transport 另外生成 `transport_summary.csv`、压缩的 `kinisi_arrays.npz` 和
+`transport_msd`；启用 collective/jump 时分别增加 `transport_mscd` 与
+`transport_mstd`。Electrolyte 生成压缩 `electrolyte_arrays.npz`、汇总/transition/
+jump/percolation CSV、CIF 位点产物以及无 GUI 的密度/自由能/机制图。transport
+与 electrolyte 的 scientific revision 会进入缓存键，语义变化后不会静默复用旧结果。
 
 请求哈希包含源指纹、选择、范围、坐标轴、漂移定义、科学参数和后端版本。相同请求会被复用，除非使用 `--force`。
 
@@ -426,6 +456,27 @@ JSON
 ### CUDA 显存不足
 
 使用 `--device cpu`、更小的模型，或 UMA `--activation-checkpointing`。GRACE 设置 `--gpu-memory-limit-mb`。
+
+### 安装器报告 `No space left on device`
+
+重试前先检查仓库所在文件系统和 uv 缓存：
+
+```bash
+df -h . "$(uv cache dir)"
+du -sh "$(uv cache dir)" .venv* 2>/dev/null
+uv cache clean
+```
+
+如果中断在 GRACE 安装阶段，应保留已经验证通过的 UMA/MACE/DPA，只重建 GRACE。
+安装期间建议至少留出 10–12 GiB；实际占用会随 wheel 版本和 uv 链接模式变化。
+
+```bash
+./scripts/install_mlipx.sh --source china --engines grace --clean
+```
+
+如果 uv 缓存位于空间较小的根分区，而另一文件系统空间充足，可在重试时设置
+`UV_CACHE_DIR=/larger/path/uv-cache`。仓库所在文件系统仍需容纳最终的
+`.venv-grace` 环境。
 
 ### MACE 环境不兼容
 

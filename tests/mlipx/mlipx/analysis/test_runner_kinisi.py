@@ -208,7 +208,7 @@ def test_transport_analysis_id_includes_lag_parameters_and_revision(
     provenance = json.loads(
         (first_output / "provenance.json").read_text(encoding="utf-8")
     )
-    assert request["task_output_revision"] == 3
+    assert request["task_output_revision"] == 4
     assert provenance["parameters"]["lag_step_ps"] == 1.0
     assert provenance["transport"]["lag_grid"]["requested_step_ps"] == 1.0
     reused = run_analysis(

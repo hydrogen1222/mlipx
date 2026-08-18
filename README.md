@@ -49,6 +49,9 @@ Common variants:
 
 If an earlier installation stopped partway, rerun it with `--clean` so the
 partially populated engine environments are rebuilt before verification.
+GPU installations are large: reserve tens of GiB for all four isolated
+environments. GRACE alone typically needs about 6–7 GiB after installation
+and additional temporary space while CUDA wheels are downloaded and extracted.
 
 Run `./scripts/install_mlipx.sh --help` for all options.
 
@@ -240,7 +243,27 @@ Each input gets its own output subdirectory; the root gets `batch_summary.json`.
   --diffusivity-std 0.1e-10 --diffusivity-std 0.2e-10 --diffusivity-std 0.5e-10
 ```
 
-### Transport (diffusion + conductivity)
+### Analysis hierarchy: MSD, transport, and electrolyte
+
+The three commands have deliberately different scientific roles:
+
+- `msd` is a diagnostic view: multiple-time-origin MSD, local `alpha`, and
+  native OLS fit-window diagnostics. Its OLS result is explicitly
+  `publication_grade=false` and is not the transport authority.
+- `transport` is the quantitative authority. Kinisi provides tracer
+  `D_tracer`; mlipx derives
+  `sigma_NE_tracer = n (z e)^2 D_tracer/(k_B T)`. With
+  `--collective-conductivity`, kinisi MSCD includes distinct charge
+  correlations and provides `sigma_collective`, from which
+  `D_sigma = sigma_collective k_B T/(n (z e)^2)` is derived. The reported
+  Haven ratio is explicitly `H_R = D_tracer/D_sigma = sigma_NE_tracer/
+  sigma_collective`; the correlation factor is
+  `sigma_collective/sigma_NE_tracer`. `--jump-diffusion` adds MSTD and `D_J`
+  as a total/jump-displacement diagnostic, not tracer diffusion.
+- `electrolyte` is GEMDAT mechanism analysis: density, sites, occupancy,
+  transitions, residence, jumps, collective events, and percolating paths.
+  GEMDAT endpoint/COM diffusivities and Haven ratios are retained only under
+  `diagnostic_crosscheck` (`publication_transport_authority=false`).
 
 Covariance-aware transport uses [kinisi 2.x](https://joss.theoj.org/papers/10.21105/joss.05984). It requires an explicit fit start:
 
@@ -248,6 +271,12 @@ Covariance-aware transport uses [kinisi 2.x](https://joss.theoj.org/papers/10.21
 .venv/bin/mlipx analyze RUN transport --mobile Li --charge 1 \
   --drift-reference nonmobile --fit-start-ps 40 \
   --lag-step-ps 2 --lag-stop-ps 200 --random-seed 0
+
+# LGPS: tracer + collective Einstein conductivity
+mlipx analyze RUN transport \
+  --mobile Li --charge 1 --drift-reference nonmobile \
+  --fit-start-ps 40 --lag-step-ps 2 --lag-stop-ps 200 \
+  --collective-conductivity --random-seed 0
 ```
 
 Key scientific rules:
@@ -256,8 +285,20 @@ Key scientific rules:
 - **Fixed-cell only.** Variable-cell transport is unsupported.
 - **Drift correction is explicit:** `none`, `nonmobile`, or `indices`.
 - **`--lag-step-ps` / `--lag-stop-ps`** sparsify kinisi's lag-time grid, not the trajectory frames. They must be used together.
-- **MSD diffusion fit** is only produced when both `--fit-start-ps` and `--fit-stop-ps` are given. mlipx does not auto-detect the diffusive regime.
+- **Native MSD OLS diagnostics** require both `--fit-start-ps` and `--fit-stop-ps`; mlipx does not auto-detect a publication fit window. Transport uses its explicit kinisi `--fit-start-ps` and selected lag grid.
 - **Nernst–Einstein tracer conductivity** (`sigma_NE_tracer`) is reported with posterior mean / SD / 95% CI. It is not a total physical uncertainty and not automatically equal to experimental/collective conductivity.
+- `sigma_NE_tracer` ignores distinct ion correlations. `sigma_collective` is a
+  collective Einstein ionic conductivity within the analyzed classical MD
+  trajectory and selected charge model; it is not automatically an
+  experimental bulk/polycrystalline conductivity.
+- Kinisi credible intervals are conditional posterior intervals, not
+  model/finite-size/replica uncertainty. `--collective-system-particles`
+  selects index-ordered kinisi statistical groups, not independent replicas.
+  Haven ratio intervals, when available, are labelled independent-marginal
+  approximations because tracer/collective covariance is not modeled.
+- A safely reconstructed 0.1 ps saved interval can be valid for long-time
+  Einstein/MSCD analysis. It is not dense sampling for short-time VACF or
+  Green–Kubo analysis.
 
 ### Electrolyte mechanisms (optional GEMDAT)
 
@@ -270,6 +311,10 @@ python -m pip install -e './mlipx[analysis,electrolyte]'
 ```
 
 A site source is mandatory (`--sites` or `--discover-sites-from-density`). GEMDAT endpoint diffusivity is never promoted over the kinisi estimate.
+Explicit CIF sites are the reproducible pathway; density segmentation is
+exploratory and records its resolution/background/peak metadata. GEMDAT
+free-energy path barriers are finite-temperature occupancy-derived quantities,
+not NEB potential-energy migration barriers.
 
 ### Outputs & reproducibility
 
@@ -283,6 +328,14 @@ task-specific CSV/NPZ
 PNG and SVG when applicable
 diagnostics.json when applicable
 ```
+
+Transport additionally writes `transport_summary.csv`, compressed
+`kinisi_arrays.npz`, and `transport_msd`; collective and jump analyses add
+`transport_mscd` and `transport_mstd`. Electrolyte writes compressed
+`electrolyte_arrays.npz`, summary/transition/jump/percolation CSVs, CIF site
+artifacts, and headless density/free-energy/mechanism plots. The transport
+and electrolyte scientific revisions are part of the cache key, so old
+results are not silently reused after these semantic changes.
 
 The request hash includes the source fingerprint, selection, range, axes, drift definition, scientific parameters, and backend versions. Identical requests are reused unless `--force` is supplied.
 
@@ -427,6 +480,28 @@ Atoms are too far apart (> cutoff), the cell is invalid, or PBC is wrong. Check 
 ### CUDA out of memory
 
 Use `--device cpu`, a smaller model, or UMA `--activation-checkpointing`. For GRACE set `--gpu-memory-limit-mb`.
+
+### Installer reports `No space left on device`
+
+Inspect the repository filesystem and uv cache before retrying:
+
+```bash
+df -h . "$(uv cache dir)"
+du -sh "$(uv cache dir)" .venv* 2>/dev/null
+uv cache clean
+```
+
+For an interrupted GRACE install, keep the already verified UMA/MACE/DPA
+environments and rebuild only GRACE. Aim for at least 10–12 GiB free during
+the installation; exact usage depends on wheel versions and uv's link mode.
+
+```bash
+./scripts/install_mlipx.sh --source china --engines grace --clean
+```
+
+If the uv cache is on a small root filesystem but another filesystem has more
+space, set `UV_CACHE_DIR=/larger/path/uv-cache` for the retry. The repository
+filesystem still needs room for the final `.venv-grace` environment.
 
 ### MACE environment incompatible
 

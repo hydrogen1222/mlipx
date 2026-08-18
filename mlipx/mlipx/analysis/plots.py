@@ -167,6 +167,134 @@ def plot_transport(result: dict[str, Any], output_stem: str | Path) -> list[Path
     return _save(fig, output_stem)
 
 
+def _plot_transport_series(
+    result: dict[str, Any],
+    output_stem: str | Path,
+    *,
+    values_key: str,
+    variance_key: str,
+    ylabel: str,
+    label: str,
+) -> list[Path]:
+    plt = _pyplot()
+    values = np.asarray(result[values_key], dtype=float)
+    variance = np.asarray(result.get(variance_key, np.full(values.shape, np.nan)))
+    lag_ps = np.asarray(result["lag_time_ps"], dtype=float)[: len(values)]
+    fig, axis = plt.subplots(figsize=(7, 4.5))
+    axis.errorbar(
+        lag_ps,
+        values,
+        yerr=np.sqrt(np.abs(variance)),
+        fmt=".",
+        markersize=3,
+        elinewidth=0.8,
+        capsize=0,
+        label=label,
+    )
+    tracer = result.get("tracer_diffusion", {})
+    if tracer.get("fit_start_ps") is not None:
+        axis.axvspan(
+            float(tracer["fit_start_ps"]),
+            float(tracer.get("fit_stop_ps", lag_ps[-1])),
+            alpha=0.15,
+            color="tab:orange",
+            label="diffusion fit window",
+        )
+    axis.set_xlabel("Lag time (ps)")
+    axis.set_ylabel(ylabel)
+    axis.legend()
+    axis.grid(alpha=0.25)
+    return _save(fig, output_stem)
+
+
+def plot_transport_mscd(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+    """Plot the collective mean-squared charge displacement."""
+
+    return _plot_transport_series(
+        result,
+        output_stem,
+        values_key="kinisi_mscd",
+        variance_key="kinisi_mscd_variance",
+        ylabel=f"MSCD ({result.get('collective_conductivity', {}).get('mscd_unit', 'backend units')})",
+        label="kinisi MSCD",
+    )
+
+
+def plot_transport_mstd(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+    """Plot total/jump mean-squared displacement (a diagnostic)."""
+
+    return _plot_transport_series(
+        result,
+        output_stem,
+        values_key="kinisi_mstd",
+        variance_key="kinisi_mstd_variance",
+        ylabel=f"MSTD ({result.get('jump_diffusion', {}).get('mstd_unit', 'backend units')})",
+        label="kinisi MSTD (diagnostic)",
+    )
+
+
+def plot_electrolyte_density(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+    """Plot a compact density projection for GEMDAT mechanism analysis."""
+
+    plt = _pyplot()
+    density = np.asarray(result["density_counts"], dtype=float)
+    if density.ndim != 3:
+        return []
+    fig, axis = plt.subplots(figsize=(5.5, 4.5))
+    axis.imshow(np.mean(density, axis=2).T, origin="lower", aspect="auto")
+    axis.set_xlabel("Voxel x")
+    axis.set_ylabel("Voxel y")
+    axis.set_title("Production mobile-ion density projection")
+    return _save(fig, output_stem)
+
+
+def plot_electrolyte_paths(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+    """Plot finite-temperature occupancy free energy along percolation paths."""
+
+    plt = _pyplot()
+    paths = result.get("paths", {})
+    if not paths:
+        return []
+    fig, axis = plt.subplots(figsize=(7, 4.5))
+    for axis_name, values in paths.items():
+        energy = np.asarray(values.get("free_energy_eV", []), dtype=float)
+        axis.plot(np.arange(len(energy)), energy, label=axis_name)
+    axis.set_xlabel("Path step")
+    axis.set_ylabel("Occupancy-derived free energy (eV)")
+    axis.set_title("Finite-temperature free-energy paths (not NEB barriers)")
+    axis.legend()
+    axis.grid(alpha=0.25)
+    return _save(fig, output_stem)
+
+
+def plot_electrolyte_distribution(
+    result: dict[str, Any], output_stem: str | Path, *, title: str, xlabel: str
+) -> list[Path]:
+    """Plot a numeric distribution from a GEMDAT table when available."""
+
+    plt = _pyplot()
+    table = result.get("table")
+    if table is None:
+        return []
+    if hasattr(table, "select_dtypes"):
+        numeric = table.select_dtypes(include=["number"])
+        if numeric.empty:
+            return []
+        values = np.asarray(numeric.iloc[:, 0], dtype=float)
+    else:
+        values = np.asarray(table, dtype=float).reshape(-1)
+    values = values[np.isfinite(values)]
+    if not len(values):
+        return []
+    fig, axis = plt.subplots(figsize=(6, 4.2))
+    axis.hist(values, bins=min(30, max(5, int(np.sqrt(len(values))))), alpha=0.8)
+    axis.set_xlabel(xlabel)
+    axis.set_ylabel("Count")
+    axis.set_title(title)
+    axis.grid(alpha=0.25)
+    return _save(fig, output_stem)
+
+
 def plot_arrhenius(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
     plt = _pyplot()
     fig, axis = plt.subplots(figsize=(6, 4.5))

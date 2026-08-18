@@ -9,10 +9,16 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 
+from mlipx.analysis.msd import unwrap_positions
 from mlipx.analysis.validation import (
     OptionalDependencyError,
     UnsupportedAnalysisError,
     require_analysis,
+)
+from mlipx.analysis.transport import (
+    _production_positions_with_drift,
+    _production_temperature,
+    _validate_kinisi_periodic_reconstruction,
 )
 
 if TYPE_CHECKING:
@@ -86,48 +92,56 @@ def jump_summary(
     return result
 
 
-def _gemdat_trajectory(dataset: TrajectoryDataset, *, temperature_K: float | None):
+def _gemdat_trajectory(
+    dataset: TrajectoryDataset,
+    *,
+    temperature_K: float | None,
+    temperature_source: str | None = None,
+    positions_cartesian_A: np.ndarray | None = None,
+    time_source: str | None = None,
+):
+    """Build a GEMDAT trajectory with explicit time and position semantics."""
     Trajectory, Species, _, _ = _require_gemdat()
-    fractional = np.einsum(
-        "fai,fij->faj", dataset.positions, np.linalg.inv(dataset.cells)
+    positions = (
+        np.asarray(positions_cartesian_A, dtype=float)
+        if positions_cartesian_A is not None
+        else np.asarray(dataset.positions, dtype=float)
     )
+    if positions.shape != dataset.positions.shape:
+        raise ValueError("positions_cartesian_A must match dataset positions shape")
+    fractional = np.einsum(
+        "fai,fij->faj", positions, np.linalg.inv(dataset.cells)
+    )
+    frame_interval_ps = float(dataset.frame_interval_fs) / 1000.0
     return Trajectory(
         species=[Species(symbol) for symbol in dataset.symbols],
         coords=np.mod(fractional, 1.0),
         lattice=dataset.cells[0],
         constant_lattice=True,
-        time_step=dataset.frame_interval_fs * 1.0e-15,
-        metadata={"temperature": temperature_K},
+        time_step=frame_interval_ps * 1.0e-12,
+        metadata={
+            "temperature": temperature_K,
+            "temperature_source": temperature_source,
+            "time_step_ps": frame_interval_ps,
+            "time_source": time_source
+            or "mlipx saved-frame interval (frame_interval_fs/1000)",
+            "position_convention": dataset.positions_convention,
+            "pbc_semantics": "wrapped fractional GEMDAT coordinates; fixed cell",
+        },
     )
-
-
-def _temperature(
-    dataset: TrajectoryDataset, explicit_temperature_K: float | None
-) -> float:
-    if explicit_temperature_K is not None:
-        value = float(explicit_temperature_K)
-    elif dataset.temperature_K is not None:
-        finite = np.asarray(dataset.temperature_K, dtype=float)
-        finite = finite[np.isfinite(finite)]
-        if not len(finite):
-            raise ValueError("GEMDAT free energy requires a finite temperature")
-        value = float(np.mean(finite))
-    else:
-        raise ValueError("GEMDAT free energy/pathway analysis requires temperature_K")
-    if not np.isfinite(value) or value <= 0:
-        raise ValueError("temperature_K must be finite and positive")
-    return value
 
 
 def _path_arrays(path, lattice) -> dict[str, np.ndarray]:
     voxels = np.asarray(path.sites, dtype=int)
     dimensions = np.asarray(path.dims, dtype=int)
     fractional = (np.mod(voxels, dimensions) + 0.5) / dimensions
+    energy = np.asarray(path.energy, dtype=float)
     return {
         "voxel": voxels,
         "fractional": fractional,
         "cartesian_A": np.asarray(lattice.get_cartesian_coords(fractional)),
-        "free_energy_eV": np.asarray(path.energy, dtype=float),
+        "free_energy_eV": energy,
+        "path_integrated_free_energy_eV": np.cumsum(energy),
     }
 
 
@@ -136,7 +150,6 @@ def gemdat_electrolyte(
     *,
     mobile_species: str,
     sites_path: str | Path | None = None,
-    site_fractional_coordinates: Iterable[Iterable[float]] | None = None,
     discover_sites_from_density: bool = False,
     temperature_K: float | None = None,
     resolution_A: float = 0.5,
@@ -145,15 +158,23 @@ def gemdat_electrolyte(
     minimal_residence: int = 0,
     jump_dimensions: int = 3,
     percolation_axes: str = "xyz",
+    drift_reference: str = "none",
+    drift_indices: Iterable[int] | None = None,
 ) -> GemdatResult:
     """Run GEMDAT site mapping, transitions, jumps, and percolation."""
 
+    # Mechanism analysis is always defined on production frames. Keep this as
+    # the first dataset operation so an equilibration-inclusive caller cannot
+    # accidentally leak frames into GEMDAT.
+    view = dataset.analysis_view(include_equilibration=False)
     _validate_mechanism_dimensions(
         jump_dimensions=jump_dimensions, percolation_axes=percolation_axes
     )
     report = require_analysis(dataset, "transport")
-    if not report.fixed_cell:
-        raise UnsupportedAnalysisError("GEMDAT jumps require a constant lattice")
+    if not report.fixed_cell or not report.three_dimensional_pbc:
+        raise UnsupportedAnalysisError(
+            "GEMDAT mechanism analysis requires a fixed cell and 3-D PBC"
+        )
     if resolution_A <= 0:
         raise ValueError("resolution_A must be positive")
     if minimal_residence < 0:
@@ -161,54 +182,68 @@ def gemdat_electrolyte(
     explicit_sources = sum(
         (
             sites_path is not None,
-            site_fractional_coordinates is not None,
             discover_sites_from_density,
         )
     )
     if explicit_sources != 1:
         raise ValueError(
-            "Choose exactly one site source: sites_path, "
-            "site_fractional_coordinates, or discover_sites_from_density=True"
+            "Choose exactly one site source: --sites FILE or "
+            "--discover-sites-from-density"
         )
-    view = dataset.analysis_view(include_equilibration=False)
-    view.select(mobile_species)
-    temperature = _temperature(view, temperature_K)
+    temperature, temperature_source = _production_temperature(view, temperature_K)
+    _, unwrap_diagnostics = unwrap_positions(view)
+    if (
+        view.positions_convention == "wrapped"
+        and unwrap_diagnostics["unwrap_safety_ratio"] > 0.8
+    ):
+        raise UnsupportedAnalysisError(
+            "GEMDAT jump analysis refused: wrapped-frame unwrap safety ratio "
+            "exceeds 0.8; save frames more frequently or provide exact unwrapped positions."
+        )
+    position_semantics = _validate_kinisi_periodic_reconstruction(
+        view, unwrap_diagnostics
+    )
+    mobile = view.select(mobile_species)
+    corrected_positions, reference = _production_positions_with_drift(
+        view,
+        mobile=mobile,
+        drift_reference=drift_reference,
+        drift_indices=drift_indices,
+    )
     _, _, Structure, gemdat_version = _require_gemdat()
-    trajectory = _gemdat_trajectory(view, temperature_K=temperature)
+    trajectory = _gemdat_trajectory(
+        view,
+        temperature_K=temperature,
+        temperature_source=temperature_source,
+        positions_cartesian_A=corrected_positions,
+    )
     mobile_trajectory = trajectory.filter(mobile_species)
     volume = mobile_trajectory.to_volume(resolution=resolution_A)
-    peaks = volume.find_peaks()
+    discovery_warning: str | None = None
+    try:
+        peaks = volume.find_peaks()
+    except Exception as exc:
+        peaks = np.empty((0, 3), dtype=int)
+        discovery_warning = f"Automatic density peak detection failed: {exc}"
     if sites_path is not None:
         site_path = Path(sites_path).expanduser().resolve()
         if not site_path.is_file():
             raise FileNotFoundError(f"Site structure not found: {site_path}")
         sites = Structure.from_file(str(site_path))
         site_source = str(site_path)
-    elif site_fractional_coordinates is not None:
-        coordinates = np.asarray(list(site_fractional_coordinates), dtype=float)
-        if coordinates.ndim != 2 or coordinates.shape[1] != 3 or not len(coordinates):
-            raise ValueError("site_fractional_coordinates must have shape (N, 3)")
-        if not np.all(np.isfinite(coordinates)):
-            raise ValueError("Site coordinates contain NaN or Inf")
-        sites = Structure(
-            lattice=view.cells[0],
-            species=[mobile_species] * len(coordinates),
-            coords=np.mod(coordinates, 1.0),
-            coords_are_cartesian=False,
-        )
-        site_source = "explicit fractional coordinates"
     else:
-        sites = volume.to_structure(
-            specie=mobile_species,
-            background_level=background_level,
-            peaks=peaks,
-            return_occupancies=True,
-            n_frames=view.nframes,
-        )
-        site_source = "explicitly requested GEMDAT density peak segmentation"
-    if not len(sites):
-        raise ValueError("The selected site definition contains no sites")
-
+        try:
+            sites = volume.to_structure(
+                specie=mobile_species,
+                background_level=background_level,
+                peaks=peaks,
+                return_occupancies=True,
+                n_frames=view.nframes,
+            )
+        except Exception as exc:
+            sites = Structure(lattice=view.cells[0], species=[], coords=[])
+            discovery_warning = f"Automatic density site segmentation failed: {exc}"
+        site_source = "exploratory automatic GEMDAT density peak segmentation"
     free_energy = volume.get_free_energy(temperature)
     result = GemdatResult(
         summary={
@@ -216,12 +251,38 @@ def gemdat_electrolyte(
             "gemdat_version": gemdat_version,
             "mobile_species": mobile_species,
             "temperature_K": temperature,
+            "temperature_source": temperature_source,
+            "analysis_phase": "production",
             "site_source": site_source,
             "resolution_A": resolution_A,
+            "background_level": background_level,
+            "site_radius_A": site_radius_A,
             "number_of_sites": int(len(sites)),
             "number_of_density_peaks": int(len(peaks)),
             "jump_dimensions": jump_dimensions,
             "percolation_axes": percolation_axes,
+            "frame_interval_fs": float(view.frame_interval_fs),
+            "gemdat_time_step_ps": float(view.frame_interval_fs / 1000.0),
+            "time_source": "mlipx saved-frame interval (frame_interval_fs/1000)",
+            "position_convention": view.positions_convention,
+            "pbc_semantics": "fixed-cell 3-D PBC; wrapped fractional GEMDAT coordinates",
+            "drift_correction": {
+                "mode": drift_reference,
+                "reference_indices": reference,
+                "reference_species": sorted({view.symbols[index] for index in reference}),
+                "applied_once": True,
+                "definition": "unweighted mean production displacement of the selected framework/reference atoms",
+            },
+            "unwrap_diagnostics": unwrap_diagnostics,
+            "position_semantics": position_semantics,
+            "automatic_discovery": {
+                "resolution_A": resolution_A,
+                "background_level": background_level,
+                "peak_count": int(len(peaks)),
+                "site_count": int(len(sites)),
+                "site_radius_A": site_radius_A,
+                "exploratory": bool(discover_sites_from_density),
+            },
             "gemdat_tracer_diffusivity_endpoint_promoted": False,
         },
         arrays={
@@ -233,50 +294,167 @@ def gemdat_electrolyte(
         },
         structures={"sites": sites, "reference": trajectory.get_structure(0)},
     )
+    if discover_sites_from_density:
+        # The two structures intentionally make the exploratory pathway
+        # explicit in the artifact names. GEMDAT's occupancy annotations are
+        # retained in the occupancy structure returned below.
+        result.structures["detected_sites"] = sites
+        result.structures["occupancy_sites"] = sites
+        if discovery_warning:
+            result.warnings.append(discovery_warning)
+    if not len(sites):
+        result.structures["occupancy"] = sites
+        result.summary["occupancy_source"] = "no detected sites"
+        result.summary["diagnostic_crosscheck"] = {
+            "publication_transport_authority": False,
+            "warning": "GEMDAT metrics not computed because site discovery was empty.",
+        }
+        for axis in percolation_axes:
+            result.paths[axis] = {
+                "voxel": np.empty((0, 3), dtype=int),
+                "fractional": np.empty((0, 3), dtype=float),
+                "cartesian_A": np.empty((0, 3), dtype=float),
+                "free_energy_eV": np.empty(0, dtype=float),
+                "path_integrated_free_energy_eV": np.empty(0, dtype=float),
+            }
+        result.warnings.append(
+            "Automatic density site discovery produced no sites; transition, "
+            "residence, jump, and percolation tables were not computed."
+        )
+        return result
     for axis in percolation_axes:
         if not len(peaks):
             result.warnings.append(
                 f"No density peaks were available for {axis}-axis percolation."
             )
+            result.paths[axis] = {
+                "voxel": np.empty((0, 3), dtype=int),
+                "fractional": np.empty((0, 3), dtype=float),
+                "cartesian_A": np.empty((0, 3), dtype=float),
+                "free_energy_eV": np.empty(0, dtype=float),
+                "path_integrated_free_energy_eV": np.empty(0, dtype=float),
+            }
             continue
-        path = free_energy.optimal_percolating_path(peaks=peaks, percolate=axis)
+        try:
+            path = free_energy.optimal_percolating_path(peaks=peaks, percolate=axis)
+        except Exception as exc:
+            result.warnings.append(
+                f"Percolation failed along {axis}; no path was written: {exc}"
+            )
+            path = None
         if path is None:
             result.warnings.append(f"No percolating path found along {axis}.")
+            result.paths[axis] = {
+                "voxel": np.empty((0, 3), dtype=int),
+                "fractional": np.empty((0, 3), dtype=float),
+                "cartesian_A": np.empty((0, 3), dtype=float),
+                "free_energy_eV": np.empty(0, dtype=float),
+                "path_integrated_free_energy_eV": np.empty(0, dtype=float),
+            }
             continue
         arrays = _path_arrays(path, free_energy.lattice)
         result.paths[axis] = arrays
         energy = arrays["free_energy_eV"]
         result.summary.setdefault("percolation", {})[axis] = {
             "steps": int(len(energy)),
-            "barrier_eV": float(np.max(energy) - np.min(energy)),
+            "free_energy_path_barrier_eV": float(np.max(energy) - np.min(energy)),
+            "path_integrated_free_energy_eV": float(np.sum(energy)),
+            "interpretation": (
+                "finite-temperature occupancy-derived free-energy path; not a "
+                "NEB potential-energy migration barrier"
+            ),
         }
 
-    transitions = trajectory.transitions_between_sites(
-        sites, mobile_species, site_radius=site_radius_A
-    )
-    result.structures["occupancy"] = transitions.occupancy()
-    result.tables["transition_events"] = transitions.events
-    result.tables["residence_times"] = transitions.residence_time()
-    result.arrays["transition_matrix"] = transitions.matrix()
-    result.summary["transition_events"] = int(transitions.n_events)
-    result.summary["occupancy_by_site_type"] = transitions.occupancy_by_site_type()
-    result.summary["atom_locations"] = transitions.atom_locations()
-
-    jumps = transitions.jumps(minimal_residence=minimal_residence)
-    result.tables["jumps"] = jumps.data
-    result.arrays["jump_matrix"] = jumps.matrix()
-    result.summary.update(
-        jump_summary(
-            jumps,
-            jump_dimensions=jump_dimensions,
-            percolation_axes=percolation_axes,
+    try:
+        transitions = trajectory.transitions_between_sites(
+            sites, mobile_species, site_radius=site_radius_A
         )
-    )
-    if jumps.n_jumps:
-        n_parts = min(10, max(2, view.nframes // 4))
-        if n_parts <= view.nframes:
-            result.tables["jump_rates"] = jumps.rates(n_parts=n_parts)
-        collective = jumps.collective()
-        result.summary["solo_jump_fraction"] = float(jumps.solo_fraction)
-        result.summary["collective_jump_count"] = int(collective.n_coll_jumps)
+    except Exception as exc:
+        # GEMDAT 1.x raises while stacking an empty event list for a valid
+        # no-transition trajectory. Preserve a valid, auditable result rather
+        # than writing a partially populated/corrupt mechanism output.
+        result.warnings.append(
+            "GEMDAT transition detection produced no usable events; "
+            f"residence/jump metrics were omitted: {exc}"
+        )
+        result.summary.update(
+            {
+                "transition_events": 0,
+                "occupancy_by_site_type": {},
+                "atom_locations": {},
+                "number_of_jumps": 0,
+                "jump_dimensions": jump_dimensions,
+                "percolation_axes": percolation_axes,
+                "occupancy_source": "explicit site geometry fallback; GEMDAT occupancy unavailable",
+            }
+        )
+        # Keep a valid occupancy structure artifact even when GEMDAT cannot
+        # construct an empty event table; it is the explicit site geometry,
+        # not a fabricated occupancy estimate.
+        result.structures["occupancy"] = sites
+        if discover_sites_from_density:
+            result.structures["occupancy_sites"] = sites
+        result.arrays["transition_matrix"] = np.zeros((len(sites), len(sites)), dtype=int)
+        result.arrays["jump_matrix"] = np.zeros((len(sites), len(sites)), dtype=int)
+        result.tables.update(
+            {
+                "transition_events": np.empty((0, 0)),
+                "residence_times": np.empty((0, 0)),
+                "jumps": np.empty((0, 0)),
+                "jump_rates": np.empty((0, 0)),
+            }
+        )
+    else:
+        result.structures["occupancy"] = transitions.occupancy()
+        result.summary["occupancy_source"] = "GEMDAT transition occupancy"
+        if discover_sites_from_density:
+            result.structures["occupancy_sites"] = result.structures["occupancy"]
+        result.tables["transition_events"] = transitions.events
+        result.tables["residence_times"] = transitions.residence_time()
+        result.arrays["transition_matrix"] = transitions.matrix()
+        result.summary["transition_events"] = int(transitions.n_events)
+        result.summary["occupancy_by_site_type"] = transitions.occupancy_by_site_type()
+        result.summary["atom_locations"] = transitions.atom_locations()
+
+        jumps = transitions.jumps(minimal_residence=minimal_residence)
+        result.tables["jumps"] = jumps.data
+        result.arrays["jump_matrix"] = jumps.matrix()
+        result.summary.update(
+            jump_summary(
+                jumps,
+                jump_dimensions=jump_dimensions,
+                percolation_axes=percolation_axes,
+            )
+        )
+        if jumps.n_jumps:
+            n_parts = min(10, max(2, view.nframes // 4))
+            if n_parts <= view.nframes:
+                result.tables["jump_rates"] = jumps.rates(n_parts=n_parts)
+            collective = jumps.collective()
+            result.summary["solo_jump_fraction"] = float(jumps.solo_fraction)
+            result.summary["collective_jump_count"] = int(collective.n_coll_jumps)
+    # GEMDAT trajectory metrics are deliberately namespaced as a diagnostic
+    # cross-check. They never replace the kinisi transport authority.
+    crosscheck: dict[str, Any] = {
+        "publication_transport_authority": False,
+        "warning": (
+            "GEMDAT endpoint/COM diffusivities and Haven ratio are diagnostic "
+            "cross-checks only; kinisi D_tracer and sigma_collective remain authoritative."
+        ),
+    }
+    try:
+        metrics = trajectory.metrics()
+        for name, call in (
+            ("tracer_diffusivity", lambda: metrics.tracer_diffusivity(dimensions=jump_dimensions)),
+            ("tracer_diffusivity_center_of_mass", lambda: metrics.tracer_diffusivity_center_of_mass(dimensions=jump_dimensions)),
+            ("haven_ratio", lambda: metrics.haven_ratio(dimensions=jump_dimensions)),
+        ):
+            try:
+                value = call()
+                crosscheck[name] = float(value)
+            except Exception as exc:  # pragma: no cover - backend-dependent
+                crosscheck[f"{name}_warning"] = str(exc)
+    except Exception as exc:  # pragma: no cover - backend-dependent
+        crosscheck["warning"] += f" Metrics unavailable: {exc}"
+    result.summary["diagnostic_crosscheck"] = crosscheck
     return result

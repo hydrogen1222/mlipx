@@ -46,6 +46,96 @@ def test_transport_parser_accepts_explicit_lag_grid() -> None:
     assert args.lag_stop_ps == 200.0
 
 
+def test_analysis_parser_maps_collective_and_gemdat_semantics() -> None:
+    parser = create_parser()
+    transport = parser.parse_args(
+        [
+            "analyze",
+            "RUN",
+            "transport",
+            "--mobile",
+            "Li",
+            "--charge",
+            "1",
+            "--fit-start-ps",
+            "40",
+            "--collective-conductivity",
+            "--collective-system-particles",
+            "4",
+            "--jump-diffusion",
+        ]
+    )
+    assert transport.collective_conductivity is True
+    assert transport.collective_system_particles == 4
+    assert transport.jump_diffusion is True
+
+    electrolyte = parser.parse_args(
+        [
+            "analyze",
+            "RUN",
+            "electrolyte",
+            "--mobile",
+            "Li",
+            "--sites",
+            "sites.cif",
+            "--drift-reference",
+            "indices",
+            "--drift-indices",
+            "3,4",
+            "--jump-dimensions",
+            "1",
+            "--percolation-axes",
+            "xz",
+        ]
+    )
+    assert electrolyte.mobile_species == "Li"
+    assert electrolyte.sites_path == "sites.cif"
+    assert electrolyte.jump_dimensions == 1
+    assert electrolyte.percolation_axes == "xz"
+    assert electrolyte.drift_reference == "indices"
+    assert electrolyte.drift_indices == "3,4"
+
+
+def test_cmd_analyze_preserves_gemdat_parameter_names(monkeypatch, capsys) -> None:
+    from mlipx import cli as cli_module
+
+    captured = {}
+
+    def fake_run_analysis(request):
+        captured.update(request.parameters)
+        return {"status": "success", "analysis_id": "test", "output_dir": "."}
+
+    monkeypatch.setattr("mlipx.analysis.runner.run_analysis", fake_run_analysis)
+    args = create_parser().parse_args(
+        [
+            "analyze",
+            "RUN",
+            "electrolyte",
+            "--mobile",
+            "Li",
+            "--sites",
+            "sites.cif",
+            "--drift-reference",
+            "indices",
+            "--drift-indices",
+            "3,4",
+            "--jump-dimensions",
+            "2",
+            "--percolation-axes",
+            "xz",
+        ]
+    )
+    assert cli_module.cmd_analyze(args) == 0
+    assert captured["mobile_species"] == "Li"
+    assert captured["sites_path"] == "sites.cif"
+    assert captured["drift_reference"] == "indices"
+    assert captured["drift_indices"] == [3, 4]
+    assert captured["jump_dimensions"] == 2
+    assert captured["percolation_axes"] == "xz"
+    assert "discover_sites_from_density" in captured
+    capsys.readouterr()
+
+
 @pytest.mark.parametrize("queue_command", ["pause", "resume", "status"])
 def test_queue_control_commands_parse(queue_command: str) -> None:
     parser = create_parser()
