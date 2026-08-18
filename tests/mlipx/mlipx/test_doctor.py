@@ -29,6 +29,39 @@ def _controlled_environment(monkeypatch, **versions):
     monkeypatch.setattr("mlipx.doctor.metadata.requires", lambda name: [])
 
 
+def _mock_4090_runtime(monkeypatch, arch_list):
+    from mlipx.gpu_setup import GpuInfo
+
+    _controlled_environment(
+        monkeypatch,
+        **{"fairchem-core": "2.21.0", "torch": "2.8.0+cu128"},
+    )
+    monkeypatch.setattr(
+        "mlipx.doctor.detect_gpus",
+        lambda: [GpuInfo("NVIDIA GeForce RTX 4090", 8, 9, "580", 24564)],
+    )
+    monkeypatch.setattr(
+        "mlipx.doctor._runtime_probe",
+        lambda engine, device, framework=None: {
+            "ok": True,
+            "framework": "torch",
+            "torch_version": "2.8.0+cu128",
+            "cuda_runtime": "12.8",
+            "cuda_available": True,
+            "device_count": 1,
+            "arch_list": arch_list,
+            "gpus": [
+                {
+                    "name": "NVIDIA GeForce RTX 4090",
+                    "major": 8,
+                    "minor": 9,
+                    "total_memory": 24564 * 1024**2,
+                }
+            ],
+        },
+    )
+
+
 def test_doctor_runs_without_crashing():
     checks, failures = run_diagnostics()
     assert isinstance(checks, list)
@@ -261,6 +294,33 @@ def test_cuda_target_fails_when_framework_cannot_see_gpu(monkeypatch):
 
     assert names["Engine runtime"]["status"] == "ok"
     assert names["CUDA runtime"]["status"] == "fail"
+    assert failures == 1
+
+
+def test_doctor_verifies_uma_torch_recommendation_on_4090(monkeypatch):
+    """Regression: installer verification must not mix dict and object APIs."""
+    _mock_4090_runtime(
+        monkeypatch,
+        ["sm_70", "sm_75", "sm_80", "sm_86", "sm_90"],
+    )
+
+    checks, failures = run_diagnostics(engine="uma", device="cuda")
+    runtime_gpu = next(c for c in checks if c["name"] == "Runtime GPU 0")
+
+    assert runtime_gpu["status"] == "ok"
+    assert failures == 0
+
+
+def test_doctor_reports_missing_4090_kernel_without_crashing(monkeypatch):
+    """A wheel without an Ada-compatible kernel must fail closed with advice."""
+    _mock_4090_runtime(monkeypatch, ["sm_70"])
+
+    checks, failures = run_diagnostics(engine="uma", device="cuda")
+    runtime_gpu = next(c for c in checks if c["name"] == "Runtime GPU 0")
+
+    assert runtime_gpu["status"] == "fail"
+    assert "do not support sm_89" in runtime_gpu["detail"]
+    assert "torch 2.8.0+cu128" in runtime_gpu["detail"]
     assert failures == 1
 
 

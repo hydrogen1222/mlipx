@@ -25,12 +25,12 @@ from typing import Any
 from packaging.requirements import Requirement
 
 from mlipx.gpu_compat import arch_supports_device
+from mlipx.gpu_setup import TorchRecommendation, recommend_torch
 from mlipx.install.hardware import (
     MIN_VRAM_MIB_WARN,
     cc_arch_name,
     detect_gpus,
 )
-from mlipx.install.compatibility import BACKENDS, get_backend_arch_profile
 
 _PROBE_SENTINEL = "__MLIPX_DOCTOR_JSON__="
 
@@ -441,32 +441,9 @@ def _should_warn_torch_mismatch(
     )
 
 
-def _matrix_torch_recommendation(major: int, minor: int):
-    """Derive the recommended UMA torch build directly from the matrix."""
-    from mlipx.install.compatibility import (
-        classify_gpu,
-        effective_cuda_channel,
-        CUDA_CHANNELS,
-    )
-    from mlipx.install.hardware import cc_arch_name  # noqa: F401
-
-    arch = classify_gpu(major, minor)
-    if arch is None:
-        return None
-    bp = get_backend_arch_profile("uma", arch.name)
-    if bp is None:
-        return None
-    tag = effective_cuda_channel(BACKENDS["uma"], arch, bp)
-    channel = CUDA_CHANNELS.get(tag)
-    return {
-        "version": f"{bp.framework_version}+{tag}",
-        "supported": bool(channel),
-        "arch": arch,
-        "bp": bp,
-    }
-
-
-def _recommendation_detail(rec, *, installed_torch: str | None = None) -> str:
+def _recommendation_detail(
+    rec: TorchRecommendation, *, installed_torch: str | None = None
+) -> str:
     """Build a detail string for a GPU from a TorchRecommendation."""
     lines = [rec.rationale]
     if not rec.supported:
@@ -911,16 +888,12 @@ def run_diagnostics(
                 f"{gpu['name']} ({vram_gb:.1f} GB, CC {major}.{minor}, "
                 f"{cc_arch_name(major, minor)})"
             )
-            rec = _matrix_torch_recommendation(major, minor)
+            rec = recommend_torch(major, minor)
             if arch_supports_device(gpu_cc, arch_list):
-                if (
-                    rec is not None
-                    and rec["supported"]
-                    and _should_warn_torch_mismatch(
-                        uma_installed=target_engine == "uma",
-                        installed_torch=str(runtime.get("torch_version") or ""),
-                        recommended_torch=rec.version,
-                    )
+                if rec.supported and _should_warn_torch_mismatch(
+                    uma_installed=target_engine == "uma",
+                    installed_torch=str(runtime.get("torch_version") or ""),
+                    recommended_torch=rec.version,
                 ):
                     checks.append(
                         {
@@ -930,7 +903,7 @@ def run_diagnostics(
                             "detail": (
                                 f"Kernel supports {gpu_cc}, but this UMA environment "
                                 f"uses torch {runtime.get('torch_version')} instead of "
-                                f"the matrix recommendation {rec['version']}."
+                                f"the matrix recommendation {rec.version}."
                             ),
                         }
                     )

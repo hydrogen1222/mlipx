@@ -47,6 +47,9 @@ Common variants:
 ./scripts/install_mlipx.sh --dry-run           # preview without installing
 ```
 
+If an earlier installation stopped partway, rerun it with `--clean` so the
+partially populated engine environments are rebuilt before verification.
+
 Run `./scripts/install_mlipx.sh --help` for all options.
 
 ### Manual installation (four environments)

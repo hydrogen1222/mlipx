@@ -47,6 +47,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 ./scripts/install_mlipx.sh --dry-run           # 预览不安装
 ```
 
+如果上一次安装中途停止，请使用 `--clean` 重新运行，让各引擎的残缺环境在验证前完整重建。
+
 运行 `./scripts/install_mlipx.sh --help` 查看全部参数。
 
 ### 手动安装（四个环境）
