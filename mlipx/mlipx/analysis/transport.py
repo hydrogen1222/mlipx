@@ -113,7 +113,13 @@ def _require_kinisi():
             f"Unsupported kinisi version {kinisi_version}; Analysis v2 is tested "
             "with kinisi>=2.0.5,<3."
         )
-    return sc, DiffusionAnalyzer, ConductivityAnalyzer, JumpDiffusionAnalyzer, kinisi_version
+    return (
+        sc,
+        DiffusionAnalyzer,
+        ConductivityAnalyzer,
+        JumpDiffusionAnalyzer,
+        kinisi_version,
+    )
 
 
 def _frame_offset(value_ps: float, *, frame_interval_fs: float, label: str) -> int:
@@ -542,7 +548,21 @@ def kinisi_transport(
     n_thin: int = 10,
     parser_memory_limit_gib: float = 4.0,
 ) -> dict[str, Any]:
-    """Estimate covariance-aware scalar tracer diffusion with kinisi."""
+    """Estimate production-phase transport with the kinisi 2.x ASE adapters.
+
+    The primary result is covariance-aware Bayesian tracer diffusion for the
+    explicitly selected mobile species and Cartesian dimensions. The saved
+    frame interval is passed to kinisi without changing units or silently
+    resampling frames, and periodic reconstruction is rejected when exact
+    unwrapped image information would be lost.
+
+    When requested, ``ConductivityAnalyzer`` provides collective Einstein
+    conductivity for the explicit ionic charge model and
+    ``JumpDiffusionAnalyzer`` provides the separately labelled total/jump
+    displacement diagnostic. Reported credible intervals are conditional
+    kinisi posteriors, not total physical uncertainty. Nernst--Einstein and
+    collective conductivities remain distinct quantities.
+    """
 
     if not dimensions or any(axis not in "xyz" for axis in dimensions):
         raise ValueError("dimensions must be a non-empty subset of xyz")
@@ -552,9 +572,11 @@ def kinisi_transport(
         raise ValueError("fit_start_ps must be explicitly provided and >= 0")
     if n_samples < 1 or n_walkers < 2 or n_burn < 0 or n_thin < 1:
         raise ValueError("Invalid kinisi sampling parameters")
-    if not isinstance(collective_system_particles, (int, np.integer)) or isinstance(
-        collective_system_particles, bool
-    ) or int(collective_system_particles) < 1:
+    if (
+        not isinstance(collective_system_particles, (int, np.integer))
+        or isinstance(collective_system_particles, bool)
+        or int(collective_system_particles) < 1
+    ):
         raise ValueError("collective_system_particles must be a positive integer")
     collective_system_particles = int(collective_system_particles)
     if not np.isfinite(parser_memory_limit_gib) or parser_memory_limit_gib <= 0:
@@ -875,7 +897,6 @@ def kinisi_transport(
             "sigma_collective_posterior_S_cm": sigma_collective_S_cm,
             # Preserve the original public key for consumers of Analysis v2.
             "sigma_collective_mS_cm_posterior": sigma_collective_mS_cm,
-            "sigma_collective_MScm_posterior": sigma_collective_mS_cm,
             "D_sigma_posterior_m2_s": d_sigma_m2_s,
             "D_sigma_posterior_cm2_s": d_sigma_cm2_s,
             "mscd_unit": mscd_target_unit,
@@ -903,9 +924,7 @@ def kinisi_transport(
             abs(float(np.mean(sigma_collective_samples_S_m))),
             np.finfo(float).tiny,
         )
-        near_zero = np.any(
-            np.abs(sigma_collective_samples_S_m) <= mean_abs * 1.0e-6
-        )
+        near_zero = np.any(np.abs(sigma_collective_samples_S_m) <= mean_abs * 1.0e-6)
         positive_tracer = np.all(np.isfinite(d_samples_m2_s) & (d_samples_m2_s > 0))
         if positive_collective and not near_zero and positive_tracer:
             rng = np.random.RandomState(random_seed + 2)
@@ -955,9 +974,10 @@ def kinisi_transport(
             if np.isfinite(d_sigma_m2_s["mean"]) and d_sigma_m2_s["mean"] != 0:
                 haven_point = float(diffusion_m2_s["mean"] / d_sigma_m2_s["mean"])
             correlation_point = None
-            if np.isfinite(sigma_ne_posterior_S_m["mean"]) and sigma_ne_posterior_S_m[
-                "mean"
-            ] != 0:
+            if (
+                np.isfinite(sigma_ne_posterior_S_m["mean"])
+                and sigma_ne_posterior_S_m["mean"] != 0
+            ):
                 correlation_point = float(
                     sigma_collective_S_m["mean"] / sigma_ne_posterior_S_m["mean"]
                 )

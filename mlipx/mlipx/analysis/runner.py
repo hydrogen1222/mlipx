@@ -25,8 +25,8 @@ if TYPE_CHECKING:
 # Analysis output revisions are part of the request/cache identity. Bump the
 # changed scientific tasks while deliberately leaving the native MSD revision
 # untouched.
-_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 4, "electrolyte": 2}
-_TASK_SCIENTIFIC_REVISIONS = {"transport": 4, "electrolyte": 2}
+_TASK_OUTPUT_REVISIONS = {"msd": 5, "transport": 4, "electrolyte": 3}
+_TASK_SCIENTIFIC_REVISIONS = {"transport": 4, "electrolyte": 3}
 
 
 def _jsonable(value: Any, *, array_limit: int = 2000) -> Any:
@@ -186,8 +186,12 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
         "sigma_NE_ci95_low_mS_cm": sigma["credible_interval_95"][0],
         "sigma_NE_ci95_high_mS_cm": sigma["credible_interval_95"][1],
         "sigma_NE_tracer_mean_S_m": ne["sigma_NE_tracer_posterior_S_m"]["mean"],
-        "sigma_NE_tracer_ci95_low_S_m": ne["sigma_NE_tracer_posterior_S_m"]["credible_interval_95"][0],
-        "sigma_NE_tracer_ci95_high_S_m": ne["sigma_NE_tracer_posterior_S_m"]["credible_interval_95"][1],
+        "sigma_NE_tracer_ci95_low_S_m": ne["sigma_NE_tracer_posterior_S_m"][
+            "credible_interval_95"
+        ][0],
+        "sigma_NE_tracer_ci95_high_S_m": ne["sigma_NE_tracer_posterior_S_m"][
+            "credible_interval_95"
+        ][1],
         "kinisi_version": tracer["kinisi_version"],
         "random_seed": tracer["random_seed"],
         "positions_convention": semantics["source_positions_convention"],
@@ -196,7 +200,9 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
     if "collective_conductivity" in result:
         coll = result["collective_conductivity"].get(
             "sigma_collective_mS_cm_posterior",
-            result["collective_conductivity"].get("sigma_collective_posterior_mS_cm", {}),
+            result["collective_conductivity"].get(
+                "sigma_collective_posterior_mS_cm", {}
+            ),
         )
         coll = coll or {}
         fields.update(
@@ -211,32 +217,44 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
         coll_s = result["collective_conductivity"].get(
             "sigma_collective_posterior_S_m", {}
         )
-        dsigma = result["collective_conductivity"].get(
-            "D_sigma_posterior_m2_s", {}
-        )
-        dsigma_cm = result["collective_conductivity"].get(
-            "D_sigma_posterior_cm2_s", {}
-        )
+        dsigma = result["collective_conductivity"].get("D_sigma_posterior_m2_s", {})
+        dsigma_cm = result["collective_conductivity"].get("D_sigma_posterior_cm2_s", {})
         haven = result.get("haven_ratio") or {}
         correlation = result.get("correlation_factor") or {}
         fields.update(
             {
                 "sigma_collective_mean_S_m": coll_s.get("mean"),
-                "sigma_collective_ci95_low_S_m": (coll_s.get("credible_interval_95") or [None, None])[0],
-                "sigma_collective_ci95_high_S_m": (coll_s.get("credible_interval_95") or [None, None])[1],
+                "sigma_collective_ci95_low_S_m": (
+                    coll_s.get("credible_interval_95") or [None, None]
+                )[0],
+                "sigma_collective_ci95_high_S_m": (
+                    coll_s.get("credible_interval_95") or [None, None]
+                )[1],
                 "D_sigma_mean_m2_s": dsigma.get("mean"),
                 "Dsigma_mean_m2_s": dsigma.get("mean"),
-                "D_sigma_ci95_low_m2_s": (dsigma.get("credible_interval_95") or [None, None])[0],
-                "D_sigma_ci95_high_m2_s": (dsigma.get("credible_interval_95") or [None, None])[1],
+                "D_sigma_ci95_low_m2_s": (
+                    dsigma.get("credible_interval_95") or [None, None]
+                )[0],
+                "D_sigma_ci95_high_m2_s": (
+                    dsigma.get("credible_interval_95") or [None, None]
+                )[1],
                 "Dsigma_mean_cm2_s": dsigma_cm.get("mean"),
                 "Haven_point_estimate": haven.get("point_estimate"),
                 "Haven": haven.get("point_estimate"),
-                "Haven_ci95_low": (haven.get("posterior") or {}).get("credible_interval_95", [None, None])[0],
-                "Haven_ci95_high": (haven.get("posterior") or {}).get("credible_interval_95", [None, None])[1],
+                "Haven_ci95_low": (haven.get("posterior") or {}).get(
+                    "credible_interval_95", [None, None]
+                )[0],
+                "Haven_ci95_high": (haven.get("posterior") or {}).get(
+                    "credible_interval_95", [None, None]
+                )[1],
                 "correlation_factor_point_estimate": correlation.get("point_estimate"),
                 "correlation_factor": correlation.get("point_estimate"),
-                "correlation_factor_ci95_low": (correlation.get("posterior") or {}).get("credible_interval_95", [None, None])[0],
-                "correlation_factor_ci95_high": (correlation.get("posterior") or {}).get("credible_interval_95", [None, None])[1],
+                "correlation_factor_ci95_low": (correlation.get("posterior") or {}).get(
+                    "credible_interval_95", [None, None]
+                )[0],
+                "correlation_factor_ci95_high": (
+                    correlation.get("posterior") or {}
+                ).get("credible_interval_95", [None, None])[1],
                 "ratio_uncertainty_semantics": (haven.get("uncertainty_semantics")),
             }
         )
@@ -258,8 +276,12 @@ def _write_transport_summary(path: Path, result: dict[str, Any]) -> None:
         fields.update(
             {
                 "D_J_mean_m2_s": jump.get("mean"),
-                "D_J_ci95_low_m2_s": (jump.get("credible_interval_95") or [None, None])[0],
-                "D_J_ci95_high_m2_s": (jump.get("credible_interval_95") or [None, None])[1],
+                "D_J_ci95_low_m2_s": (jump.get("credible_interval_95") or [None, None])[
+                    0
+                ],
+                "D_J_ci95_high_m2_s": (
+                    jump.get("credible_interval_95") or [None, None]
+                )[1],
             }
         )
     fields.update(
@@ -543,15 +565,12 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             {key: [value] for key, value in summary_fields.items()},
         )
         artifacts.append("electrolyte_summary.csv")
-        _write_json(
-            output_dir / "diagnostics.json",
-            {"warnings": result.warnings, "summary": result.summary},
-        )
-        artifacts.append("diagnostics.json")
         for matrix_name in ("transition_matrix", "jump_matrix"):
             if matrix_name in result.arrays:
                 matrix_path = output_dir / f"{matrix_name}.csv"
-                np.savetxt(matrix_path, np.asarray(result.arrays[matrix_name]), delimiter=",")
+                np.savetxt(
+                    matrix_path, np.asarray(result.arrays[matrix_name]), delimiter=","
+                )
                 artifacts.append(matrix_path.name)
         artifacts.extend(
             path.name
@@ -570,8 +589,10 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             for path in plot_electrolyte_distribution(
                 {"table": result.tables.get("residence_times")},
                 output_dir / "residence_time_distribution",
+                value_field="residence_time_ps",
                 title="Residence-time distribution",
-                xlabel="Residence time",
+                xlabel="Residence time (ps)",
+                warning_sink=result.warnings,
             )
         )
         artifacts.extend(
@@ -579,8 +600,10 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             for path in plot_electrolyte_distribution(
                 {"table": result.tables.get("jumps")},
                 output_dir / "jump_distance_distribution",
+                value_field="jump_distance_A",
                 title="Jump-distance distribution",
-                xlabel="Jump distance",
+                xlabel="Jump distance (A)",
+                warning_sink=result.warnings,
             )
         )
         artifacts.extend(
@@ -588,8 +611,10 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             for path in plot_electrolyte_distribution(
                 {"table": result.tables.get("jump_rates")},
                 output_dir / "jump_rate_segments",
-                title="Jump rate by trajectory segment",
-                xlabel="Jump rate",
+                value_field="jump_rate_s^-1",
+                title="Jump-rate distribution by site pair",
+                xlabel="Jump rate (s^-1)",
+                warning_sink=result.warnings,
             )
         )
         for name, table in result.tables.items():
@@ -621,6 +646,11 @@ def _dispatch(request: AnalysisRequest, output_dir: Path) -> tuple[Any, list[str
             path = output_dir / "occupancy_sites.cif"
             result.structures["occupancy_sites"].to(filename=str(path))
             artifacts.append(path.name)
+        _write_json(
+            output_dir / "diagnostics.json",
+            {"warnings": result.warnings, "summary": result.summary},
+        )
+        artifacts.append("diagnostics.json")
         return {"summary": result.summary, "warnings": result.warnings}, artifacts
     if task in {"vacf", "spectrum"}:
         from mlipx.analysis.plots import plot_spectrum, plot_vacf
@@ -712,7 +742,9 @@ def run_analysis(request: AnalysisRequest) -> dict[str, Any]:
         "source_trajectory": fingerprint,
     }
     if request.task in _TASK_SCIENTIFIC_REVISIONS:
-        provenance["task_scientific_revision"] = _TASK_SCIENTIFIC_REVISIONS[request.task]
+        provenance["task_scientific_revision"] = _TASK_SCIENTIFIC_REVISIONS[
+            request.task
+        ]
     _write_json(output_dir / "provenance.json", provenance)
     record = {
         "analysis_id": analysis_id,

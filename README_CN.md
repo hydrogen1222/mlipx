@@ -276,7 +276,7 @@ mlipx analyze RUN transport \
 - **漂移校正必须显式选择：** `none`、`nonmobile` 或 `indices`。
 - **`--lag-step-ps` / `--lag-stop-ps`** 只稀疏化 kinisi 的 lag 时间网格，不对轨迹帧降采样；两者必须同时使用。
 - **native MSD OLS 诊断** 只有在同时给出 `--fit-start-ps` 和 `--fit-stop-ps` 时才产生；mlipx 不会自动判断 publication 拟合窗口。transport 使用显式 kinisi `--fit-start-ps` 与选定 lag 网格。
-- **Nernst–Einstein 示踪电导率**（`sigma_NE_tracer`）会报告后验均值 / 标准差 / 95% 置信区间。它不是总物理不确定性，也不自动等于实验或集体电导率。
+- **Nernst–Einstein 示踪电导率**（`sigma_NE_tracer`）会报告后验均值 / 标准差 / 95% 后验可信区间。它不是总物理不确定性，也不自动等于实验或集体电导率。
 - `sigma_NE_tracer` 忽略 distinct 离子相关；`sigma_collective` 是所分析经典 MD 轨迹与所选电荷模型内的 collective Einstein 离子电导率，不自动等于实验块体/多晶电导率。
 - kinisi CrI 是条件后验区间，不包含模型、有限尺寸或 replica 不确定性；`--collective-system-particles` 是按索引分组的统计参数，不是独立 MD replica。Haven 区间若可给出，会明确标注为独立边际后验近似，因为没有建模示踪/集体协方差。
 - 安全完成 PBC 重构的 0.1 ps 保存间隔可用于长时 Einstein/MSCD 分析；它不能替代短时 VACF 或 Green–Kubo 所需的密集采样。

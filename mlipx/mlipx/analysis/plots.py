@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings as python_warnings
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -233,7 +234,9 @@ def plot_transport_mstd(result: dict[str, Any], output_stem: str | Path) -> list
     )
 
 
-def plot_electrolyte_density(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+def plot_electrolyte_density(
+    result: dict[str, Any], output_stem: str | Path
+) -> list[Path]:
     """Plot a compact density projection for GEMDAT mechanism analysis."""
 
     plt = _pyplot()
@@ -248,7 +251,9 @@ def plot_electrolyte_density(result: dict[str, Any], output_stem: str | Path) ->
     return _save(fig, output_stem)
 
 
-def plot_electrolyte_paths(result: dict[str, Any], output_stem: str | Path) -> list[Path]:
+def plot_electrolyte_paths(
+    result: dict[str, Any], output_stem: str | Path
+) -> list[Path]:
     """Plot finite-temperature occupancy free energy along percolation paths."""
 
     plt = _pyplot()
@@ -268,24 +273,72 @@ def plot_electrolyte_paths(result: dict[str, Any], output_stem: str | Path) -> l
 
 
 def plot_electrolyte_distribution(
-    result: dict[str, Any], output_stem: str | Path, *, title: str, xlabel: str
+    result: dict[str, Any],
+    output_stem: str | Path,
+    *,
+    value_field: str,
+    title: str,
+    xlabel: str,
+    warning_sink: list[str] | None = None,
 ) -> list[Path]:
-    """Plot a numeric distribution from a GEMDAT table when available."""
+    """Plot one explicitly named physical field from a GEMDAT table.
 
-    plt = _pyplot()
+    GEMDAT tables contain numeric identifiers, indices, standard deviations,
+    and physical observables side by side. Selecting the first numeric column
+    is therefore scientifically unsafe. If the requested physical field is
+    unavailable or invalid, emit a warning and omit the plot.
+    """
+
+    def skip(message: str) -> list[Path]:
+        python_warnings.warn(message, RuntimeWarning, stacklevel=2)
+        if warning_sink is not None and message not in warning_sink:
+            warning_sink.append(message)
+        return []
+
     table = result.get("table")
     if table is None:
-        return []
-    if hasattr(table, "select_dtypes"):
-        numeric = table.select_dtypes(include=["number"])
-        if numeric.empty:
-            return []
-        values = np.asarray(numeric.iloc[:, 0], dtype=float)
+        return skip(
+            f"{title} plot skipped: GEMDAT table is unavailable; "
+            f"cannot determine physical field {value_field!r}."
+        )
+    if hasattr(table, "columns"):
+        if value_field not in table.columns:
+            return skip(
+                f"{title} plot skipped: GEMDAT table has no explicit "
+                f"{value_field!r} physical field."
+            )
+        source = table[value_field]
+    elif isinstance(table, dict):
+        if value_field not in table:
+            return skip(
+                f"{title} plot skipped: table mapping has no explicit "
+                f"{value_field!r} physical field."
+            )
+        source = table[value_field]
+    elif isinstance(table, np.ndarray) and table.dtype.names:
+        if value_field not in table.dtype.names:
+            return skip(
+                f"{title} plot skipped: structured table has no explicit "
+                f"{value_field!r} physical field."
+            )
+        source = table[value_field]
     else:
-        values = np.asarray(table, dtype=float).reshape(-1)
+        return skip(
+            f"{title} plot skipped: an unlabeled numeric array cannot reliably "
+            f"identify physical field {value_field!r}."
+        )
+    try:
+        values = np.asarray(source, dtype=float).reshape(-1)
+    except (TypeError, ValueError):
+        return skip(
+            f"{title} plot skipped: physical field {value_field!r} is not numeric."
+        )
     values = values[np.isfinite(values)]
     if not len(values):
-        return []
+        return skip(
+            f"{title} plot skipped: physical field {value_field!r} has no finite values."
+        )
+    plt = _pyplot()
     fig, axis = plt.subplots(figsize=(6, 4.2))
     axis.hist(values, bins=min(30, max(5, int(np.sqrt(len(values))))), alpha=0.8)
     axis.set_xlabel(xlabel)

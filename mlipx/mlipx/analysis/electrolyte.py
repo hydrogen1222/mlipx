@@ -10,15 +10,15 @@ from typing import TYPE_CHECKING
 import numpy as np
 
 from mlipx.analysis.msd import unwrap_positions
-from mlipx.analysis.validation import (
-    OptionalDependencyError,
-    UnsupportedAnalysisError,
-    require_analysis,
-)
 from mlipx.analysis.transport import (
     _production_positions_with_drift,
     _production_temperature,
     _validate_kinisi_periodic_reconstruction,
+)
+from mlipx.analysis.validation import (
+    OptionalDependencyError,
+    UnsupportedAnalysisError,
+    require_analysis,
 )
 
 if TYPE_CHECKING:
@@ -44,7 +44,7 @@ def _require_gemdat():
         from pymatgen.core import Species, Structure
     except ImportError as exc:  # pragma: no cover - optional environment
         raise OptionalDependencyError(
-            "GEMDAT electrolyte analysis is unavailable. Install " "mlipx[electrolyte]."
+            "GEMDAT electrolyte analysis is unavailable. Install mlipx[electrolyte]."
         ) from exc
     try:
         gemdat_version = version("gemdat")
@@ -109,9 +109,7 @@ def _gemdat_trajectory(
     )
     if positions.shape != dataset.positions.shape:
         raise ValueError("positions_cartesian_A must match dataset positions shape")
-    fractional = np.einsum(
-        "fai,fij->faj", positions, np.linalg.inv(dataset.cells)
-    )
+    fractional = np.einsum("fai,fij->faj", positions, np.linalg.inv(dataset.cells))
     frame_interval_ps = float(dataset.frame_interval_fs) / 1000.0
     return Trajectory(
         species=[Species(symbol) for symbol in dataset.symbols],
@@ -141,8 +139,117 @@ def _path_arrays(path, lattice) -> dict[str, np.ndarray]:
         "fractional": fractional,
         "cartesian_A": np.asarray(lattice.get_cartesian_coords(fractional)),
         "free_energy_eV": energy,
-        "path_integrated_free_energy_eV": np.cumsum(energy),
     }
+
+
+def _empty_path_arrays() -> dict[str, np.ndarray]:
+    return {
+        "voxel": np.empty((0, 3), dtype=int),
+        "fractional": np.empty((0, 3), dtype=float),
+        "cartesian_A": np.empty((0, 3), dtype=float),
+        "free_energy_eV": np.empty(0, dtype=float),
+    }
+
+
+def _residence_table_with_time_ps(
+    table, *, frame_interval_fs: float
+) -> tuple[Any, str | None]:
+    """Add an explicit physical residence-time field to a GEMDAT 1.x table."""
+
+    if not hasattr(table, "columns") or "time" not in table.columns:
+        return table, (
+            "GEMDAT residence-time table has no documented 'time' step-count "
+            "field; residence-time plotting was disabled."
+        )
+    output = table.copy()
+    try:
+        steps = np.asarray(output["time"], dtype=float)
+    except (TypeError, ValueError):
+        return table, (
+            "GEMDAT residence-time step counts are not numeric; residence-time "
+            "plotting was disabled."
+        )
+    if np.any(~np.isfinite(steps)) or np.any(steps < 0):
+        return table, (
+            "GEMDAT residence-time step counts are invalid; residence-time "
+            "plotting was disabled."
+        )
+    output["residence_time_ps"] = steps * float(frame_interval_fs) / 1000.0
+    return output, None
+
+
+def _jump_table_with_distance_A(table, sites) -> tuple[Any, str | None]:
+    """Add minimum-image site-to-site jump distances in angstrom."""
+
+    required = {"start site", "destination site"}
+    if not hasattr(table, "columns") or not required.issubset(table.columns):
+        return table, (
+            "GEMDAT jump table lacks explicit start/destination site indices; "
+            "jump-distance plotting was disabled."
+        )
+    output = table.copy()
+    start_raw = np.asarray(output["start site"])
+    destination_raw = np.asarray(output["destination site"])
+    try:
+        start = start_raw.astype(int)
+        destination = destination_raw.astype(int)
+    except (TypeError, ValueError):
+        return table, (
+            "GEMDAT jump site indices are not integral; jump-distance plotting "
+            "was disabled."
+        )
+    if not (
+        np.array_equal(start_raw, start)
+        and np.array_equal(destination_raw, destination)
+    ):
+        return table, (
+            "GEMDAT jump site indices are not integral; jump-distance plotting "
+            "was disabled."
+        )
+    try:
+        distances = np.asarray(sites.distance_matrix, dtype=float)
+    except (AttributeError, TypeError, ValueError):
+        return table, (
+            "GEMDAT site geometry has no usable periodic distance matrix; "
+            "jump-distance plotting was disabled."
+        )
+    if (
+        distances.ndim != 2
+        or distances.shape[0] != distances.shape[1]
+        or np.any(start < 0)
+        or np.any(destination < 0)
+        or np.any(start >= distances.shape[0])
+        or np.any(destination >= distances.shape[1])
+    ):
+        return table, (
+            "GEMDAT jump site indices do not match the site distance matrix; "
+            "jump-distance plotting was disabled."
+        )
+    output["jump_distance_A"] = distances[start, destination]
+    return output, None
+
+
+def _jump_rate_table_with_units(table) -> tuple[Any, str | None]:
+    """Expose GEMDAT 1.x's documented per-second rate with an explicit unit."""
+
+    if not hasattr(table, "columns") or "rates" not in table.columns:
+        return table, (
+            "GEMDAT jump-rate table has no documented 'rates' field; jump-rate "
+            "plotting was disabled."
+        )
+    output = table.copy()
+    try:
+        rates = np.asarray(output["rates"], dtype=float)
+    except (TypeError, ValueError):
+        return table, (
+            "GEMDAT jump rates are not numeric; jump-rate plotting was disabled."
+        )
+    if np.any(~np.isfinite(rates)) or np.any(rates < 0):
+        return table, (
+            "GEMDAT jump rates are invalid; jump-rate plotting was disabled."
+        )
+    output["jump_rate_s^-1"] = rates
+    return output, None
 
 
 def gemdat_electrolyte(
@@ -269,7 +376,9 @@ def gemdat_electrolyte(
             "drift_correction": {
                 "mode": drift_reference,
                 "reference_indices": reference,
-                "reference_species": sorted({view.symbols[index] for index in reference}),
+                "reference_species": sorted(
+                    {view.symbols[index] for index in reference}
+                ),
                 "applied_once": True,
                 "definition": "unweighted mean production displacement of the selected framework/reference atoms",
             },
@@ -310,13 +419,7 @@ def gemdat_electrolyte(
             "warning": "GEMDAT metrics not computed because site discovery was empty.",
         }
         for axis in percolation_axes:
-            result.paths[axis] = {
-                "voxel": np.empty((0, 3), dtype=int),
-                "fractional": np.empty((0, 3), dtype=float),
-                "cartesian_A": np.empty((0, 3), dtype=float),
-                "free_energy_eV": np.empty(0, dtype=float),
-                "path_integrated_free_energy_eV": np.empty(0, dtype=float),
-            }
+            result.paths[axis] = _empty_path_arrays()
         result.warnings.append(
             "Automatic density site discovery produced no sites; transition, "
             "residence, jump, and percolation tables were not computed."
@@ -327,13 +430,7 @@ def gemdat_electrolyte(
             result.warnings.append(
                 f"No density peaks were available for {axis}-axis percolation."
             )
-            result.paths[axis] = {
-                "voxel": np.empty((0, 3), dtype=int),
-                "fractional": np.empty((0, 3), dtype=float),
-                "cartesian_A": np.empty((0, 3), dtype=float),
-                "free_energy_eV": np.empty(0, dtype=float),
-                "path_integrated_free_energy_eV": np.empty(0, dtype=float),
-            }
+            result.paths[axis] = _empty_path_arrays()
             continue
         try:
             path = free_energy.optimal_percolating_path(peaks=peaks, percolate=axis)
@@ -344,13 +441,7 @@ def gemdat_electrolyte(
             path = None
         if path is None:
             result.warnings.append(f"No percolating path found along {axis}.")
-            result.paths[axis] = {
-                "voxel": np.empty((0, 3), dtype=int),
-                "fractional": np.empty((0, 3), dtype=float),
-                "cartesian_A": np.empty((0, 3), dtype=float),
-                "free_energy_eV": np.empty(0, dtype=float),
-                "path_integrated_free_energy_eV": np.empty(0, dtype=float),
-            }
+            result.paths[axis] = _empty_path_arrays()
             continue
         arrays = _path_arrays(path, free_energy.lattice)
         result.paths[axis] = arrays
@@ -358,7 +449,6 @@ def gemdat_electrolyte(
         result.summary.setdefault("percolation", {})[axis] = {
             "steps": int(len(energy)),
             "free_energy_path_barrier_eV": float(np.max(energy) - np.min(energy)),
-            "path_integrated_free_energy_eV": float(np.sum(energy)),
             "interpretation": (
                 "finite-temperature occupancy-derived free-energy path; not a "
                 "NEB potential-energy migration barrier"
@@ -394,7 +484,9 @@ def gemdat_electrolyte(
         result.structures["occupancy"] = sites
         if discover_sites_from_density:
             result.structures["occupancy_sites"] = sites
-        result.arrays["transition_matrix"] = np.zeros((len(sites), len(sites)), dtype=int)
+        result.arrays["transition_matrix"] = np.zeros(
+            (len(sites), len(sites)), dtype=int
+        )
         result.arrays["jump_matrix"] = np.zeros((len(sites), len(sites)), dtype=int)
         result.tables.update(
             {
@@ -410,14 +502,24 @@ def gemdat_electrolyte(
         if discover_sites_from_density:
             result.structures["occupancy_sites"] = result.structures["occupancy"]
         result.tables["transition_events"] = transitions.events
-        result.tables["residence_times"] = transitions.residence_time()
+        residence_table, residence_warning = _residence_table_with_time_ps(
+            transitions.residence_time(), frame_interval_fs=view.frame_interval_fs
+        )
+        result.tables["residence_times"] = residence_table
+        if residence_warning:
+            result.warnings.append(residence_warning)
         result.arrays["transition_matrix"] = transitions.matrix()
         result.summary["transition_events"] = int(transitions.n_events)
         result.summary["occupancy_by_site_type"] = transitions.occupancy_by_site_type()
         result.summary["atom_locations"] = transitions.atom_locations()
 
         jumps = transitions.jumps(minimal_residence=minimal_residence)
-        result.tables["jumps"] = jumps.data
+        jump_table, jump_distance_warning = _jump_table_with_distance_A(
+            jumps.data, sites
+        )
+        result.tables["jumps"] = jump_table
+        if jump_distance_warning:
+            result.warnings.append(jump_distance_warning)
         result.arrays["jump_matrix"] = jumps.matrix()
         result.summary.update(
             jump_summary(
@@ -429,7 +531,19 @@ def gemdat_electrolyte(
         if jumps.n_jumps:
             n_parts = min(10, max(2, view.nframes // 4))
             if n_parts <= view.nframes:
-                result.tables["jump_rates"] = jumps.rates(n_parts=n_parts)
+                try:
+                    rates = jumps.rates(n_parts=n_parts)
+                except Exception as exc:  # noqa: BLE001 - GEMDAT backend failures vary
+                    result.tables["jump_rates"] = np.empty((0, 0))
+                    result.warnings.append(
+                        "GEMDAT jump-rate segmentation failed; jump-rate plotting "
+                        f"was disabled: {exc}"
+                    )
+                else:
+                    rate_table, rate_warning = _jump_rate_table_with_units(rates)
+                    result.tables["jump_rates"] = rate_table
+                    if rate_warning:
+                        result.warnings.append(rate_warning)
             collective = jumps.collective()
             result.summary["solo_jump_fraction"] = float(jumps.solo_fraction)
             result.summary["collective_jump_count"] = int(collective.n_coll_jumps)
@@ -445,8 +559,16 @@ def gemdat_electrolyte(
     try:
         metrics = trajectory.metrics()
         for name, call in (
-            ("tracer_diffusivity", lambda: metrics.tracer_diffusivity(dimensions=jump_dimensions)),
-            ("tracer_diffusivity_center_of_mass", lambda: metrics.tracer_diffusivity_center_of_mass(dimensions=jump_dimensions)),
+            (
+                "tracer_diffusivity",
+                lambda: metrics.tracer_diffusivity(dimensions=jump_dimensions),
+            ),
+            (
+                "tracer_diffusivity_center_of_mass",
+                lambda: metrics.tracer_diffusivity_center_of_mass(
+                    dimensions=jump_dimensions
+                ),
+            ),
             ("haven_ratio", lambda: metrics.haven_ratio(dimensions=jump_dimensions)),
         ):
             try:

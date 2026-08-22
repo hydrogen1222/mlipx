@@ -24,3 +24,21 @@ jobs:
       - name: Run tests
         run: |
           uv run --python .venv-dev/bin/python pytest tests -q
+
+  analysis-backends:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.12"
+      - name: Install all analysis backends
+        run: |
+          uv venv .venv-analysis --python 3.12
+          uv pip install --python .venv-analysis/bin/python -e './mlipx[dev,analysis-all]'
+      - name: Verify supported backend majors
+        run: |
+          uv run --python .venv-analysis/bin/python python -c "import gemdat, kinisi; assert gemdat.__version__.startswith('1.'); assert kinisi.__version__.startswith('2.')"
+      - name: Run real kinisi and GEMDAT integration tests
+        run: |
+          uv run --python .venv-analysis/bin/python pytest tests/mlipx/mlipx/analysis/test_analysis_backends_integration.py -q
